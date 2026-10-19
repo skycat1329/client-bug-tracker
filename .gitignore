@@ -1,0 +1,16 @@
+node_modules/
+dist/
+uploads/*
+backend/uploads/*
+!uploads/.gitkeep
+!backend/uploads/.gitkeep
+*.db
+*.db-journal
+.env
+*.log
+hostinger-deploy.zip
+hostinger-public_html/
+hostinger-deploy/
+*.zip
+.DS_Store
+Thumbs.db

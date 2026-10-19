@@ -1,0 +1,1769 @@
+<?php
+// ==============================================================================
+// Client Bug Tracker - Unified PHP REST API Router (Hostinger Compatible)
+// ==============================================================================
+
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/jwt.php';
+require_once __DIR__ . '/smtp.php';
+
+// 1. CORS Headers
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, POST, PATCH, PUT, DELETE, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+// Global Exception Handler for clean JSON error output
+set_exception_handler(function (Throwable $e) {
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Database / Server Error: ' . $e->getMessage()
+    ]);
+    exit;
+});
+
+// 2. Helper Functions
+function json_response($data, int $status = 200) {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
+    exit;
+}
+
+function json_error(string $message, int $status = 400, $details = null) {
+    json_response(['success' => false, 'error' => $message, 'details' => $details], $status);
+}
+
+function get_json_input(): array {
+    $raw = file_get_contents('php://input');
+    if (empty($raw)) return [];
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+function get_auth_user(): ?array {
+    $candidates = [
+        $_SERVER['HTTP_AUTHORIZATION'] ?? null,
+        $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null,
+        $_SERVER['REDIRECT_REDIRECT_HTTP_AUTHORIZATION'] ?? null,
+        $_SERVER['Authorization'] ?? null,
+        $_SERVER['HTTP_X_AUTHORIZATION'] ?? null,
+    ];
+
+    if (function_exists('apache_request_headers')) {
+        $ah = apache_request_headers();
+        foreach ($ah as $k => $v) {
+            if (strtolower($k) === 'authorization') {
+                $candidates[] = $v;
+            }
+        }
+    }
+
+    if (function_exists('getallheaders')) {
+        $gh = getallheaders();
+        foreach ($gh as $k => $v) {
+            if (strtolower($k) === 'authorization') {
+                $candidates[] = $v;
+            }
+        }
+    }
+
+    $token = null;
+    foreach ($candidates as $header) {
+        if (!empty($header) && preg_match('/Bearer\s+(\S+)/i', $header, $matches)) {
+            $token = $matches[1];
+            break;
+        }
+    }
+
+    if (!$token && !empty($_GET['token'])) {
+        $token = $_GET['token'];
+    }
+
+    if (!$token) {
+        return null;
+    }
+
+    $decoded = jwt_decode($token, JWT_SECRET);
+    if (!$decoded || empty($decoded['userId'])) {
+        return null;
+    }
+
+    $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id FROM users WHERE id = ?', [$decoded['userId']]);
+    return $user ?: null;
+}
+
+function require_auth(): array {
+    $user = get_auth_user();
+    if (!$user) {
+        json_error('Authentication required. Missing, invalid, or expired token.', 401);
+    }
+    return $user;
+}
+
+function require_roles(array $user, array $allowed_roles) {
+    if (!in_array($user['role'], $allowed_roles)) {
+        json_error('Forbidden: You do not have permission to perform this action', 403);
+    }
+}
+
+function send_slack_notification(string $channel, string $text, array $fields = [], string $color = '#4A154B'): bool {
+    if (!defined('SLACK_WEBHOOK_URL') || empty(SLACK_WEBHOOK_URL)) {
+        return false;
+    }
+
+    $payload = [
+        'text' => $text,
+        'attachments' => [
+            [
+                'color' => $color,
+                'fields' => $fields,
+                'footer' => 'Client Bug Tracker',
+                'ts' => time()
+            ]
+        ]
+    ];
+
+    $ch = curl_init(SLACK_WEBHOOK_URL);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+    $result = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return ($httpCode === 200);
+}
+
+function send_credentials_email(string $recipientEmail, string $recipientName, string $password, string $roleTitle): bool {
+    $host = $_SERVER['HTTP_HOST'] ?? 'yourdomain.com';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $loginUrl = $protocol . $host . '/login';
+
+    $subject = "Welcome to Client Bug Tracker - Your Login Credentials";
+    
+    $html = "
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset='utf-8'>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
+        .card { max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .header { background: #0176D3; padding: 24px; text-align: center; color: #ffffff; }
+        .content { padding: 32px 24px; }
+        .cred-box { background: #f1f5f9; border-left: 4px solid #0176D3; padding: 16px; border-radius: 6px; margin: 20px 0; }
+        .btn { display: inline-block; background: #0176D3; color: #ffffff !important; padding: 12px 24px; border-radius: 8px; font-weight: 600; text-decoration: none; margin-top: 16px; }
+        .footer { padding: 20px 24px; background: #f8fafc; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }
+      </style>
+    </head>
+    <body>
+      <div class='card'>
+        <div class='header'>
+          <h2 style='margin:0; font-size: 20px;'>Client Bug Tracker</h2>
+        </div>
+        <div class='content'>
+          <p>Hello <strong>" . htmlspecialchars($recipientName) . "</strong>,</p>
+          <p>An account has been created for you on the <strong>Client Bug Tracker</strong> with the role: <strong>" . htmlspecialchars($roleTitle) . "</strong>.</p>
+          
+          <div class='cred-box'>
+            <p style='margin: 0 0 8px 0;'><strong>Login Email:</strong> <code style='color:#0176D3; font-size: 14px; font-weight: bold;'>" . htmlspecialchars($recipientEmail) . "</code></p>
+            <p style='margin: 0;'><strong>Password:</strong> <code style='color:#0176D3; font-size: 14px; font-weight: bold;'>" . htmlspecialchars($password) . "</code></p>
+          </div>
+
+          <p>Click the button below to sign in to your dashboard:</p>
+          <p style='text-align: center;'>
+            <a href='" . htmlspecialchars($loginUrl) . "' class='btn'>Log In to Bug Tracker</a>
+          </p>
+
+          <p style='font-size: 13px; color: #64748b; margin-top: 24px;'>
+            <em>Note: For security, please change your password after logging in for the first time.</em>
+          </p>
+        </div>
+        <div class='footer'>
+          Web Agency Support Team &bull; Automated System Notification
+        </div>
+      </div>
+    </body>
+    </html>
+    ";
+
+    $fromEmail = defined('EMAIL_FROM') && !empty(EMAIL_FROM) ? EMAIL_FROM : ('support@' . preg_replace('/^www\./', '', $host));
+    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Client Bug Tracker';
+    $textBody = "Hello {$recipientName},\n\nAn account has been created for you on Client Bug Tracker ({$roleTitle}).\n\nLogin Email: {$recipientEmail}\nPassword: {$password}\nLogin at: {$loginUrl}\n\nPlease change your password after logging in for the first time.\n\nBest regards,\nWeb Agency Support Team";
+
+    $delivered = false;
+    $errorMessage = null;
+
+    // 1. Try authenticated SMTP if enabled
+    if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+        $smtpResult = send_smtp_email($recipientEmail, $subject, $html, $textBody);
+        $delivered = $smtpResult['success'];
+        $errorMessage = $smtpResult['error'] ?? null;
+    } else {
+        // 2. Standard PHP mail() with envelope sender parameter (-f)
+        $headers = [
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=UTF-8',
+            'From: ' . $fromName . ' <' . $fromEmail . '>',
+            'Reply-To: ' . $fromEmail,
+            'Return-Path: ' . $fromEmail,
+            'X-Mailer: ClientBugTracker/PHP'
+        ];
+
+        $delivered = @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+        if (!$delivered) {
+            $errorMessage = 'PHP mail() returned false. Set SMTP_ENABLED = true in api/config.php to send via Hostinger SMTP.';
+        }
+    }
+
+    // Record in notification deliveries table
+    $deliveryId = 'del-mail-' . time() . '-' . bin2hex(random_bytes(4));
+    try {
+        db_execute(
+            'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $deliveryId,
+                'email',
+                $recipientEmail,
+                'user_credentials_created',
+                null,
+                json_encode(['to' => $recipientEmail, 'name' => $recipientName, 'role' => $roleTitle, 'from' => $fromEmail]),
+                $delivered ? 'delivered' : 'failed',
+                1,
+                $errorMessage
+            ]
+        );
+    } catch (Exception $e) {
+        // Non-blocking
+    }
+
+    return (bool)$delivered;
+}
+
+// ------------------------------------------------------------------------------
+// Google Sheets Integration & Per-Brand Logging Dispatcher
+// ------------------------------------------------------------------------------
+try {
+    static $googleSheetsSchemaChecked = false;
+    if (!$googleSheetsSchemaChecked) {
+        $googleSheetsSchemaChecked = true;
+        $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'google_sheet_url'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE organizations ADD COLUMN google_sheet_url VARCHAR(500) NULL AFTER slug");
+        }
+        db_execute("ALTER TABLE notification_deliveries MODIFY COLUMN channel VARCHAR(50) NOT NULL");
+    }
+} catch (Exception $e) {
+    // Non-blocking auto migration
+}
+
+function sync_to_google_sheet(string $brandId, string $event, array $ticket, string $details = '', string $actorName = 'System'): bool {
+    // 1. Fetch integration config
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['google_sheets_config']);
+    $config = $setting ? json_decode($setting['value'], true) : [];
+
+    $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
+    $globalUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+
+    // 2. Fetch Brand details
+    $org = db_query_one('SELECT name, google_sheet_url FROM organizations WHERE id = ?', [$brandId]);
+    $brandName = $org ? $org['name'] : 'General Brand';
+    $brandUrl = trim($org['google_sheet_url'] ?? '');
+
+    $targetUrls = [];
+    if (!empty($brandUrl)) {
+        $targetUrls[] = ['url' => $brandUrl, 'type' => 'brand_dedicated'];
+    } elseif ($globalEnabled && !empty($globalUrl)) {
+        $targetUrls[] = ['url' => $globalUrl, 'type' => 'global_multi_tab'];
+    }
+
+    if (empty($targetUrls)) {
+        return false;
+    }
+
+    // 3. Resolve Website name if needed
+    $websiteName = $ticket['website_name'] ?? '';
+    if (empty($websiteName) && !empty($ticket['website_id'])) {
+        $w = db_query_one('SELECT name FROM websites WHERE id = ?', [$ticket['website_id']]);
+        if ($w) $websiteName = $w['name'];
+    }
+
+    // 4. Resolve Requester name if needed
+    $requesterName = $ticket['requester_name'] ?? '';
+    if (empty($requesterName) && !empty($ticket['requester_id'])) {
+        $u = db_query_one('SELECT name, email FROM users WHERE id = ?', [$ticket['requester_id']]);
+        if ($u) $requesterName = $u['name'] . ' (' . $u['email'] . ')';
+    }
+
+    // 5. Resolve Assignee name if needed
+    $assigneeName = $ticket['assignee_name'] ?? '';
+    if (empty($assigneeName) && !empty($ticket['assignee_id'])) {
+        $a = db_query_one('SELECT name, email FROM users WHERE id = ?', [$ticket['assignee_id']]);
+        if ($a) $assigneeName = $a['name'] . ' (' . $a['email'] . ')';
+    }
+    if (empty($assigneeName)) {
+        $assigneeName = 'Unassigned';
+    }
+
+    $payload = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'brand_id' => $brandId,
+        'brand_name' => $brandName,
+        'ticket_id' => $ticket['id'] ?? '',
+        'ticket_number' => $ticket['ticket_number'] ?? '',
+        'ticket_title' => $ticket['title'] ?? '',
+        'event' => $event,
+        'status' => $ticket['status'] ?? 'NEW',
+        'priority' => $ticket['priority'] ?? 'P3',
+        'website_name' => $websiteName ?: 'Main Website',
+        'environment' => $ticket['environment'] ?? 'production',
+        'requester_name' => $requesterName ?: 'Portal User',
+        'assignee_name' => $assigneeName,
+        'details' => $details,
+        'actor_name' => $actorName
+    ];
+
+    $allSuccess = true;
+    foreach ($targetUrls as $target) {
+        $ch = curl_init($target['url']);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_AUTOREFERER, true);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        $resp = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        $success = ($code >= 200 && $code < 400 && empty($err));
+        if (!$success) {
+            $allSuccess = false;
+        }
+
+        try {
+            $delivId = 'deliv-' . time() . '-' . bin2hex(random_bytes(4));
+            db_execute(
+                'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    $delivId,
+                    'google_sheets',
+                    $brandName . ' (' . $target['type'] . ')',
+                    $event,
+                    $ticket['id'] ?? null,
+                    json_encode($payload),
+                    $success ? 'delivered' : 'failed',
+                    1,
+                    $err ?: ($success ? null : "HTTP status $code: $resp")
+                ]
+            );
+        } catch (Exception $e) {}
+    }
+
+    return $allSuccess;
+}
+
+// 3. Parse Request URI & Method
+$uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$method = $_SERVER['REQUEST_METHOD'];
+
+// Strip subdirectories if placed in subfolder or /api prefix
+$path = $uri;
+$apiPos = strpos($path, '/api');
+if ($apiPos !== false) {
+    $path = substr($path, $apiPos); // e.g. "/api/auth/login"
+}
+$path = rtrim($path, '/');
+if (empty($path)) $path = '/';
+
+// ==============================================================================
+// 4. API Endpoints
+// ==============================================================================
+
+// GET /api/health
+if ($method === 'GET' && $path === '/api/health') {
+    json_response([
+        'status' => 'ok',
+        'service' => 'Client Bug Tracker PHP / MySQL API',
+        'timestamp' => date('c'),
+        'environment' => 'production'
+    ]);
+}
+
+// POST /api/auth/login
+if ($method === 'POST' && $path === '/api/auth/login') {
+    $input = get_json_input();
+    $email = strtolower(trim($input['email'] ?? ''));
+    $password = $input['password'] ?? '';
+
+    if (empty($email) || empty($password)) {
+        json_error('Email and password are required', 400);
+    }
+
+    $user = db_query_one('SELECT * FROM users WHERE email = ?', [$email]);
+    if (!$user || !password_verify($password, $user['password_hash'])) {
+        json_error('Invalid email or password', 401);
+    }
+
+    $token = jwt_encode([
+        'userId' => $user['id'],
+        'email' => $user['email'],
+        'name' => $user['name'],
+        'role' => $user['role'],
+        'organizationId' => $user['organization_id']
+    ], JWT_SECRET);
+
+    unset($user['password_hash']);
+    json_response([
+        'success' => true,
+        'token' => $token,
+        'user' => $user
+    ]);
+}
+
+// GET /api/auth/me
+if ($method === 'GET' && $path === '/api/auth/me') {
+    $user = require_auth();
+    $org = null;
+    if (!empty($user['organization_id'])) {
+        $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
+    }
+    $user['organization_name'] = $org ? $org['name'] : null;
+    json_response(['user' => $user]);
+}
+
+// GET /api/auth/demo-users
+if ($method === 'GET' && $path === '/api/auth/demo-users') {
+    $users = db_query(
+        'SELECT u.id, u.email, u.name, u.role, u.custom_role, u.organization_id, o.name as organization_name
+         FROM users u
+         LEFT JOIN organizations o ON u.organization_id = o.id
+         ORDER BY u.role, u.name'
+    );
+    json_response([
+        'success' => true,
+        'users' => $users,
+        'defaultPassword' => 'password123'
+    ]);
+}
+
+// GET /api/auth/staff (List team members)
+if ($method === 'GET' && $path === '/api/auth/staff') {
+    $user = require_auth();
+    $staff = db_query(
+        "SELECT id, email, name, role, custom_role, avatar_url, created_at 
+         FROM users 
+         WHERE role != 'client' 
+         ORDER BY created_at ASC"
+    );
+    json_response(['success' => true, 'staff' => $staff]);
+}
+
+// POST /api/auth/create-user (Admin creates staff or client user)
+if ($method === 'POST' && $path === '/api/auth/create-user') {
+    $currentUser = require_auth();
+    require_roles($currentUser, ['super_admin', 'support_manager']);
+
+    $input = get_json_input();
+    $email = strtolower(trim($input['email'] ?? ''));
+    $password = $input['password'] ?? '';
+    $name = trim($input['name'] ?? '');
+    $role = $input['role'] ?? 'developer';
+    $custom_role = $input['custom_role'] ?? null;
+    $organization_id = $input['organization_id'] ?? null;
+
+    if (empty($email) || empty($password) || empty($name)) {
+        json_error('Name, email, and password are required', 400);
+    }
+
+    $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$email]);
+    if ($existing) {
+        json_error('A user with this email address already exists', 400);
+    }
+
+    $userId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
+    $hash = password_hash($password, PASSWORD_BCRYPT);
+
+    db_execute(
+        'INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [$userId, $email, $hash, $name, $role, $custom_role, $organization_id]
+    );
+
+    if ($organization_id) {
+        db_execute(
+            'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?)',
+            ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $organization_id, $userId, 'member']
+        );
+    }
+
+    // Automatically send credentials email to user
+    $roleDisplay = $custom_role ?: ucwords(str_replace('_', ' ', $role));
+    $emailSent = send_credentials_email($email, $name, $password, $roleDisplay);
+
+    json_response([
+        'success' => true,
+        'email_sent' => $emailSent,
+        'user' => [
+            'id' => $userId,
+            'email' => $email,
+            'name' => $name,
+            'role' => $role,
+            'custom_role' => $custom_role,
+            'organization_id' => $organization_id
+        ]
+    ], 201);
+}
+
+// DELETE /api/auth/staff/{id}
+if ($method === 'DELETE' && preg_match('#^/api/auth/staff/([^/]+)$#', $path, $m)) {
+    $currentUser = require_auth();
+    require_roles($currentUser, ['super_admin', 'support_manager']);
+    $targetId = $m[1];
+
+    if ($targetId === 'usr-admin-primary') {
+        json_error('Cannot delete the primary root Administrator account', 400);
+    }
+    if ($targetId === $currentUser['id']) {
+        json_error('You cannot delete your own account while logged in', 400);
+    }
+
+    db_execute('UPDATE tickets SET assignee_id = NULL WHERE assignee_id = ?', [$targetId]);
+    db_execute('DELETE FROM organization_members WHERE user_id = ?', [$targetId]);
+    db_execute('DELETE FROM users WHERE id = ?', [$targetId]);
+
+    json_response(['success' => true, 'message' => 'Team member removed successfully']);
+}
+
+// GET /api/auth/roles (List roles)
+if ($method === 'GET' && ($path === '/api/auth/roles' || $path === '/api/auth/roles/')) {
+    require_auth();
+    $roles = db_query('SELECT * FROM roles ORDER BY is_system DESC, label ASC');
+    foreach ($roles as &$r) {
+        $r['is_system'] = (int)$r['is_system'];
+    }
+    unset($r);
+    json_response(['success' => true, 'roles' => $roles]);
+}
+
+// POST /api/auth/roles (Create role)
+if ($method === 'POST' && $path === '/api/auth/roles') {
+    $currentUser = require_auth();
+    require_roles($currentUser, ['super_admin', 'support_manager']);
+
+    $input = get_json_input();
+    $label = trim($input['label'] ?? '');
+    $name = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $input['name'] ?? $label));
+    $description = $input['description'] ?? '';
+    $color = $input['color'] ?? 'blue';
+    $base_role = $input['base_role'] ?? 'developer';
+
+    if (empty($label) || empty($name)) {
+        json_error('Role label and identifier are required', 400);
+    }
+
+    $existing = db_query_one('SELECT id FROM roles WHERE name = ?', [$name]);
+    if ($existing) {
+        json_error('A role with this identifier already exists', 400);
+    }
+
+    $roleId = 'role-' . time() . '-' . bin2hex(random_bytes(4));
+    db_execute(
+        'INSERT INTO roles (id, name, label, description, color, base_role, is_system) VALUES (?, ?, ?, ?, ?, ?, 0)',
+        [$roleId, $name, $label, $description, $color, $base_role]
+    );
+
+    json_response([
+        'success' => true,
+        'role' => [
+            'id' => $roleId,
+            'name' => $name,
+            'label' => $label,
+            'description' => $description,
+            'color' => $color,
+            'base_role' => $base_role,
+            'is_system' => 0
+        ]
+    ], 201);
+}
+
+// DELETE /api/auth/roles/{id}
+if ($method === 'DELETE' && preg_match('#^/api/auth/roles/([^/]+)$#', $path, $m)) {
+    $currentUser = require_auth();
+    require_roles($currentUser, ['super_admin']);
+    $roleId = $m[1];
+
+    $role = db_query_one('SELECT * FROM roles WHERE id = ?', [$roleId]);
+    if (!$role) json_error('Role not found', 404);
+    if (!empty($role['is_system'])) json_error('System default roles cannot be deleted', 400);
+
+    db_execute('DELETE FROM roles WHERE id = ?', [$roleId]);
+    json_response(['success' => true, 'message' => 'Custom role deleted successfully']);
+}
+
+// GET /api/auth/settings/visibility
+if ($method === 'GET' && $path === '/api/auth/settings/visibility') {
+    require_auth();
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['triage_visibility_policy']);
+    $policy = $setting ? json_decode($setting['value'], true) : ['triage_required_for_team' => true, 'allowed_roles' => ['super_admin', 'support_manager']];
+    json_response(['success' => true, 'policy' => $policy]);
+}
+
+// POST /api/auth/settings/visibility
+if ($method === 'POST' && $path === '/api/auth/settings/visibility') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+    $policyJson = json_encode([
+        'triage_required_for_team' => !empty($input['triage_required_for_team']),
+        'allowed_roles' => $input['allowed_roles'] ?? ['super_admin', 'support_manager']
+    ]);
+
+    db_execute(
+        'INSERT INTO integration_settings (`key`, `value`, `description`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+        ['triage_visibility_policy', $policyJson, 'Requires tickets to be in TRIAGED status before becoming visible to regular team members']
+    );
+
+    json_response(['success' => true, 'message' => 'Visibility policy updated successfully']);
+}
+
+// POST /api/auth/create-client (Create client user credentials for a brand)
+if ($method === 'POST' && $path === '/api/auth/create-client') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $input = get_json_input();
+    $orgId = trim($input['organization_id'] ?? '');
+    $name = trim($input['name'] ?? '');
+    $email = strtolower(trim($input['email'] ?? ''));
+    $password = $input['password'] ?? '';
+
+    if (empty($orgId) || empty($name) || empty($email) || empty($password)) {
+        json_error('Organization, name, email, and password are all required', 400);
+    }
+
+    $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$email]);
+    if ($existing) {
+        json_error('A user with this email address already exists', 400);
+    }
+
+    $org = db_query_one('SELECT id, name FROM organizations WHERE id = ?', [$orgId]);
+    if (!$org) {
+        json_error('Client Organization not found', 404);
+    }
+
+    $userId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
+    $hash = password_hash($password, PASSWORD_BCRYPT);
+
+    db_execute(
+        'INSERT INTO users (id, email, password_hash, name, role, organization_id) VALUES (?, ?, ?, ?, ?, ?)',
+        [$userId, $email, $hash, $name, 'client', $orgId]
+    );
+
+    $memberId = 'mem-' . time() . '-' . bin2hex(random_bytes(4));
+    db_execute(
+        'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?)',
+        [$memberId, $orgId, $userId, 'member']
+    );
+
+    $roleDisplay = 'Client User (' . $org['name'] . ')';
+    $emailSent = send_credentials_email($email, $name, $password, $roleDisplay);
+
+    json_response([
+        'success' => true,
+        'message' => 'Client credentials created successfully',
+        'email_sent' => $emailSent,
+        'credentials' => [
+            'email' => $email,
+            'password' => $password,
+            'organization' => $org['name']
+        ]
+    ], 201);
+}
+
+// GET /api/auth/organization/{orgId}/users (List client users for a brand)
+if ($method === 'GET' && preg_match('#^/api/auth/organization/([^/]+)/users$#', $path, $m)) {
+    require_auth();
+    $orgId = $m[1];
+    $users = db_query(
+        'SELECT id, email, name, role, created_at FROM users WHERE organization_id = ? ORDER BY name ASC',
+        [$orgId]
+    );
+    json_response(['success' => true, 'users' => $users]);
+}
+
+// GET /api/organizations (Brands)
+if ($method === 'GET' && $path === '/api/organizations') {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        $orgs = db_query('SELECT * FROM organizations WHERE id = ?', [$user['organization_id']]);
+    } else {
+        $orgs = db_query('SELECT * FROM organizations ORDER BY name ASC');
+    }
+    json_response(['success' => true, 'organizations' => $orgs]);
+}
+
+// POST /api/organizations
+if ($method === 'POST' && $path === '/api/organizations') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $input = get_json_input();
+    $name = trim($input['name'] ?? '');
+    if (empty($name)) json_error('Organization name is required', 400);
+
+    $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+    $orgId = 'org-' . time() . '-' . bin2hex(random_bytes(4));
+
+    db_execute('INSERT INTO organizations (id, name, slug) VALUES (?, ?, ?)', [$orgId, $name, $slug]);
+    json_response(['success' => true, 'organization' => ['id' => $orgId, 'name' => $name, 'slug' => $slug]], 201);
+}
+
+// GET /api/organizations/{id}/websites
+if ($method === 'GET' && preg_match('#^/api/organizations/([^/]+)/websites$#', $path, $m)) {
+    require_auth();
+    $orgId = $m[1];
+    $websites = db_query('SELECT * FROM websites WHERE organization_id = ? ORDER BY name ASC', [$orgId]);
+    json_response(['success' => true, 'websites' => $websites]);
+}
+
+// POST /api/organizations/{id}/websites
+if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/websites$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $orgId = $m[1];
+
+    $input = get_json_input();
+    $name = trim($input['name'] ?? '');
+    $url = trim($input['url'] ?? '');
+    $env = $input['environment'] ?? 'production';
+
+    if (empty($name) || empty($url)) json_error('Website name and URL are required', 400);
+
+    $webId = 'web-' . time() . '-' . bin2hex(random_bytes(4));
+    db_execute(
+        'INSERT INTO websites (id, organization_id, name, url, environment) VALUES (?, ?, ?, ?, ?)',
+        [$webId, $orgId, $name, $url, $env]
+    );
+
+    json_response(['success' => true, 'website' => ['id' => $webId, 'organization_id' => $orgId, 'name' => $name, 'url' => $url, 'environment' => $env]], 201);
+}
+
+// GET /api/organizations/all-websites (All websites accessible to current user)
+if ($method === 'GET' && ($path === '/api/organizations/all-websites' || $path === '/api/websites')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        $websites = db_query(
+            "SELECT w.*, o.name as organization_name
+             FROM websites w
+             JOIN organizations o ON w.organization_id = o.id
+             WHERE w.organization_id = ?
+             ORDER BY w.name ASC",
+            [$user['organization_id']]
+        );
+    } else {
+        $websites = db_query(
+            "SELECT w.*, o.name as organization_name
+             FROM websites w
+             JOIN organizations o ON w.organization_id = o.id
+             ORDER BY o.name ASC, w.name ASC"
+        );
+    }
+    json_response(['success' => true, 'websites' => $websites]);
+}
+
+// GET /api/tickets/export/csv
+if ($method === 'GET' && $path === '/api/tickets/export/csv') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager', 'developer']);
+
+    $orgId = $_GET['organization_id'] ?? null;
+    $sql = "SELECT t.*, o.name as organization_name, w.name as website_name,
+                   req.name as requester_name, dev.name as assignee_name
+            FROM tickets t
+            JOIN organizations o ON t.organization_id = o.id
+            JOIN websites w ON t.website_id = w.id
+            JOIN users req ON t.requester_id = req.id
+            LEFT JOIN users dev ON t.assignee_id = dev.id";
+    $params = [];
+    if ($orgId) {
+        $sql .= " WHERE t.organization_id = ?";
+        $params[] = $orgId;
+    }
+    $sql .= " ORDER BY t.created_at DESC";
+
+    $tickets = db_query($sql, $params);
+
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="tickets-export.csv"');
+
+    $out = fopen('php://output', 'w');
+    fputcsv($out, ['Ticket ID', 'Title', 'Brand / Organization', 'Website', 'Environment', 'Category', 'Priority', 'Status', 'Requester', 'Assignee', 'Created At', 'Resolved At']);
+
+    foreach ($tickets as $t) {
+        fputcsv($out, [
+            $t['ticket_number'],
+            $t['title'],
+            $t['organization_name'],
+            $t['website_name'],
+            $t['environment'],
+            $t['category'],
+            $t['priority'],
+            $t['status'],
+            $t['requester_name'],
+            $t['assignee_name'] ?: 'Unassigned',
+            $t['created_at'],
+            $t['resolved_at'] ?: ''
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
+// GET /api/audit/export/brand/{orgId}/csv (Per-brand dedicated ticket & log spreadsheet)
+if ($method === 'GET' && preg_match('#^/api/audit/export/brand/([^/]+)/csv$#', $path, $m)) {
+    $user = require_auth();
+    $orgId = $m[1];
+    if ($user['role'] === 'client' && $user['organization_id'] !== $orgId) {
+        json_error('Forbidden: Access to another brand is denied', 403);
+    }
+
+    $org = db_query_one('SELECT id, name FROM organizations WHERE id = ?', [$orgId]);
+    if (!$org) json_error('Brand organization not found', 404);
+
+    $tickets = db_query(
+        "SELECT t.ticket_number, t.title, t.priority, t.status, t.category,
+                t.environment, t.created_at, t.resolved_at, t.closed_at,
+                t.root_cause, t.fix_details,
+                w.name as website_name, req.name as requester_name, dev.name as assignee_name
+         FROM tickets t
+         JOIN websites w ON t.website_id = w.id
+         JOIN users req ON t.requester_id = req.id
+         LEFT JOIN users dev ON t.assignee_id = dev.id
+         WHERE t.organization_id = ?
+         ORDER BY t.created_at DESC",
+        [$orgId]
+    );
+
+    $safeOrgSlug = strtolower(preg_replace('/[^a-z0-9]+/i', '-', $org['name']));
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="brand-' . $safeOrgSlug . '-tickets-log.csv"');
+
+    $out = fopen('php://output', 'w');
+    fputcsv($out, [
+        'Ticket Reference', 'Brand Organization', 'Website', 'Title', 'Category',
+        'Priority', 'Status', 'Environment', 'Requester', 'Assignee Specialist',
+        'Created Date', 'Resolved Date', 'Root Cause', 'Fix Details'
+    ]);
+
+    foreach ($tickets as $t) {
+        fputcsv($out, [
+            $t['ticket_number'],
+            $org['name'],
+            $t['website_name'] ?? '',
+            $t['title'] ?? '',
+            $t['category'] ?? '',
+            $t['priority'],
+            $t['status'],
+            $t['environment'] ?? '',
+            $t['requester_name'] ?? '',
+            $t['assignee_name'] ?: 'Unassigned',
+            $t['created_at'],
+            $t['resolved_at'] ?: '',
+            $t['root_cause'] ?? '',
+            $t['fix_details'] ?? ''
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
+// GET /api/audit/tickets/{ticketId}/export/csv (Per-ticket dedicated audit log CSV)
+if ($method === 'GET' && preg_match('#^/api/audit/tickets/([^/]+)/export/csv$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    $ticket = db_query_one('SELECT t.*, o.name as organization_name FROM tickets t JOIN organizations o ON t.organization_id = o.id WHERE t.id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: Access denied', 403);
+    }
+
+    $sql = "SELECT a.created_at, a.action, a.details, a.is_internal, u.name as user_name, u.email as user_email
+            FROM ticket_activity a
+            LEFT JOIN users u ON a.user_id = u.id
+            WHERE a.ticket_id = ?";
+    $params = [$ticketId];
+    if ($user['role'] === 'client') {
+        $sql .= " AND a.is_internal = 0";
+    }
+    $sql .= " ORDER BY a.created_at ASC";
+
+    $raw = db_query($sql, $params);
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="ticket-' . $ticket['ticket_number'] . '-log.csv"');
+
+    $out = fopen('php://output', 'w');
+    fputcsv($out, ['Timestamp', 'Action', 'Performed By', 'User Email', 'Visibility', 'Details']);
+
+    foreach ($raw as $row) {
+        $detailsText = '';
+        if (!empty($row['details'])) {
+            $parsed = json_decode($row['details'], true);
+            if (is_array($parsed)) {
+                $pairs = [];
+                foreach ($parsed as $k => $v) {
+                    $pairs[] = "$k: " . (is_scalar($v) ? $v : json_encode($v));
+                }
+                $detailsText = implode('; ', $pairs);
+            } else {
+                $detailsText = (string)$row['details'];
+            }
+        }
+
+        fputcsv($out, [
+            $row['created_at'],
+            $row['action'],
+            $row['user_name'] ?: 'System',
+            $row['user_email'] ?: '',
+            !empty($row['is_internal']) ? 'Internal (Dev Only)' : 'Public',
+            $detailsText
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
+// GET /api/tickets (List tickets)
+if ($method === 'GET' && $path === '/api/tickets') {
+    $user = require_auth();
+    $sql = "SELECT t.*, o.name as organization_name, w.name as website_name, w.url as website_url,
+                   req.name as requester_name, req.email as requester_email,
+                   dev.name as assignee_name, dev.email as assignee_email
+            FROM tickets t
+            JOIN organizations o ON t.organization_id = o.id
+            JOIN websites w ON t.website_id = w.id
+            JOIN users req ON t.requester_id = req.id
+            LEFT JOIN users dev ON t.assignee_id = dev.id
+            WHERE 1=1";
+    $params = [];
+
+    // Client brand isolation
+    if ($user['role'] === 'client') {
+        $sql .= " AND t.organization_id = ?";
+        $params[] = $user['organization_id'];
+    } elseif (!empty($_GET['organization_id'])) {
+        $sql .= " AND t.organization_id = ?";
+        $params[] = $_GET['organization_id'];
+    }
+
+    // Triage Visibility Gate for regular team members
+    if ($user['role'] !== 'client') {
+        $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['triage_visibility_policy']);
+        $policy = $setting ? json_decode($setting['value'], true) : ['triage_required_for_team' => true, 'allowed_roles' => ['super_admin', 'support_manager']];
+        $isExempt = in_array($user['role'], $policy['allowed_roles'] ?? ['super_admin', 'support_manager']);
+        if (!empty($policy['triage_required_for_team']) && !$isExempt) {
+            $sql .= " AND (t.status != 'NEW' OR t.assignee_id = ?)";
+            $params[] = $user['id'];
+        }
+    }
+
+    if (!empty($_GET['status'])) {
+        $sql .= " AND t.status = ?";
+        $params[] = $_GET['status'];
+    }
+    if (!empty($_GET['priority'])) {
+        $sql .= " AND t.priority = ?";
+        $params[] = $_GET['priority'];
+    }
+    if (!empty($_GET['category'])) {
+        $sql .= " AND t.category = ?";
+        $params[] = $_GET['category'];
+    }
+    if (!empty($_GET['website_id'])) {
+        $sql .= " AND t.website_id = ?";
+        $params[] = $_GET['website_id'];
+    }
+    if (!empty($_GET['assignee_id'])) {
+        if ($_GET['assignee_id'] === 'unassigned') {
+            $sql .= " AND t.assignee_id IS NULL";
+        } else {
+            $sql .= " AND t.assignee_id = ?";
+            $params[] = $_GET['assignee_id'];
+        }
+    }
+    if (!empty($_GET['search'])) {
+        $search = '%' . $_GET['search'] . '%';
+        $sql .= " AND (t.ticket_number LIKE ? OR t.title LIKE ? OR t.description LIKE ?)";
+        $params[] = $search;
+        $params[] = $search;
+        $params[] = $search;
+    }
+
+    $sql .= " ORDER BY t.created_at DESC";
+    $tickets = db_query($sql, $params);
+    json_response(['success' => true, 'tickets' => $tickets]);
+}
+
+// POST /api/tickets (Create ticket)
+if ($method === 'POST' && $path === '/api/tickets') {
+    $user = require_auth();
+    $input = get_json_input();
+
+    $title = trim($input['title'] ?? '');
+    $description = trim($input['description'] ?? '');
+    $website_id = $input['website_id'] ?? '';
+    $category = $input['category'] ?? 'General Bug';
+    $priority = $input['priority'] ?? 'P3';
+    $steps = $input['steps_to_reproduce'] ?? null;
+    $browser = $input['browser'] ?? null;
+    $device = $input['device'] ?? null;
+    $environment = $input['environment'] ?? 'production';
+
+    if (empty($title) || empty($description) || empty($website_id)) {
+        json_error('Title, description, and website are required', 400);
+    }
+
+    // Determine organization
+    $website = db_query_one('SELECT organization_id, name FROM websites WHERE id = ?', [$website_id]);
+    if (!$website) json_error('Selected website not found', 404);
+
+    $organization_id = ($user['role'] === 'client') ? $user['organization_id'] : ($input['organization_id'] ?? $website['organization_id']);
+
+    // Sequence increment
+    db_execute('UPDATE ticket_counters SET current_val = current_val + 1 WHERE prefix = ?', ['WEB']);
+    $cnt = db_query_one('SELECT current_val FROM ticket_counters WHERE prefix = ?', ['WEB']);
+    $ticketNumber = 'WEB-' . ($cnt ? $cnt['current_val'] : rand(1001, 9999));
+    $ticketId = 'tkt-' . time() . '-' . bin2hex(random_bytes(4));
+
+    // Calculate SLA
+    $slaHours = ['P1' => 4, 'P2' => 24, 'P3' => 48, 'P4' => 120][$priority] ?? 48;
+    $targetResolution = date('Y-m-d H:i:s', strtotime("+$slaHours hours"));
+
+    db_execute(
+        'INSERT INTO tickets (
+            id, ticket_number, organization_id, website_id, requester_id,
+            title, description, steps_to_reproduce, browser, device, environment,
+            category, priority, status, target_resolution_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'NEW\', ?)',
+        [
+            $ticketId, $ticketNumber, $organization_id, $website_id, $user['id'],
+            $title, $description, $steps, $browser, $device, $environment,
+            $category, $priority, $targetResolution
+        ]
+    );
+
+    // Activity log
+    db_execute(
+        'INSERT INTO ticket_activity (id, ticket_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)',
+        ['act-' . time() . '-' . bin2hex(random_bytes(4)), $ticketId, $user['id'], 'created', json_encode(['title' => $title, 'priority' => $priority])]
+    );
+
+    // Slack Notification
+    $brand = db_query_one('SELECT name FROM organizations WHERE id = ?', [$organization_id]);
+    $brandName = $brand ? $brand['name'] : 'Client Brand';
+    send_slack_notification(
+        SLACK_CHANNEL_BUG_REPORTS,
+        "🚨 *New Bug Ticket Raised: {$ticketNumber}*",
+        [
+            ['title' => 'Title', 'value' => $title, 'short' => false],
+            ['title' => 'Brand', 'value' => $brandName, 'short' => true],
+            ['title' => 'Priority', 'value' => $priority, 'short' => true],
+            ['title' => 'Category', 'value' => $category, 'short' => true],
+            ['title' => 'Website', 'value' => $website['name'], 'short' => true]
+        ],
+        ($priority === 'P1') ? '#E01E5A' : '#ECB22E'
+    );
+
+    // Google Sheets Real-Time Sync (per-brand tab or dedicated sheet)
+    sync_to_google_sheet(
+        $organization_id,
+        'Ticket Raised',
+        [
+            'id' => $ticketId,
+            'ticket_number' => $ticketNumber,
+            'title' => $title,
+            'status' => 'NEW',
+            'priority' => $priority,
+            'website_name' => $website['name'],
+            'environment' => $environment,
+            'requester_name' => $user['name'] . ' (' . $user['email'] . ')',
+            'assignee_name' => 'Unassigned'
+        ],
+        "New bug ticket submitted: {$title}. Category: {$category}. Priority: {$priority}. Environment: {$environment}.",
+        $user['name']
+    );
+
+    $created = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+    json_response(['success' => true, 'ticket' => $created], 201);
+}
+
+// GET /api/tickets/{id}
+if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    $ticket = db_query_one(
+        "SELECT t.*, o.name as organization_name, w.name as website_name, w.url as website_url,
+                req.name as requester_name, req.email as requester_email,
+                dev.name as assignee_name, dev.email as assignee_email
+         FROM tickets t
+         JOIN organizations o ON t.organization_id = o.id
+         JOIN websites w ON t.website_id = w.id
+         JOIN users req ON t.requester_id = req.id
+         LEFT JOIN users dev ON t.assignee_id = dev.id
+         WHERE t.id = ?",
+        [$ticketId]
+    );
+
+    if (!$ticket) json_error('Ticket not found', 404);
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: You can only view tickets belonging to your organization', 403);
+    }
+
+    json_response(['success' => true, 'ticket' => $ticket]);
+}
+
+// PATCH /api/tickets/{id} (Update status, priority, assignee, resolution - also handles /status and /assign)
+if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assign|assignee))?$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+    $input = get_json_input();
+
+    $ticket = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+
+    if ($user['role'] === 'client') {
+        // Client can only confirm resolution or reopen
+        if (isset($input['status']) && in_array($input['status'], ['RESOLVED', 'CLOSED', 'NEW', 'IN PROGRESS'])) {
+            $newStatus = $input['status'];
+            db_execute('UPDATE tickets SET status = ? WHERE id = ?', [$newStatus, $ticketId]);
+            db_execute(
+                'INSERT INTO ticket_activity (id, ticket_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)',
+                ['act-' . time() . '-' . bin2hex(random_bytes(4)), $ticketId, $user['id'], 'status_changed', json_encode(['from' => $ticket['status'], 'to' => $newStatus])]
+            );
+            $updated = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+
+            // Google Sheets Real-Time Sync for client update
+            sync_to_google_sheet(
+                $ticket['organization_id'],
+                "Client Status: {$newStatus}",
+                $updated,
+                "Ticket status updated from {$ticket['status']} to {$newStatus} by client.",
+                $user['name']
+            );
+
+            json_response(['success' => true, 'ticket' => $updated]);
+        }
+        json_error('Clients can only confirm resolution or reopen tickets', 403);
+    }
+
+    // Staff updates
+    $updates = [];
+    $params = [];
+
+    if (isset($input['status'])) {
+        $updates[] = 'status = ?';
+        $params[] = $input['status'];
+        if ($input['status'] === 'RESOLVED') {
+            $updates[] = 'resolved_at = NOW()';
+        }
+        if ($input['status'] === 'CLOSED') {
+            $updates[] = 'closed_at = NOW()';
+        }
+    }
+    if (isset($input['priority'])) {
+        $updates[] = 'priority = ?';
+        $params[] = $input['priority'];
+    }
+    if (array_key_exists('assignee_id', $input) || array_key_exists('assigneeId', $input)) {
+        $targetAssignee = $input['assignee_id'] ?? $input['assigneeId'] ?? null;
+        $updates[] = 'assignee_id = ?';
+        $params[] = !empty($targetAssignee) ? $targetAssignee : null;
+    }
+    if (isset($input['root_cause'])) {
+        $updates[] = 'root_cause = ?';
+        $params[] = $input['root_cause'];
+    }
+    if (isset($input['fix_details'])) {
+        $updates[] = 'fix_details = ?';
+        $params[] = $input['fix_details'];
+    }
+    if (isset($input['resolution_notes'])) {
+        $updates[] = 'resolution_notes = ?';
+        $params[] = $input['resolution_notes'];
+    }
+
+    if (!empty($updates)) {
+        $params[] = $ticketId;
+        db_execute('UPDATE tickets SET ' . implode(', ', $updates) . ' WHERE id = ?', $params);
+
+        db_execute(
+            'INSERT INTO ticket_activity (id, ticket_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)',
+            ['act-' . time() . '-' . bin2hex(random_bytes(4)), $ticketId, $user['id'], 'updated', json_encode($input)]
+        );
+
+        if (isset($input['status']) && $input['status'] === 'RESOLVED') {
+            send_slack_notification(
+                SLACK_CHANNEL_RESOLUTIONS,
+                "✅ *Ticket Resolved: {$ticket['ticket_number']}*",
+                [
+                    ['title' => 'Title', 'value' => $ticket['title'], 'short' => false],
+                    ['title' => 'Resolution Notes', 'value' => $input['resolution_notes'] ?? 'Issue resolved.', 'short' => false],
+                ],
+                '#2EB67D'
+            );
+        }
+    }
+
+    $updated = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+
+    // Google Sheets Real-Time Sync on Staff Actions
+    // 1. Assignee change
+    if ((array_key_exists('assignee_id', $input) || array_key_exists('assigneeId', $input)) && $targetAssignee !== $ticket['assignee_id']) {
+        $newAssignee = $targetAssignee ? db_query_one('SELECT name, email FROM users WHERE id = ?', [$targetAssignee]) : null;
+        $assigneeLabel = $newAssignee ? "{$newAssignee['name']} ({$newAssignee['email']})" : 'Unassigned';
+        sync_to_google_sheet(
+            $ticket['organization_id'],
+            'Assigned to Developer',
+            $updated,
+            "Ticket assigned to {$assigneeLabel} by {$user['name']}.",
+            $user['name']
+        );
+    }
+
+    // 2. Status change
+    if (isset($input['status']) && $input['status'] !== $ticket['status']) {
+        $notes = [];
+        if (!empty($input['resolution_notes'])) $notes[] = "Resolution: " . $input['resolution_notes'];
+        if (!empty($input['root_cause'])) $notes[] = "Root Cause: " . $input['root_cause'];
+        if (!empty($input['fix_details'])) $notes[] = "Fix Details: " . $input['fix_details'];
+        $detailsStr = !empty($notes) ? implode(' | ', $notes) : "Status changed from {$ticket['status']} to {$input['status']}.";
+
+        sync_to_google_sheet(
+            $ticket['organization_id'],
+            "Status Changed to {$input['status']}",
+            $updated,
+            $detailsStr,
+            $user['name']
+        );
+    }
+
+    json_response(['success' => true, 'ticket' => $updated]);
+}
+
+// GET /api/audit/tickets/{ticketId}/activity (and /api/tickets/{ticketId}/activity)
+if ($method === 'GET' && (
+    preg_match('#^/api/audit/tickets/([^/]+)/activity$#', $path, $m) ||
+    preg_match('#^/api/tickets/([^/]+)/activity$#', $path, $m)
+)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    $ticket = db_query_one('SELECT organization_id FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: Access to this ticket is denied.', 403);
+    }
+
+    $sql = "SELECT a.*, u.name as user_name
+            FROM ticket_activity a
+            LEFT JOIN users u ON a.user_id = u.id
+            WHERE a.ticket_id = ?";
+    $params = [$ticketId];
+    if ($user['role'] === 'client') {
+        $sql .= " AND a.is_internal = 0";
+    }
+    $sql .= " ORDER BY a.created_at DESC";
+
+    $activities = db_query($sql, $params);
+    foreach ($activities as &$act) {
+        $act['is_internal'] = (bool)$act['is_internal'];
+        $act['details'] = !empty($act['details']) ? json_decode($act['details'], true) : null;
+    }
+    unset($act);
+
+    json_response(['success' => true, 'activities' => $activities]);
+}
+
+// GET /api/tickets/{id}/duplicate-check
+if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)/duplicate-check$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    $current = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$current) json_error('Ticket not found', 404);
+
+    if ($user['role'] === 'client' && $current['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden', 403);
+    }
+
+    $words = array_filter(explode(' ', $current['title']), function($w) { return strlen($w) > 3; });
+    $words = array_slice($words, 0, 3);
+
+    $sql = "SELECT id, ticket_number, title, status, priority, created_at
+            FROM tickets
+            WHERE id != ? AND organization_id = ?
+              AND (website_id = ? OR category = ?";
+    $params = [$ticketId, $current['organization_id'], $current['website_id'], $current['category']];
+
+    if (!empty($words)) {
+        $likeClauses = [];
+        foreach ($words as $w) {
+            $likeClauses[] = "title LIKE ?";
+            $params[] = "%" . $w . "%";
+        }
+        $sql .= " OR (" . implode(' OR ', $likeClauses) . ")";
+    }
+    $sql .= ") ORDER BY created_at DESC LIMIT 5";
+
+    $duplicates = db_query($sql, $params);
+    json_response(['success' => true, 'duplicates' => $duplicates]);
+}
+
+// GET /api/tickets/{id}/comments
+if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)/comments$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    $sql = "SELECT c.*, u.name as user_name, u.role as user_role, u.custom_role as user_custom_role,
+                   o.name as user_organization_name, u.email as user_email
+            FROM ticket_comments c
+            JOIN users u ON c.user_id = u.id
+            LEFT JOIN organizations o ON u.organization_id = o.id
+            WHERE c.ticket_id = ?";
+    $params = [$ticketId];
+
+    if ($user['role'] === 'client') {
+        $sql .= " AND c.is_internal = 0";
+    }
+
+    $sql .= " ORDER BY c.created_at ASC";
+    $comments = db_query($sql, $params);
+    json_response(['success' => true, 'comments' => $comments]);
+}
+
+// POST /api/tickets/{id}/comments
+if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/comments$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+    $input = get_json_input();
+
+    $content = trim($input['content'] ?? '');
+    $is_internal = !empty($input['is_internal']) && $user['role'] !== 'client' ? 1 : 0;
+
+    if (empty($content)) json_error('Comment text is required', 400);
+
+    $commentId = 'cmt-' . time() . '-' . bin2hex(random_bytes(4));
+    db_execute(
+        'INSERT INTO ticket_comments (id, ticket_id, user_id, is_internal, content) VALUES (?, ?, ?, ?, ?)',
+        [$commentId, $ticketId, $user['id'], $is_internal, $content]
+    );
+
+    db_execute(
+        'INSERT INTO ticket_activity (id, ticket_id, user_id, action, details, is_internal) VALUES (?, ?, ?, ?, ?, ?)',
+        ['act-' . time() . '-' . bin2hex(random_bytes(4)), $ticketId, $user['id'], 'comment_added', json_encode(['is_internal' => $is_internal]), $is_internal]
+    );
+
+    // Google Sheets Real-Time Sync on Comment
+    $ticket = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+    if ($ticket) {
+        $commentType = !empty($is_internal) ? 'Internal Dev Note' : 'Public Client Note';
+        $snippet = mb_substr(strip_tags($content), 0, 200);
+        sync_to_google_sheet(
+            $ticket['organization_id'],
+            "Note Added ({$commentType})",
+            $ticket,
+            "{$commentType} by {$user['name']}: \"{$snippet}\"",
+            $user['name']
+        );
+    }
+
+    json_response(['success' => true, 'comment' => [
+        'id' => $commentId,
+        'ticket_id' => $ticketId,
+        'user_id' => $user['id'],
+        'user_name' => $user['name'],
+        'user_role' => $user['role'],
+        'is_internal' => (bool)$is_internal,
+        'content' => $content,
+        'created_at' => date('Y-m-d H:i:s')
+    ]], 201);
+}
+
+// POST /api/tickets/{id}/attachments
+if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        json_error('No valid file uploaded or upload error occurred', 400);
+    }
+
+    $file = $_FILES['file'];
+    $filename = basename($file['name']);
+    $ext = pathinfo($filename, PATHINFO_EXTENSION);
+    $storedName = 'att_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+    $targetPath = UPLOAD_DIR . '/' . $storedName;
+
+    if (!move_uploaded_file($file['tmp_name'], $targetPath)) {
+        json_error('Failed to save uploaded file to storage directory', 500);
+    }
+
+    $attachmentId = 'att-' . time() . '-' . bin2hex(random_bytes(4));
+    $is_internal = !empty($_POST['is_internal']) && $user['role'] !== 'client' ? 1 : 0;
+
+    db_execute(
+        'INSERT INTO ticket_attachments (id, ticket_id, comment_id, uploader_id, filename, stored_filename, file_path, file_size, mime_type, is_internal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [$attachmentId, $ticketId, null, $user['id'], $filename, $storedName, $targetPath, (int)$file['size'], $file['type'], $is_internal]
+    );
+
+    json_response(['success' => true, 'attachment' => [
+        'id' => $attachmentId,
+        'filename' => $filename,
+        'file_size' => (int)$file['size'],
+        'mime_type' => $file['type'],
+        'uploader_name' => $user['name']
+    ]], 201);
+}
+
+// GET /api/attachments/{id}/download
+if ($method === 'GET' && preg_match('#^/api/attachments/([^/]+)/download$#', $path, $m)) {
+    require_auth();
+    $attId = $m[1];
+    $att = db_query_one('SELECT * FROM ticket_attachments WHERE id = ?', [$attId]);
+    if (!$att || !file_exists($att['file_path'])) {
+        json_error('Attachment file not found', 404);
+    }
+
+    header('Content-Type: ' . $att['mime_type']);
+    header('Content-Disposition: attachment; filename="' . $att['filename'] . '"');
+    header('Content-Length: ' . filesize($att['file_path']));
+    readfile($att['file_path']);
+    exit;
+}
+
+// GET /api/audit & /api/audit/logs
+if ($method === 'GET' && ($path === '/api/audit' || $path === '/api/audit/logs')) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager', 'developer']);
+    $logs = db_query(
+        "SELECT a.*, u.name as user_name, t.ticket_number, t.title as ticket_title, o.name as organization_name
+         FROM ticket_activity a
+         LEFT JOIN users u ON a.user_id = u.id
+         JOIN tickets t ON a.ticket_id = t.id
+         JOIN organizations o ON t.organization_id = o.id
+         ORDER BY a.created_at DESC LIMIT 100"
+    );
+    foreach ($logs as &$log) {
+        $log['is_internal'] = (bool)$log['is_internal'];
+        $log['details'] = !empty($log['details']) ? json_decode($log['details'], true) : null;
+    }
+    unset($log);
+    json_response(['success' => true, 'count' => count($logs), 'logs' => $logs, 'audit' => $logs]);
+}
+
+// GET /api/audit/notifications & /api/notifications
+if ($method === 'GET' && ($path === '/api/audit/notifications' || $path === '/api/notifications')) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $deliveries = db_query(
+        "SELECT n.*, t.ticket_number
+         FROM notification_deliveries n
+         LEFT JOIN tickets t ON n.ticket_id = t.id
+         ORDER BY n.created_at DESC LIMIT 100"
+    );
+    foreach ($deliveries as &$d) {
+        $d['payload'] = !empty($d['payload']) ? json_decode($d['payload'], true) : null;
+    }
+    unset($d);
+    json_response(['success' => true, 'count' => count($deliveries), 'deliveries' => $deliveries, 'notifications' => $deliveries]);
+}
+
+// GET /api/routing-rules
+if ($method === 'GET' && $path === '/api/routing-rules') {
+    require_auth();
+    $rules = db_query(
+        "SELECT r.*, u.name as default_assignee_name
+         FROM routing_rules r
+         LEFT JOIN users u ON r.default_assignee_id = u.id
+         ORDER BY r.created_at DESC"
+    );
+    json_response(['success' => true, 'rules' => $rules]);
+}
+
+// POST /api/routing-rules
+if ($method === 'POST' && $path === '/api/routing-rules') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+
+    $name = trim($input['name'] ?? '');
+    $assigneeId = $input['default_assignee_id'] ?? '';
+    if (empty($name) || empty($assigneeId)) json_error('Rule name and default assignee are required', 400);
+
+    $ruleId = 'rule-' . time() . '-' . bin2hex(random_bytes(4));
+    db_execute(
+        'INSERT INTO routing_rules (id, name, category, website_id, priority, default_assignee_id, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)',
+        [$ruleId, $name, $input['category'] ?? null, $input['website_id'] ?? null, $input['priority'] ?? null, $assigneeId]
+    );
+
+    json_response(['success' => true, 'rule' => ['id' => $ruleId, 'name' => $name]], 201);
+}
+
+// DELETE /api/routing-rules/{id}
+if ($method === 'DELETE' && preg_match('#^/api/routing-rules/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $ruleId = $m[1];
+    db_execute('DELETE FROM routing_rules WHERE id = ?', [$ruleId]);
+    json_response(['success' => true, 'message' => 'Routing rule deleted successfully']);
+}
+
+// GET /api/integrations/slack/health
+if ($method === 'GET' && $path === '/api/integrations/slack/health') {
+    require_auth();
+    $configured = defined('SLACK_WEBHOOK_URL') && !empty(SLACK_WEBHOOK_URL);
+    json_response([
+        'success' => true,
+        'configured' => $configured,
+        'webhookConfigured' => $configured,
+        'mode' => $configured ? 'live' : 'mock (safe local mode)',
+        'channels' => [
+            'bugReports' => SLACK_CHANNEL_BUG_REPORTS,
+            'devTriage' => SLACK_CHANNEL_DEV_TRIAGE,
+            'incidents' => SLACK_CHANNEL_INCIDENTS,
+            'resolutions' => SLACK_CHANNEL_RESOLUTIONS
+        ]
+    ]);
+}
+
+// POST /api/integrations/slack/test
+if ($method === 'POST' && $path === '/api/integrations/slack/test') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $ok = send_slack_notification(
+        SLACK_CHANNEL_BUG_REPORTS,
+        "🧪 *Test Notification from Client Bug Tracker*",
+        [
+            ['title' => 'Status', 'value' => 'Slack connectivity verified successfully!', 'short' => false],
+            ['title' => 'Triggered By', 'value' => $user['name'] . ' (' . $user['email'] . ')', 'short' => true],
+            ['title' => 'Platform', 'value' => 'Hostinger PHP / MySQL', 'short' => true]
+        ],
+        '#36C5F0'
+    );
+
+    json_response([
+        'success' => true,
+        'delivered' => $ok,
+        'channel' => SLACK_CHANNEL_BUG_REPORTS,
+        'message' => $ok ? 'Test notification sent to Slack channel successfully.' : 'Slack webhook not configured or failed to deliver.'
+    ]);
+}
+
+// POST /api/integrations/email/test
+if ($method === 'POST' && $path === '/api/integrations/email/test') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+    $targetEmail = !empty($input['email']) ? trim($input['email']) : $user['email'];
+
+    $ok = send_credentials_email($targetEmail, $user['name'], 'test-password-123', 'Super Admin');
+
+    json_response([
+        'success' => $ok,
+        'recipient' => $targetEmail,
+        'sender' => defined('EMAIL_FROM') ? EMAIL_FROM : 'auto-generated',
+        'mode' => (defined('SMTP_ENABLED') && SMTP_ENABLED) ? 'Hostinger SMTP (Authenticated)' : 'PHP mail() (Local Sendmail)',
+        'message' => $ok ? "Test email sent successfully to {$targetEmail}." : "Failed to send email. Check your SMTP settings in api/config.php."
+    ]);
+}
+
+// ==============================================================================
+// Google Sheets Integration API Routes
+// ==============================================================================
+
+// GET /api/integrations/sheets/config
+if ($method === 'GET' && $path === '/api/integrations/sheets/config') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['google_sheets_config']);
+    $config = $setting ? json_decode($setting['value'], true) : [
+        'enabled' => false,
+        'global_webhook_url' => '',
+        'create_brand_tabs' => true
+    ];
+
+    if (empty($config['global_webhook_url']) && defined('GOOGLE_SHEETS_WEBHOOK_URL')) {
+        $config['global_webhook_url'] = GOOGLE_SHEETS_WEBHOOK_URL;
+    }
+
+    $brands = db_query('SELECT id, name, slug, google_sheet_url FROM organizations ORDER BY name ASC');
+
+    $deliveries = db_query(
+        "SELECT n.*, t.ticket_number 
+         FROM notification_deliveries n 
+         LEFT JOIN tickets t ON n.ticket_id = t.id 
+         WHERE n.channel = 'google_sheets' 
+         ORDER BY n.created_at DESC LIMIT 30"
+    );
+
+    foreach ($deliveries as &$d) {
+        $d['payload'] = !empty($d['payload']) ? json_decode($d['payload'], true) : null;
+    }
+    unset($d);
+
+    json_response([
+        'success' => true,
+        'config' => $config,
+        'brands' => $brands,
+        'deliveries' => $deliveries
+    ]);
+}
+
+// POST /api/integrations/sheets/config
+if ($method === 'POST' && $path === '/api/integrations/sheets/config') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+
+    $config = [
+        'enabled' => !empty($input['enabled']),
+        'global_webhook_url' => trim($input['global_webhook_url'] ?? ''),
+        'create_brand_tabs' => isset($input['create_brand_tabs']) ? (bool)$input['create_brand_tabs'] : true
+    ];
+
+    db_execute(
+        'INSERT INTO integration_settings (`key`, `value`, `description`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+        ['google_sheets_config', json_encode($config), 'Configuration for automatic real-time Google Sheets logging per brand']
+    );
+
+    json_response(['success' => true, 'config' => $config, 'message' => 'Google Sheets configuration saved successfully']);
+}
+
+// POST /api/integrations/sheets/test
+if ($method === 'POST' && $path === '/api/integrations/sheets/test') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+
+    $brandId = trim($input['brand_id'] ?? '');
+    $targetUrl = trim($input['webhook_url'] ?? '');
+
+    $brandName = 'All Brands Test';
+    if (!empty($brandId)) {
+        $org = db_query_one('SELECT name, google_sheet_url FROM organizations WHERE id = ?', [$brandId]);
+        if ($org) {
+            $brandName = $org['name'];
+            if (empty($targetUrl) && !empty($org['google_sheet_url'])) {
+                $targetUrl = $org['google_sheet_url'];
+            }
+        }
+    }
+
+    if (empty($targetUrl)) {
+        $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['google_sheets_config']);
+        $config = $setting ? json_decode($setting['value'], true) : [];
+        $targetUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+    }
+
+    if (empty($targetUrl)) {
+        json_error('No Google Sheet Webhook URL provided or configured. Please enter a Webhook URL.', 400);
+    }
+
+    $payload = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'brand_id' => $brandId ?: 'brand-test',
+        'brand_name' => $brandName,
+        'ticket_id' => 'tkt-test-' . time(),
+        'ticket_number' => 'TEST-100',
+        'ticket_title' => 'Google Sheets Connection & Auto-Tab Sync Verification',
+        'event' => 'Connection Test',
+        'status' => 'TRIAGED',
+        'priority' => 'P1',
+        'website_name' => 'client-portal-test.com',
+        'environment' => 'production',
+        'requester_name' => $user['name'] . ' (' . $user['email'] . ')',
+        'assignee_name' => $user['name'],
+        'details' => 'Verification test payload sent from Antigravity Bug Tracker. If you see this row, real-time logging is active!',
+        'actor_name' => $user['name']
+    ];
+
+    $ch = curl_init($targetUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_AUTOREFERER, true);
+    curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 8);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    $success = ($code >= 200 && $code < 400 && empty($err));
+
+    // Record delivery
+    try {
+        $delivId = 'deliv-' . time() . '-' . bin2hex(random_bytes(4));
+        db_execute(
+            'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $delivId,
+                'google_sheets',
+                $brandName . ' (test)',
+                'Connection Test',
+                null,
+                json_encode($payload),
+                $success ? 'delivered' : 'failed',
+                1,
+                $err ?: ($success ? null : "HTTP status $code: $resp")
+            ]
+        );
+    } catch (Exception $e) {}
+
+    json_response([
+        'success' => $success,
+        'http_code' => $code,
+        'brand_name' => $brandName,
+        'message' => $success 
+            ? "Test row successfully sent to Google Sheet for brand '{$brandName}'! Check your spreadsheet tab."
+            : "Failed to connect to Google Sheets URL (HTTP {$code}). Error: " . ($err ?: $resp)
+    ]);
+}
+
+// POST /api/organizations/{id}/sheets-url (Set or clear dedicated Google Sheet URL for a brand)
+if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/sheets-url$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $orgId = $m[1];
+    $input = get_json_input();
+    $url = trim($input['google_sheet_url'] ?? '');
+
+    db_execute('UPDATE organizations SET google_sheet_url = ? WHERE id = ?', [!empty($url) ? $url : null, $orgId]);
+    json_response(['success' => true, 'google_sheet_url' => $url, 'message' => 'Brand Google Sheet URL updated successfully']);
+}
+
+// Default 404 for unknown API routes
+json_error("Route not found: {$method} {$path}", 404);

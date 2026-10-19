@@ -1,0 +1,20 @@
+{
+  "name": "client-bug-tracker-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Client Bug Tracker — Customer Portal + Developer Dashboard + Slack Integration",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "seed": "npm --prefix backend run seed",
+    "clean": "npm --prefix backend run clean",
+    "test": "npm --prefix backend run test",
+    "build": "npm --prefix frontend run build && npm --prefix backend run build",
+    "bundle:hostinger": "node scripts/package-hostinger.js",
+    "deploy": "node scripts/deploy-ftp.js",
+    "start": "npm --prefix backend run start"
+  },
+  "devDependencies": {
+    "basic-ftp": "^6.2.3"
+  }
+}

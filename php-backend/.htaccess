@@ -1,0 +1,30 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # Ensure Authorization header is passed to PHP
+    SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+    RewriteCond %{HTTP:Authorization} ^(.*)
+    RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+
+    # Route all API calls to /api/index.php
+    RewriteRule ^api/(.*)$ /api/index.php [QSA,L]
+
+    # Allow direct access to real existing files (css, js, images, uploads)
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Fallback to index.html for React SPA client-side routing
+    RewriteRule ^ index.html [L]
+</IfModule>
+
+# Security: prevent direct directory listing
+Options -Indexes
+
+# Upload limit adjustment (Hostinger Apache)
+<IfModule mod_php.c>
+    php_value upload_max_filesize 20M
+    php_value post_max_size 25M
+    php_value max_execution_time 120
+</IfModule>
