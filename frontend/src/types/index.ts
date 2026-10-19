@@ -21,6 +21,7 @@ export interface User {
   organization_id: string | null;
   organization_name?: string;
   avatar_url?: string | null;
+  must_reset_password?: boolean | number;
 }
 
 export interface Role {
@@ -38,7 +39,11 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  website_url?: string | null;
   google_sheet_url?: string | null;
+  status?: string | null;
   created_at: string;
 }
 

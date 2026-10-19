@@ -72,6 +72,34 @@ organizationsRouter.post(
   }
 );
 
+// PUT /api/organizations/:id (admin edits brand details)
+organizationsRouter.put(
+  '/:id',
+  authenticate,
+  requireRoles('super_admin', 'support_manager'),
+  async (req, res, next) => {
+    try {
+      const orgId = req.params.id;
+      const { name, contact_name, contact_email, website_url, google_sheet_url, status } = req.body;
+      if (!name) throw new AppError('Brand name is required', 400);
+
+      const org = await queryOne('SELECT id FROM organizations WHERE id = ?', [orgId]);
+      if (!org) throw new AppError('Organization not found', 404);
+
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      await execute(
+        'UPDATE organizations SET name = ?, slug = ?, contact_name = ?, contact_email = ?, website_url = ?, google_sheet_url = ?, status = ? WHERE id = ?',
+        [name, slug, contact_name || null, contact_email || null, website_url || null, google_sheet_url || null, status || 'active', orgId]
+      );
+
+      const updated = await queryOne('SELECT * FROM organizations WHERE id = ?', [orgId]);
+      res.json({ success: true, organization: updated, message: 'Brand details updated successfully' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 // GET /api/organizations/:id/websites
 organizationsRouter.get('/:id/websites', authenticate, async (req, res, next) => {
   try {

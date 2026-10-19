@@ -16,6 +16,9 @@ import {
   AlertCircle,
   FileSpreadsheet,
   Send,
+  Edit2,
+  RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 
 export const OrganizationsPage: React.FC = () => {
@@ -27,6 +30,23 @@ export const OrganizationsPage: React.FC = () => {
   // New Brand modal/form
   const [showAddOrg, setShowAddOrg] = useState(false);
   const [orgName, setOrgName] = useState('');
+  const [orgContactName, setOrgContactName] = useState('');
+  const [orgContactEmail, setOrgContactEmail] = useState('');
+  const [orgInitialPassword, setOrgInitialPassword] = useState('');
+  const [orgWebsiteUrl, setOrgWebsiteUrl] = useState('');
+  const [orgSheetUrlInput, setOrgSheetUrlInput] = useState('');
+
+  // Edit Brand modal/form
+  const [showEditOrg, setShowEditOrg] = useState(false);
+  const [editingOrg, setEditingOrg] = useState<Organization | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    contact_name: '',
+    contact_email: '',
+    website_url: '',
+    google_sheet_url: '',
+    status: 'active',
+  });
 
   // New Website modal/form
   const [showAddSite, setShowAddSite] = useState(false);
@@ -100,17 +120,75 @@ export const OrganizationsPage: React.FC = () => {
     loadData();
   }, []);
 
+  const generateTempPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+    let res = 'AM-';
+    for (let i = 0; i < 8; i++) {
+      res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return res;
+  };
+
   const handleCreateOrg = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSubmitting(true);
     try {
-      await api.post('/organizations', { name: orgName });
+      const res = await api.post<any>('/organizations', {
+        name: orgName.trim(),
+        contact_name: orgContactName.trim() || undefined,
+        contact_email: orgContactEmail.trim() || undefined,
+        initial_password: orgInitialPassword || undefined,
+        website_url: orgWebsiteUrl.trim() || undefined,
+        google_sheet_url: orgSheetUrlInput.trim() || undefined,
+      });
+
+      if (res.client_created && orgContactEmail) {
+        setGeneratedCreds({
+          brand: orgName.trim(),
+          email: orgContactEmail.trim(),
+          password: orgInitialPassword,
+        });
+      }
+
       setOrgName('');
+      setOrgContactName('');
+      setOrgContactEmail('');
+      setOrgInitialPassword('');
+      setOrgWebsiteUrl('');
+      setOrgSheetUrlInput('');
       setShowAddOrg(false);
-      setSuccess(`Brand "${orgName}" created successfully.`);
+      setSuccess(res.message || `Brand "${orgName}" created successfully.`);
       await loadData();
     } catch (err: any) {
-      setError(err.message || 'Failed to create organization');
+      setError(err.message || 'Failed to create brand organization');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleUpdateOrg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOrg) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await api.put(`/organizations/${editingOrg.id}`, {
+        name: editForm.name.trim(),
+        contact_name: editForm.contact_name.trim() || null,
+        contact_email: editForm.contact_email.trim() || null,
+        website_url: editForm.website_url.trim() || null,
+        google_sheet_url: editForm.google_sheet_url.trim() || null,
+        status: editForm.status || 'active',
+      });
+      setShowEditOrg(false);
+      setEditingOrg(null);
+      setSuccess(`Brand "${editForm.name}" updated successfully.`);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update brand details');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -286,7 +364,15 @@ export const OrganizationsPage: React.FC = () => {
                         <span>•</span>
                         <span>{orgSites.length} websites</span>
                         <span>•</span>
-                        <span>{orgUsers.length} authorized client logins</span>
+                        <span>{orgUsers.length} client logins</span>
+                        {org.contact_email && (
+                          <>
+                            <span>•</span>
+                            <span className="text-slate-600 font-medium">
+                              {org.contact_name ? `${org.contact_name} ` : ''}({org.contact_email})
+                            </span>
+                          </>
+                        )}
                         <span>•</span>
                         <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -297,6 +383,27 @@ export const OrganizationsPage: React.FC = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Edit Brand */}
+                    <button
+                      onClick={() => {
+                        setEditingOrg(org);
+                        setEditForm({
+                          name: org.name,
+                          contact_name: org.contact_name || '',
+                          contact_email: org.contact_email || '',
+                          website_url: org.website_url || '',
+                          google_sheet_url: org.google_sheet_url || '',
+                          status: org.status || 'active',
+                        });
+                        setShowEditOrg(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold transition-colors shadow-sm"
+                      title="Edit brand details"
+                    >
+                      <Edit2 size={13} className="text-slate-500" />
+                      <span>Edit Brand</span>
+                    </button>
+
                     {/* Google Sheets Sync */}
                     <button
                       onClick={() => {
@@ -434,18 +541,18 @@ export const OrganizationsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Add Brand */}
+      {/* Modal: Add Brand with Initial Password & Email Dispatch */}
       {showAddOrg && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-xl border border-slate-200 p-6">
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 p-6 my-8">
             <h3 className="text-lg font-bold text-slate-900 mb-1">Create New Client Brand</h3>
-            <p className="text-xs text-slate-500 mb-5">
-              Register a client company or organization to manage their website ticketing.
+            <p className="text-xs text-slate-500 mb-4">
+              Onboard a client organization, configure initial credentials, and automatically email access details.
             </p>
 
-            <form onSubmit={handleCreateOrg} className="space-y-4 text-sm">
+            <form onSubmit={handleCreateOrg} className="space-y-3.5 text-xs">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Brand / Organization Name *
                 </label>
                 <input
@@ -454,23 +561,218 @@ export const OrganizationsPage: React.FC = () => {
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
                   placeholder="e.g. Acme Lifestyle Co."
-                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
-              <div className="pt-4 flex justify-end gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Primary Website URL (Optional)
+                </label>
+                <input
+                  type="url"
+                  value={orgWebsiteUrl}
+                  onChange={(e) => setOrgWebsiteUrl(e.target.value)}
+                  placeholder="https://acmelifestyle.com"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Contact Person Name
+                  </label>
+                  <input
+                    type="text"
+                    value={orgContactName}
+                    onChange={(e) => setOrgContactName(e.target.value)}
+                    placeholder="e.g. Sarah Jenkins"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Contact Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={orgContactEmail}
+                    onChange={(e) => setOrgContactEmail(e.target.value)}
+                    placeholder="sarah@acme.com"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider">
+                    Initial Temporary Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setOrgInitialPassword(generateTempPassword())}
+                    className="text-[11px] text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles size={12} />
+                    <span>Generate Password</span>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={orgInitialPassword}
+                  onChange={(e) => setOrgInitialPassword(e.target.value)}
+                  placeholder="e.g. AM-X7k9#p2"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Dedicated Google Sheet Webhook (Optional)
+                </label>
+                <input
+                  type="url"
+                  value={orgSheetUrlInput}
+                  onChange={(e) => setOrgSheetUrlInput(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-[11px]"
+                />
+              </div>
+
+              <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-900 text-[11.5px] leading-relaxed">
+                <strong>🔒 Automated Client Setup:</strong> When you provide an email and initial password, Assurance Media will automatically provision the brand account, set a mandatory first-login password reset, and email credentials directly from <code>irfan@assurancemedia.in</code>.
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setShowAddOrg(false)}
-                  className="px-4 py-2 border rounded-lg text-slate-700 font-medium hover:bg-slate-50"
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#0176D3] hover:bg-[#014486] text-white font-semibold rounded-lg shadow-sm"
+                  disabled={submitting}
+                  className="px-4 py-2 bg-[#0066CC] hover:bg-[#0052a3] disabled:opacity-50 text-white font-bold rounded-lg shadow-sm cursor-pointer"
                 >
-                  Create Brand
+                  {submitting ? 'Creating Brand & Emailing...' : 'Create Brand'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit Brand Details */}
+      {showEditOrg && editingOrg && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 p-6 my-8">
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Edit Brand Details</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Update organization info, primary contact, website, and Google Sheet integration.
+            </p>
+
+            <form onSubmit={handleUpdateOrg} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Brand / Organization Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Contact Person Name
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.contact_name}
+                    onChange={(e) => setEditForm({ ...editForm, contact_name: e.target.value })}
+                    placeholder="Contact name"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Contact Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={editForm.contact_email}
+                    onChange={(e) => setEditForm({ ...editForm, contact_email: e.target.value })}
+                    placeholder="contact@brand.com"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Primary Website URL
+                </label>
+                <input
+                  type="url"
+                  value={editForm.website_url}
+                  onChange={(e) => setEditForm({ ...editForm, website_url: e.target.value })}
+                  placeholder="https://brand.com"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Dedicated Google Sheet Webhook URL
+                </label>
+                <input
+                  type="url"
+                  value={editForm.google_sheet_url}
+                  onChange={(e) => setEditForm({ ...editForm, google_sheet_url: e.target.value })}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-[11px]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Brand Status
+                </label>
+                <select
+                  value={editForm.status}
+                  onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="active">Active (Full Portal Access)</option>
+                  <option value="archived">Archived / Paused</option>
+                </select>
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditOrg(false);
+                    setEditingOrg(null);
+                  }}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-4 py-2 bg-[#0066CC] hover:bg-[#0052a3] disabled:opacity-50 text-white font-bold rounded-lg shadow-sm cursor-pointer"
+                >
+                  {submitting ? 'Saving Changes...' : 'Save Brand Details'}
                 </button>
               </div>
             </form>

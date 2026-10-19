@@ -46,15 +46,19 @@ export const Navbar: React.FC = () => {
 
   return (
     <header className="h-14 bg-[#0176D3] text-white px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40 shadow-md">
-      {/* Brand & Title (Salesforce Lightning Header style) */}
+      {/* Brand & Title (Assurance Media Header) */}
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white border border-white/20 transition-colors">
-          <Bug size={18} />
+        <div className="h-9 px-2.5 py-1 rounded-lg bg-white shadow-sm flex items-center justify-center">
+          <img
+            src="/assurance-media-logo.jpg"
+            alt="Assurance Media"
+            className="h-6 object-contain"
+          />
         </div>
         <div className="flex items-center gap-2">
-          <span className="font-bold text-white text-base tracking-tight">BugTracker Pro</span>
+          <span className="font-bold text-white text-base tracking-tight">Assurance Media</span>
           <span className="hidden md:inline-block text-[11px] font-semibold uppercase px-2 py-0.5 rounded bg-white/15 text-white/90 border border-white/20">
-            Service Cloud • Agency Suite
+            {user?.role === 'client' ? (user?.organization_name || 'Brand Portal') : 'Agency Command Center'}
           </span>
         </div>
       </div>

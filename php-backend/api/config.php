@@ -18,7 +18,7 @@ define('JWT_SECRET', 'hostinger_production_secret_key_antigravity_998877');
 // ==============================================================================
 // The sender email address shown to recipients
 define('EMAIL_FROM', 'irfan@assurancemedia.in');
-define('EMAIL_FROM_NAME', 'Client Bug Tracker');
+define('EMAIL_FROM_NAME', 'Assurance Media');
 
 // SMTP Settings (Google Workspace / Gmail for assurancemedia.in)
 // Set to true to deliver authenticated emails directly via Google's SMTP servers

@@ -213,6 +213,66 @@ authRouter.delete('/staff/:id', authenticate, async (req, res, next) => {
   }
 });
 
+// PUT /api/auth/users/:id (Admin edits team member details / password)
+authRouter.put('/users/:id', authenticate, async (req, res, next) => {
+  try {
+    if (!['super_admin', 'support_manager'].includes(req.user!.role)) {
+      throw new AppError('Forbidden: Only managers and admins can edit team members', 403);
+    }
+    const targetId = req.params.id;
+    const { name, email, role, custom_role, password, must_reset_password } = req.body;
+    if (!name || !email) throw new AppError('Name and email are required', 400);
+
+    const target = await queryOne<any>('SELECT * FROM users WHERE id = ?', [targetId]);
+    if (!target) throw new AppError('User not found', 404);
+
+    if (email.toLowerCase() !== target.email.toLowerCase()) {
+      const existing = await queryOne('SELECT id FROM users WHERE email = ? AND id != ?', [email.toLowerCase(), targetId]);
+      if (existing) throw new AppError('Another user already has this email address', 400);
+    }
+
+    const finalRole = role || target.role;
+    const finalCustomRole = custom_role !== undefined ? custom_role : target.custom_role;
+
+    if (password) {
+      if (password.length < 6) throw new AppError('Password must be at least 6 characters long', 400);
+      const hash = await bcrypt.hash(password, 10);
+      await execute(
+        'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ? WHERE id = ?',
+        [name, email.toLowerCase(), finalRole, finalCustomRole, hash, must_reset_password !== undefined ? (must_reset_password ? 1 : 0) : 1, targetId]
+      );
+    } else {
+      await execute(
+        'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ? WHERE id = ?',
+        [name, email.toLowerCase(), finalRole, finalCustomRole, targetId]
+      );
+    }
+
+    const updated = await queryOne('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [targetId]);
+    res.json({ success: true, user: updated, message: 'User updated successfully' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/auth/force-reset-password (Force reset password on first login)
+authRouter.post('/force-reset-password', authenticate, async (req, res, next) => {
+  try {
+    const { new_password } = req.body;
+    if (!new_password || new_password.length < 8) {
+      throw new AppError('New password must be at least 8 characters long', 400);
+    }
+
+    const hash = await bcrypt.hash(new_password, 10);
+    await execute('UPDATE users SET password_hash = ?, must_reset_password = 0 WHERE id = ?', [hash, req.user!.userId]);
+
+    const updated = await queryOne<any>('SELECT id, email, name, role, custom_role, organization_id FROM users WHERE id = ?', [req.user!.userId]);
+    res.json({ success: true, message: 'Password reset successfully', user: { ...updated, must_reset_password: false } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /api/auth/roles (List roles)
 authRouter.get('/roles', authenticate, async (req, res, next) => {
   try {

@@ -6,8 +6,9 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password?: string) => Promise<User>;
   register: (data: any) => Promise<void>;
+  forceResetPassword: (newPassword: string) => Promise<void>;
   logout: () => void;
   switchDemoUser: (email: string) => Promise<void>;
   demoUsers: (User & { organization_name?: string })[];
@@ -42,7 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [token]);
 
-  const login = async (email: string, password = 'password123') => {
+  const login = async (email: string, password = 'password123'): Promise<User> => {
     setLoading(true);
     try {
       const res = await api.post<{ token: string; user: User }>('/auth/login', {
@@ -51,6 +52,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       localStorage.setItem('token', res.token);
       setToken(res.token);
+      setUser(res.user);
+      return res.user;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const forceResetPassword = async (newPassword: string) => {
+    setLoading(true);
+    try {
+      const res = await api.post<{ token: string; user: User; message: string }>('/auth/force-reset-password', {
+        new_password: newPassword,
+      });
+      if (res.token) {
+        localStorage.setItem('token', res.token);
+        setToken(res.token);
+      }
       setUser(res.user);
     } finally {
       setLoading(false);
@@ -90,6 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         login,
         register,
+        forceResetPassword,
         logout,
         switchDemoUser,
         demoUsers,

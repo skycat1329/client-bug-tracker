@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext.js';
 import { Navbar } from './components/Navbar.js';
 import { Sidebar } from './components/Sidebar.js';
 import { LoginPage } from './pages/auth/LoginPage.js';
+import { ForceResetPasswordPage } from './pages/auth/ForceResetPasswordPage.js';
 
 // Client pages
 import { CustomerTicketsPage } from './pages/customer/CustomerTicketsPage.js';
@@ -29,7 +30,7 @@ export const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-sm font-medium text-slate-500 animate-pulse">
-          Loading BugTracker Pro...
+          Loading Assurance Media Portal...
         </div>
       </div>
     );
@@ -37,6 +38,11 @@ export const App: React.FC = () => {
 
   if (!user) {
     return <LoginPage />;
+  }
+
+  // Mandatory first-time password reset gate
+  if (user.must_reset_password) {
+    return <ForceResetPasswordPage />;
   }
 
   const isClient = user.role === 'client';
@@ -128,6 +134,11 @@ export const App: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Mandatory Global Footer */}
+      <footer className="py-2.5 px-4 bg-white border-t border-slate-200 text-center text-xs text-slate-500 flex items-center justify-center gap-1 z-10 flex-shrink-0">
+        <span>Made by</span> <strong className="text-slate-700">Akash</strong> <span>with</span> <span className="text-rose-500 text-sm">❤️</span>
+      </footer>
     </div>
   );
 };

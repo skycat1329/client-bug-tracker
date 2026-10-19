@@ -96,7 +96,7 @@ function get_auth_user(): ?array {
         return null;
     }
 
-    $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id FROM users WHERE id = ?', [$decoded['userId']]);
+    $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [$decoded['userId']]);
     return $user ?: null;
 }
 
@@ -105,6 +105,17 @@ function require_auth(): array {
     if (!$user) {
         json_error('Authentication required. Missing, invalid, or expired token.', 401);
     }
+
+    global $path;
+    $allowedWhenResetRequired = [
+        '/api/auth/force-reset-password',
+        '/api/auth/me',
+        '/api/auth/logout'
+    ];
+    if (!empty($user['must_reset_password']) && !in_array($path, $allowedWhenResetRequired)) {
+        json_error('You must reset your initial temporary password before accessing portal features.', 403, 'PASSWORD_RESET_REQUIRED');
+    }
+
     return $user;
 }
 
@@ -144,62 +155,80 @@ function send_slack_notification(string $channel, string $text, array $fields = 
     return ($httpCode === 200);
 }
 
-function send_credentials_email(string $recipientEmail, string $recipientName, string $password, string $roleTitle): bool {
+function send_credentials_email(string $recipientEmail, string $recipientName, string $password, string $roleTitle, string $brandName = '', bool $isBrandClient = false): bool {
     $host = $_SERVER['HTTP_HOST'] ?? 'yourdomain.com';
     $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
-    $loginUrl = $protocol . $host . '/login';
+    $loginUrl = $isBrandClient ? ($protocol . $host . '/brand/login') : ($protocol . $host . '/login');
 
-    $subject = "Welcome to Client Bug Tracker - Your Login Credentials";
+    $subject = $isBrandClient 
+        ? "Welcome to Assurance Media - {$brandName} Portal Login Credentials"
+        : "Welcome to Assurance Media - Your Team Account Credentials";
     
+    $fromEmail = defined('EMAIL_FROM') && !empty(EMAIL_FROM) ? EMAIL_FROM : ('support@' . preg_replace('/^www\./', '', $host));
+    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Assurance Media';
+
     $html = "
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset='utf-8'>
       <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
-        .card { max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-        .header { background: #0176D3; padding: 24px; text-align: center; color: #ffffff; }
-        .content { padding: 32px 24px; }
-        .cred-box { background: #f1f5f9; border-left: 4px solid #0176D3; padding: 16px; border-radius: 6px; margin: 20px 0; }
-        .btn { display: inline-block; background: #0176D3; color: #ffffff !important; padding: 12px 24px; border-radius: 8px; font-weight: 600; text-decoration: none; margin-top: 16px; }
-        .footer { padding: 20px 24px; background: #f8fafc; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #0f172a; }
+        .card { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.07); }
+        .header { background: #0066CC; padding: 28px 24px; text-align: center; color: #ffffff; }
+        .header h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+        .header p { margin: 6px 0 0 0; font-size: 13px; opacity: 0.9; }
+        .content { padding: 32px 28px; }
+        .badge { display: inline-block; padding: 4px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; border-radius: 20px; background: #e0f2fe; color: #0284c7; }
+        .cred-box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 5px solid #0066CC; padding: 18px 20px; border-radius: 10px; margin: 20px 0; }
+        .cred-row { margin: 6px 0; font-size: 14px; }
+        .cred-val { color: #0066CC; font-size: 15px; font-weight: 700; font-family: Consolas, monospace; background: #eef2ff; padding: 2px 8px; border-radius: 4px; }
+        .warning-box { background: #fffbeb; border: 1px solid #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 8px; font-size: 12.5px; color: #92400e; margin: 18px 0; }
+        .btn { display: inline-block; background: #0066CC; color: #ffffff !important; padding: 13px 28px; border-radius: 10px; font-weight: 700; font-size: 14px; text-decoration: none; box-shadow: 0 4px 6px -1px rgba(0, 102, 204, 0.3); }
+        .footer { padding: 20px 24px; background: #f8fafc; font-size: 11.5px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; line-height: 1.6; }
       </style>
     </head>
     <body>
       <div class='card'>
         <div class='header'>
-          <h2 style='margin:0; font-size: 20px;'>Client Bug Tracker</h2>
+          <h1>Assurance Media</h1>
+          <p>" . ($isBrandClient ? ("Dedicated Client Portal &bull; " . htmlspecialchars($brandName)) : "Agency Command Center") . "</p>
         </div>
         <div class='content'>
-          <p>Hello <strong>" . htmlspecialchars($recipientName) . "</strong>,</p>
-          <p>An account has been created for you on the <strong>Client Bug Tracker</strong> with the role: <strong>" . htmlspecialchars($roleTitle) . "</strong>.</p>
+          <span class='badge'>" . htmlspecialchars($roleTitle) . "</span>
+          <p style='margin-top: 14px; font-size: 15px;'>Hello <strong>" . htmlspecialchars($recipientName) . "</strong>,</p>
+          <p style='color: #475569; font-size: 14px; line-height: 1.6;'>
+            " . ($isBrandClient 
+                ? ("An account has been created for your brand (<strong>" . htmlspecialchars($brandName) . "</strong>) on the Assurance Media Client Portal. You can report bugs, track real-time resolution progress, and communicate directly with our engineering team.")
+                : ("Your team member account has been provisioned on Assurance Media.")
+              ) . "
+          </p>
           
           <div class='cred-box'>
-            <p style='margin: 0 0 8px 0;'><strong>Login Email:</strong> <code style='color:#0176D3; font-size: 14px; font-weight: bold;'>" . htmlspecialchars($recipientEmail) . "</code></p>
-            <p style='margin: 0;'><strong>Password:</strong> <code style='color:#0176D3; font-size: 14px; font-weight: bold;'>" . htmlspecialchars($password) . "</code></p>
+            <div class='cred-row'><strong>Portal Login Email:</strong> <span class='cred-val'>" . htmlspecialchars($recipientEmail) . "</span></div>
+            <div class='cred-row'><strong>Initial Temporary Password:</strong> <span class='cred-val'>" . htmlspecialchars($password) . "</span></div>
+            <div class='cred-row'><strong>Portal URL:</strong> <a href='" . htmlspecialchars($loginUrl) . "' style='color: #0066CC; word-break: break-all;'>" . htmlspecialchars($loginUrl) . "</a></div>
           </div>
 
-          <p>Click the button below to sign in to your dashboard:</p>
-          <p style='text-align: center;'>
-            <a href='" . htmlspecialchars($loginUrl) . "' class='btn'>Log In to Bug Tracker</a>
-          </p>
+          <div class='warning-box'>
+            <strong>🔒 First-Time Security Requirement:</strong><br/>
+            For your security, this temporary password must be changed immediately upon your first sign in. You will be prompted to create your permanent password.
+          </div>
 
-          <p style='font-size: 13px; color: #64748b; margin-top: 24px;'>
-            <em>Note: For security, please change your password after logging in for the first time.</em>
+          <p style='text-align: center; margin: 26px 0 10px 0;'>
+            <a href='" . htmlspecialchars($loginUrl) . "' class='btn'>Sign In to " . ($isBrandClient ? 'Brand Portal' : 'Command Center') . "</a>
           </p>
         </div>
         <div class='footer'>
-          Web Agency Support Team &bull; Automated System Notification
+          Assurance Media Client Services &bull; Support: <a href='mailto:" . htmlspecialchars($fromEmail) . "' style='color: #64748b;'>" . htmlspecialchars($fromEmail) . "</a><br/>
+          <em>Made by Akash with ❤️</em>
         </div>
       </div>
     </body>
     </html>
     ";
 
-    $fromEmail = defined('EMAIL_FROM') && !empty(EMAIL_FROM) ? EMAIL_FROM : ('support@' . preg_replace('/^www\./', '', $host));
-    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Client Bug Tracker';
-    $textBody = "Hello {$recipientName},\n\nAn account has been created for you on Client Bug Tracker ({$roleTitle}).\n\nLogin Email: {$recipientEmail}\nPassword: {$password}\nLogin at: {$loginUrl}\n\nPlease change your password after logging in for the first time.\n\nBest regards,\nWeb Agency Support Team";
+    $textBody = "Hello {$recipientName},\n\nAn account has been created for you on Assurance Media (" . ($isBrandClient ? "Brand: {$brandName}" : $roleTitle) . ").\n\nLogin Email: {$recipientEmail}\nInitial Password: {$password}\nLogin URL: {$loginUrl}\n\nSECURITY NOTICE: You will be required to change your temporary password upon logging in for the first time.\n\nBest regards,\nAssurance Media Support Team\nMade by Akash with ❤️";
 
     $delivered = false;
     $errorMessage = null;
@@ -219,12 +248,12 @@ function send_credentials_email(string $recipientEmail, string $recipientName, s
             'From: ' . $fromName . ' <' . $fromEmail . '>',
             'Reply-To: ' . $fromEmail,
             'Return-Path: ' . $fromEmail,
-            'X-Mailer: ClientBugTracker/PHP'
+            'X-Mailer: AssuranceMedia/PHP'
         ];
 
         $delivered = @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
         if (!$delivered) {
-            $errorMessage = 'PHP mail() returned false. Set SMTP_ENABLED = true in api/config.php to send via Hostinger SMTP.';
+            $errorMessage = 'PHP mail() returned false. Set SMTP_ENABLED = true in api/config.php to send via Google Workspace / SMTP.';
         }
     }
 
@@ -239,7 +268,7 @@ function send_credentials_email(string $recipientEmail, string $recipientName, s
                 $recipientEmail,
                 'user_credentials_created',
                 null,
-                json_encode(['to' => $recipientEmail, 'name' => $recipientName, 'role' => $roleTitle, 'from' => $fromEmail]),
+                json_encode(['to' => $recipientEmail, 'name' => $recipientName, 'role' => $roleTitle, 'from' => $fromEmail, 'is_client' => $isBrandClient, 'brand' => $brandName]),
                 $delivered ? 'delivered' : 'failed',
                 1,
                 $errorMessage
@@ -253,16 +282,40 @@ function send_credentials_email(string $recipientEmail, string $recipientName, s
 }
 
 // ------------------------------------------------------------------------------
-// Google Sheets Integration & Per-Brand Logging Dispatcher
+// Schema Auto-Migration for Assurance Media, Brands & Security
 // ------------------------------------------------------------------------------
 try {
-    static $googleSheetsSchemaChecked = false;
-    if (!$googleSheetsSchemaChecked) {
-        $googleSheetsSchemaChecked = true;
+    static $assuranceMediaSchemaChecked = false;
+    if (!$assuranceMediaSchemaChecked) {
+        $assuranceMediaSchemaChecked = true;
+        // Organizations extra fields
         $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'google_sheet_url'");
         if (empty($cols)) {
             db_execute("ALTER TABLE organizations ADD COLUMN google_sheet_url VARCHAR(500) NULL AFTER slug");
         }
+        $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'contact_email'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE organizations ADD COLUMN contact_email VARCHAR(255) NULL AFTER google_sheet_url");
+        }
+        $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'contact_name'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE organizations ADD COLUMN contact_name VARCHAR(255) NULL AFTER contact_email");
+        }
+        $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'website_url'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE organizations ADD COLUMN website_url VARCHAR(500) NULL AFTER contact_name");
+        }
+        $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'status'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE organizations ADD COLUMN status VARCHAR(50) DEFAULT 'active' AFTER website_url");
+        }
+
+        // Users extra fields
+        $cols = db_query("SHOW COLUMNS FROM users LIKE 'must_reset_password'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE users ADD COLUMN must_reset_password TINYINT(1) DEFAULT 0 AFTER avatar_url");
+        }
+
         db_execute("ALTER TABLE notification_deliveries MODIFY COLUMN channel VARCHAR(50) NOT NULL");
     }
 } catch (Exception $e) {
@@ -429,11 +482,59 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         'organizationId' => $user['organization_id']
     ], JWT_SECRET);
 
+    // If organization_id is set, fetch organization name
+    if (!empty($user['organization_id'])) {
+        $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
+        $user['organization_name'] = $org ? $org['name'] : null;
+    }
+    $user['must_reset_password'] = (bool)($user['must_reset_password'] ?? 0);
+
     unset($user['password_hash']);
     json_response([
         'success' => true,
         'token' => $token,
         'user' => $user
+    ]);
+}
+
+// POST /api/auth/force-reset-password (Mandatory first-login password reset)
+if ($method === 'POST' && $path === '/api/auth/force-reset-password') {
+    $user = get_auth_user();
+    if (!$user) {
+        json_error('Authentication required. Invalid or expired token.', 401);
+    }
+
+    $input = get_json_input();
+    $newPassword = $input['new_password'] ?? '';
+
+    if (strlen($newPassword) < 8) {
+        json_error('New password must be at least 8 characters long for security', 400);
+    }
+
+    $hash = password_hash($newPassword, PASSWORD_BCRYPT);
+    db_execute('UPDATE users SET password_hash = ?, must_reset_password = 0, updated_at = NOW() WHERE id = ?', [$hash, $user['id']]);
+
+    $updatedUser = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [$user['id']]);
+    $updatedUser['must_reset_password'] = false;
+    if (!empty($updatedUser['organization_id'])) {
+        $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$updatedUser['organization_id']]);
+        $updatedUser['organization_name'] = $org ? $org['name'] : null;
+    }
+
+    // Refresh JWT Token
+    $newToken = jwt_encode([
+        'userId' => $updatedUser['id'],
+        'email' => $updatedUser['email'],
+        'name' => $updatedUser['name'],
+        'role' => $updatedUser['role'],
+        'organizationId' => $updatedUser['organization_id']
+    ], JWT_SECRET);
+
+    json_response([
+        'success' => true,
+        'message' => 'Password successfully updated. Welcome to Assurance Media!',
+        'token' => $newToken,
+        'user' => $updatedUser
     ]);
 }
 
@@ -548,6 +649,68 @@ if ($method === 'DELETE' && preg_match('#^/api/auth/staff/([^/]+)$#', $path, $m)
     db_execute('DELETE FROM users WHERE id = ?', [$targetId]);
 
     json_response(['success' => true, 'message' => 'Team member removed successfully']);
+}
+
+// PUT /api/auth/users/{id} or POST /api/auth/users/{id}/update (Admin edits team member or user details)
+if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/([^/]+)(?:/update)?$#', $path, $m)) {
+    $currentUser = require_auth();
+    require_roles($currentUser, ['super_admin', 'support_manager']);
+    $targetUserId = $m[1];
+
+    $input = get_json_input();
+    $name = trim($input['name'] ?? '');
+    $email = strtolower(trim($input['email'] ?? ''));
+    $role = $input['role'] ?? null;
+    $customRole = $input['custom_role'] ?? null;
+    $newPassword = $input['password'] ?? null;
+    $mustReset = isset($input['must_reset_password']) ? (int)$input['must_reset_password'] : null;
+
+    if (empty($name) || empty($email)) {
+        json_error('Name and email are required', 400);
+    }
+
+    $targetUser = db_query_one('SELECT * FROM users WHERE id = ?', [$targetUserId]);
+    if (!$targetUser) json_error('User not found', 404);
+
+    if ($email !== strtolower($targetUser['email'])) {
+        $existing = db_query_one('SELECT id FROM users WHERE email = ? AND id != ?', [$email, $targetUserId]);
+        if ($existing) json_error('Another user already has this email address', 400);
+    }
+
+    if ($targetUserId === 'usr-admin-primary' && $role && $role !== 'super_admin') {
+        json_error('Cannot change the role of the primary root administrator', 400);
+    }
+
+    $finalRole = $role ?: $targetUser['role'];
+    $finalCustomRole = $customRole !== null ? $customRole : $targetUser['custom_role'];
+
+    if (!empty($newPassword)) {
+        if (strlen($newPassword) < 6) {
+            json_error('Password must be at least 6 characters long', 400);
+        }
+        $hash = password_hash($newPassword, PASSWORD_BCRYPT);
+        db_execute(
+            'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ?, updated_at = NOW() WHERE id = ?',
+            [$name, $email, $finalRole, $finalCustomRole, $hash, $mustReset !== null ? $mustReset : 1, $targetUserId]
+        );
+        if (!empty($input['send_email'])) {
+            $isClient = ($finalRole === 'client');
+            send_credentials_email($email, $name, $newPassword, $finalCustomRole ?: $finalRole, '', $isClient);
+        }
+    } else {
+        $updateSql = 'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?';
+        $params = [$name, $email, $finalRole, $finalCustomRole];
+        if ($mustReset !== null) {
+            $updateSql .= ', must_reset_password = ?';
+            $params[] = $mustReset;
+        }
+        $updateSql .= ', updated_at = NOW() WHERE id = ?';
+        $params[] = $targetUserId;
+        db_execute($updateSql, $params);
+    }
+
+    $updated = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password, created_at, updated_at FROM users WHERE id = ?', [$targetUserId]);
+    json_response(['success' => true, 'user' => $updated, 'message' => 'Team member updated successfully']);
 }
 
 // GET /api/auth/roles (List roles)
@@ -671,7 +834,7 @@ if ($method === 'POST' && $path === '/api/auth/create-client') {
     $hash = password_hash($password, PASSWORD_BCRYPT);
 
     db_execute(
-        'INSERT INTO users (id, email, password_hash, name, role, organization_id) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (id, email, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, 1)',
         [$userId, $email, $hash, $name, 'client', $orgId]
     );
 
@@ -681,17 +844,18 @@ if ($method === 'POST' && $path === '/api/auth/create-client') {
         [$memberId, $orgId, $userId, 'member']
     );
 
-    $roleDisplay = 'Client User (' . $org['name'] . ')';
-    $emailSent = send_credentials_email($email, $name, $password, $roleDisplay);
+    $roleDisplay = 'Brand Client (' . $org['name'] . ')';
+    $emailSent = send_credentials_email($email, $name, $password, $roleDisplay, $org['name'], true);
 
     json_response([
         'success' => true,
-        'message' => 'Client credentials created successfully',
+        'message' => 'Client credentials created successfully. Email sent with temporary password.',
         'email_sent' => $emailSent,
         'credentials' => [
             'email' => $email,
             'password' => $password,
-            'organization' => $org['name']
+            'organization' => $org['name'],
+            'must_reset_password' => true
         ]
     ], 201);
 }
@@ -701,7 +865,7 @@ if ($method === 'GET' && preg_match('#^/api/auth/organization/([^/]+)/users$#', 
     require_auth();
     $orgId = $m[1];
     $users = db_query(
-        'SELECT id, email, name, role, created_at FROM users WHERE organization_id = ? ORDER BY name ASC',
+        'SELECT id, email, name, role, must_reset_password, created_at FROM users WHERE organization_id = ? ORDER BY name ASC',
         [$orgId]
     );
     json_response(['success' => true, 'users' => $users]);
@@ -718,20 +882,103 @@ if ($method === 'GET' && $path === '/api/organizations') {
     json_response(['success' => true, 'organizations' => $orgs]);
 }
 
-// POST /api/organizations
+// POST /api/organizations (Create Brand with initial password & client user)
 if ($method === 'POST' && $path === '/api/organizations') {
     $user = require_auth();
     require_roles($user, ['super_admin', 'support_manager']);
 
     $input = get_json_input();
     $name = trim($input['name'] ?? '');
-    if (empty($name)) json_error('Organization name is required', 400);
+    $contactName = trim($input['contact_name'] ?? '');
+    $contactEmail = strtolower(trim($input['contact_email'] ?? ''));
+    $initialPassword = $input['initial_password'] ?? '';
+    $websiteUrl = trim($input['website_url'] ?? '');
+    $sheetUrl = trim($input['google_sheet_url'] ?? '');
+    $status = trim($input['status'] ?? 'active');
+
+    if (empty($name)) json_error('Brand / Organization name is required', 400);
 
     $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
     $orgId = 'org-' . time() . '-' . bin2hex(random_bytes(4));
 
-    db_execute('INSERT INTO organizations (id, name, slug) VALUES (?, ?, ?)', [$orgId, $name, $slug]);
-    json_response(['success' => true, 'organization' => ['id' => $orgId, 'name' => $name, 'slug' => $slug]], 201);
+    db_execute(
+        'INSERT INTO organizations (id, name, slug, contact_name, contact_email, website_url, google_sheet_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [$orgId, $name, $slug, $contactName ?: null, $contactEmail ?: null, $websiteUrl ?: null, $sheetUrl ?: null, $status]
+    );
+
+    // If website URL provided, automatically create primary website
+    if (!empty($websiteUrl)) {
+        $webId = 'web-' . time() . '-' . bin2hex(random_bytes(4));
+        db_execute(
+            'INSERT INTO websites (id, organization_id, name, url, environment) VALUES (?, ?, ?, ?, ?)',
+            [$webId, $orgId, $name . ' Website', $websiteUrl, 'production']
+        );
+    }
+
+    $clientCreated = false;
+    $emailSent = false;
+
+    // If contact email and initial password provided, automatically provision Brand Client user
+    if (!empty($contactEmail) && !empty($initialPassword)) {
+        $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$contactEmail]);
+        if (!$existing) {
+            $clientId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
+            $hash = password_hash($initialPassword, PASSWORD_BCRYPT);
+            db_execute(
+                'INSERT INTO users (id, email, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [$clientId, $contactEmail, $hash, $contactName ?: $name, 'client', $orgId, 1]
+            );
+            db_execute(
+                'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?)',
+                ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgId, $clientId, 'owner']
+            );
+            $clientCreated = true;
+            // Send initial credentials email directly from irfan@assurancemedia.in
+            $emailSent = send_credentials_email($contactEmail, $contactName ?: $name, $initialPassword, 'Brand Client Account', $name, true);
+        }
+    }
+
+    $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
+    json_response([
+        'success' => true,
+        'organization' => $org,
+        'client_created' => $clientCreated,
+        'email_sent' => $emailSent,
+        'initial_password' => $initialPassword ?: null,
+        'message' => "Brand '{$name}' created successfully." . ($emailSent ? " Login credentials emailed to {$contactEmail}." : '')
+    ], 201);
+}
+
+// PUT /api/organizations/{id} or POST /api/organizations/{id}/update (Admin edits brand details)
+if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/organizations/([^/]+)(?:/update)?$#', $path, $m)) {
+    $orgId = $m[1];
+    if ($orgId !== 'all-websites' && $orgId !== 'websites') {
+        $user = require_auth();
+        require_roles($user, ['super_admin', 'support_manager']);
+
+        $input = get_json_input();
+        $name = trim($input['name'] ?? '');
+        $contactName = trim($input['contact_name'] ?? '');
+        $contactEmail = strtolower(trim($input['contact_email'] ?? ''));
+        $websiteUrl = trim($input['website_url'] ?? '');
+        $sheetUrl = trim($input['google_sheet_url'] ?? '');
+        $status = trim($input['status'] ?? 'active');
+
+        if (empty($name)) json_error('Brand name is required', 400);
+
+        $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
+        if (!$org) json_error('Organization not found', 404);
+
+        $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+
+        db_execute(
+            'UPDATE organizations SET name = ?, slug = ?, contact_name = ?, contact_email = ?, website_url = ?, google_sheet_url = ?, status = ?, updated_at = NOW() WHERE id = ?',
+            [$name, $slug, $contactName ?: null, $contactEmail ?: null, $websiteUrl ?: null, $sheetUrl ?: null, $status, $orgId]
+        );
+
+        $updated = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
+        json_response(['success' => true, 'organization' => $updated, 'message' => 'Brand details updated successfully']);
+    }
 }
 
 // GET /api/organizations/{id}/websites

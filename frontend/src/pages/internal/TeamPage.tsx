@@ -14,6 +14,8 @@ import {
   Plus,
   Eye,
   Key,
+  Edit2,
+  Lock,
 } from 'lucide-react';
 
 interface TeamMember {
@@ -40,6 +42,19 @@ export const TeamPage: React.FC = () => {
     password: '',
     role: 'developer',
     custom_role: '',
+  });
+
+  // Edit Member Modal
+  const [showEditMemberModal, setShowEditMemberModal] = useState(false);
+  const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [editMemberForm, setEditMemberForm] = useState({
+    name: '',
+    email: '',
+    role: 'developer',
+    custom_role: '',
+    password: '',
+    must_reset_password: true,
+    send_email: false,
   });
 
   // Add Custom Role Modal
@@ -148,6 +163,58 @@ export const TeamPage: React.FC = () => {
       setError(err.message || 'Failed to delete team member');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleOpenEditMember = (member: TeamMember) => {
+    setEditingMember(member);
+    setEditMemberForm({
+      name: member.name,
+      email: member.email,
+      role: member.role,
+      custom_role: member.custom_role || '',
+      password: '',
+      must_reset_password: true,
+      send_email: false,
+    });
+    setShowEditMemberModal(true);
+  };
+
+  const handleUpdateMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMember) return;
+    setError(null);
+    setSuccess(null);
+    setSubmitting(true);
+
+    try {
+      const selectedRoleObj = roles.find((r) => r.name === editMemberForm.role);
+      const baseRole = selectedRoleObj ? selectedRoleObj.base_role : editMemberForm.role;
+      const customRoleLabel = selectedRoleObj && !selectedRoleObj.is_system ? selectedRoleObj.label : undefined;
+
+      const payload: any = {
+        name: editMemberForm.name.trim(),
+        email: editMemberForm.email.trim(),
+        role: baseRole,
+        custom_role: customRoleLabel || editMemberForm.custom_role.trim() || null,
+      };
+
+      if (editMemberForm.password.trim()) {
+        payload.password = editMemberForm.password.trim();
+        payload.must_reset_password = editMemberForm.must_reset_password ? 1 : 0;
+        payload.send_email = editMemberForm.send_email;
+      }
+
+      await api.put(`/auth/users/${editingMember.id}`, payload);
+
+      setSuccess(`Team member "${editMemberForm.name}" updated successfully!`);
+      setShowEditMemberModal(false);
+      setEditingMember(null);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update team member');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -390,19 +457,29 @@ export const TeamPage: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-4 px-6 text-right">
-                          {!isRootAdmin ? (
+                          <div className="flex items-center justify-end gap-2">
                             <button
-                              disabled={deletingId === member.id}
-                              onClick={() => handleDeleteMember(member.id, member.name)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 rounded-md transition-colors disabled:opacity-50"
-                              title="Delete Team Member"
+                              onClick={() => handleOpenEditMember(member)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-white hover:bg-slate-700 border border-slate-300 rounded-md transition-colors"
+                              title="Edit Member Details & Password"
                             >
-                              <Trash2 size={13} />
-                              <span>{deletingId === member.id ? 'Deleting...' : 'Delete'}</span>
+                              <Edit2 size={13} />
+                              <span>Edit</span>
                             </button>
-                          ) : (
-                            <span className="text-xs text-slate-400 italic">Protected</span>
-                          )}
+                            {!isRootAdmin ? (
+                              <button
+                                disabled={deletingId === member.id}
+                                onClick={() => handleDeleteMember(member.id, member.name)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 rounded-md transition-colors disabled:opacity-50"
+                                title="Delete Team Member"
+                              >
+                                <Trash2 size={13} />
+                                <span>{deletingId === member.id ? 'Deleting...' : 'Delete'}</span>
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-400 italic">Protected</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -628,6 +705,123 @@ export const TeamPage: React.FC = () => {
                   className="px-4 py-2 bg-[#0176D3] hover:bg-[#014486] text-white font-semibold rounded-lg shadow-sm disabled:opacity-50"
                 >
                   {submitting ? 'Creating...' : 'Create Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Member Modal */}
+      {showEditMemberModal && editingMember && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-xl border border-slate-200 p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Edit Team Member</h3>
+                <p className="text-xs text-slate-500">Update account details, role permissions, or reset password.</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateMember} className="space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Full Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editMemberForm.name}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, name: e.target.value })}
+                  placeholder="e.g. John Doe"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Email Address *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={editMemberForm.email}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, email: e.target.value })}
+                  placeholder="name@assurancemedia.in"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Role / Specialization *
+                </label>
+                <select
+                  value={editMemberForm.role}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, role: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                >
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.name}>
+                      {r.label} ({r.is_system ? 'System' : 'Custom'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Reset Password <span className="font-normal text-slate-400 lowercase">(leave blank to keep current)</span>
+                </label>
+                <input
+                  type="text"
+                  value={editMemberForm.password}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, password: e.target.value })}
+                  placeholder="New temporary or permanent password"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                />
+              </div>
+
+              {editMemberForm.password.trim() && (
+                <div className="space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editMemberForm.must_reset_password}
+                      onChange={(e) => setEditMemberForm({ ...editMemberForm, must_reset_password: e.target.checked })}
+                      className="rounded text-[#0176D3] focus:ring-[#0176D3]"
+                    />
+                    <span>Force user to change password on next login</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editMemberForm.send_email}
+                      onChange={(e) => setEditMemberForm({ ...editMemberForm, send_email: e.target.checked })}
+                      className="rounded text-[#0176D3] focus:ring-[#0176D3]"
+                    />
+                    <span>Send email notification with new login credentials</span>
+                  </label>
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditMemberModal(false);
+                    setEditingMember(null);
+                  }}
+                  className="px-4 py-2 border rounded-lg text-slate-700 font-medium hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-4 py-2 bg-[#0176D3] hover:bg-[#014486] text-white font-semibold rounded-lg shadow-sm disabled:opacity-50"
+                >
+                  {submitting ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>

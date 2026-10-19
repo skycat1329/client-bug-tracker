@@ -110,8 +110,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
       </nav>
 
       {/* Footer Info */}
-      <div className="pt-4 border-t border-slate-200 text-[11px] text-slate-400 px-3">
-        Multi-Brand Bug Tracker v1.0
+      <div className="pt-4 border-t border-slate-200 text-[11px] text-slate-400 px-3 flex items-center justify-between">
+        <span>Assurance Media</span>
+        <span className="text-slate-500 font-medium">Akash ❤️</span>
       </div>
     </aside>
   );
