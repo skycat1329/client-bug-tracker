@@ -358,7 +358,7 @@ try {
 
 function sync_to_google_sheet(string $brandId, string $event, array $ticket, string $details = '', string $actorName = 'System'): bool {
     // 1. Fetch integration config
-    $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['google_sheets_config']);
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
     $config = $setting ? json_decode($setting['value'], true) : [];
 
     $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
@@ -846,7 +846,7 @@ if ($method === 'DELETE' && preg_match('#^/api/auth/roles/([^/]+)$#', $path, $m)
 // GET /api/auth/settings/visibility
 if ($method === 'GET' && $path === '/api/auth/settings/visibility') {
     require_auth();
-    $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['triage_visibility_policy']);
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['triage_visibility_policy']);
     $policy = $setting ? json_decode($setting['value'], true) : ['triage_required_for_team' => true, 'allowed_roles' => ['super_admin', 'support_manager']];
     json_response(['success' => true, 'policy' => $policy]);
 }
@@ -1435,7 +1435,7 @@ if ($method === 'GET' && $path === '/api/tickets') {
 
     // Triage Visibility Gate for regular team members
     if ($user['role'] !== 'client') {
-        $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['triage_visibility_policy']);
+        $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['triage_visibility_policy']);
         $policy = $setting ? json_decode($setting['value'], true) : ['triage_required_for_team' => true, 'allowed_roles' => ['super_admin', 'support_manager']];
         $isExempt = in_array($user['role'], $policy['allowed_roles'] ?? ['super_admin', 'support_manager']);
         if (!empty($policy['triage_required_for_team']) && !$isExempt) {
@@ -2068,7 +2068,7 @@ if ($method === 'GET' && $path === '/api/integrations/sheets/config') {
     $user = require_auth();
     require_roles($user, ['super_admin', 'support_manager']);
 
-    $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['google_sheets_config']);
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
     $config = $setting ? json_decode($setting['value'], true) : [
         'enabled' => false,
         'global_webhook_url' => '',
@@ -2143,7 +2143,7 @@ if ($method === 'POST' && $path === '/api/integrations/sheets/test') {
     }
 
     if (empty($targetUrl)) {
-        $setting = db_query_one('SELECT value FROM integration_settings WHERE key = ?', ['google_sheets_config']);
+        $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
         $config = $setting ? json_decode($setting['value'], true) : [];
         $targetUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
     }
