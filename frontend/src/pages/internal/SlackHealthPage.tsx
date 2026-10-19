@@ -17,7 +17,7 @@ export const SlackHealthPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
-  const [targetEmail, setTargetEmail] = useState('irfan@assurancemedia.in');
+  const [targetEmail, setTargetEmail] = useState('tools.assurance@gmail.com');
   const [testingEmail, setTestingEmail] = useState(false);
   const [testEmailResult, setTestEmailResult] = useState<any>(null);
 
@@ -218,7 +218,7 @@ export const SlackHealthPage: React.FC = () => {
               </h2>
               <p className="text-xs text-slate-500">
                 Sends credentials to newly created team members and client bug updates directly via{' '}
-                <strong className="text-slate-800">irfan@assurancemedia.in</strong>.
+                <strong className="text-slate-800">tools.assurance@gmail.com</strong>.
               </p>
             </div>
           </div>
@@ -272,7 +272,7 @@ export const SlackHealthPage: React.FC = () => {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
           <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
             <span className="text-slate-400 font-bold block text-[10px] uppercase">Sender Account</span>
-            <span className="font-mono text-slate-800 font-semibold">irfan@assurancemedia.in</span>
+            <span className="font-mono text-slate-800 font-semibold">tools.assurance@gmail.com</span>
           </div>
           <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
             <span className="text-slate-400 font-bold block text-[10px] uppercase">SMTP Relay</span>

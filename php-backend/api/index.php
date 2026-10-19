@@ -933,7 +933,7 @@ if ($method === 'POST' && $path === '/api/organizations') {
                 ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgId, $clientId, 'owner']
             );
             $clientCreated = true;
-            // Send initial credentials email directly from irfan@assurancemedia.in
+            // Send initial credentials email directly from tools.assurance@gmail.com
             $emailSent = send_credentials_email($contactEmail, $contactName ?: $name, $initialPassword, 'Brand Client Account', $name, true);
         }
     }

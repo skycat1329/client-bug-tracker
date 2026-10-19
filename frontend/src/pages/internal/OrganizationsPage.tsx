@@ -642,7 +642,7 @@ export const OrganizationsPage: React.FC = () => {
               </div>
 
               <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-900 text-[11.5px] leading-relaxed">
-                <strong>🔒 Automated Client Setup:</strong> When you provide an email and initial password, Assurance Media will automatically provision the brand account, set a mandatory first-login password reset, and email credentials directly from <code>irfan@assurancemedia.in</code>.
+                <strong>🔒 Automated Client Setup:</strong> When you provide an email and initial password, Assurance Media will automatically provision the brand account, set a mandatory first-login password reset, and email credentials directly from <code>tools.assurance@gmail.com</code>.
               </div>
 
               <div className="pt-3 flex justify-end gap-2.5">
