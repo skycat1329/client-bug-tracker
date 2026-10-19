@@ -12,9 +12,9 @@ function send_smtp_email(string $to, string $subject, string $htmlBody, string $
     $host = SMTP_HOST;
     $port = (int)(defined('SMTP_PORT') ? SMTP_PORT : 465);
     $user = SMTP_USER;
-    $pass = SMTP_PASS;
+    $pass = str_replace(' ', '', SMTP_PASS);
     $from = defined('EMAIL_FROM') && !empty(EMAIL_FROM) ? EMAIL_FROM : $user;
-    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Client Bug Tracker';
+    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Assurance Media';
 
     $socketHost = ($port === 465) ? 'ssl://' . $host : $host;
     $timeout = 15;

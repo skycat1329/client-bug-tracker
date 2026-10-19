@@ -17,16 +17,16 @@ define('JWT_SECRET', 'hostinger_production_secret_key_antigravity_998877');
 // Email / SMTP Sender Configuration
 // ==============================================================================
 // The sender email address shown to recipients
-define('EMAIL_FROM', 'irfan@assurancemedia.in');
+define('EMAIL_FROM', 'tools.assurance@gmail.com');
 define('EMAIL_FROM_NAME', 'Assurance Media');
 
-// SMTP Settings (Google Workspace / Gmail for assurancemedia.in)
-// Set to true to deliver authenticated emails directly via Google's SMTP servers
+// SMTP Settings (Gmail for tools.assurance@gmail.com)
+// Authenticated emails delivered directly via Google's SSL SMTP server (port 465)
 define('SMTP_ENABLED', true);
-define('SMTP_HOST', 'smtp.gmail.com');          // assurancemedia.in is hosted on Google Workspace
-define('SMTP_PORT', 465);                       // 465 (SSL) or 587 (TLS)
-define('SMTP_USER', 'irfan@assurancemedia.in'); // Google Workspace Email
-define('SMTP_PASS', 'YOUR_GOOGLE_APP_PASSWORD'); // 16-character Google App Password (e.g. abcd efgh ijkl mnop)
+define('SMTP_HOST', 'smtp.gmail.com');
+define('SMTP_PORT', 465);
+define('SMTP_USER', 'tools.assurance@gmail.com');
+define('SMTP_PASS', 'qboa iaut xkct nwuj');
 
 // Slack Incoming Webhook (Optional, leave empty if not yet configured)
 define('SLACK_WEBHOOK_URL', '');

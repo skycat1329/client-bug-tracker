@@ -2,6 +2,7 @@
   "name": "client-bug-tracker-root",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Client Bug Tracker — Customer Portal + Developer Dashboard + Slack Integration",
   "scripts": {
     "dev:backend": "npm --prefix backend run dev",

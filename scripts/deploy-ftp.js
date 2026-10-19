@@ -53,38 +53,54 @@ async function deploy() {
   console.log('\n2️⃣ Packaging files into hostinger-public_html...');
   execSync('node scripts/package-hostinger.js', { stdio: 'inherit', cwd: rootDir });
 
-  // 3. Connect via FTP and Upload
+  // 3. Connect via FTP and Upload with retry
   console.log('\n3️⃣ Connecting to Hostinger FTP server (' + FTP_HOST + ')...');
-  const client = new ftp.Client();
-  client.ftp.verbose = false;
 
-  client.trackProgress((info) => {
-    console.log(`   ⬆️ Uploading: ${info.name} (${Math.round(info.bytesOverall / 1024)} KB)`);
-  });
+  let success = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const client = new ftp.Client();
+    client.ftp.verbose = false;
+    client.ftp.timeout = 30000;
 
-  try {
-    await client.access({
-      host: FTP_HOST,
-      user: FTP_USER,
-      password: FTP_PASS,
-      port: FTP_PORT,
-      secure: false,
+    client.trackProgress((info) => {
+      console.log(`   ⬆️ Uploading: ${info.name} (${Math.round(info.bytesOverall / 1024)} KB)`);
     });
 
-    console.log('   ✅ Connected! Current directory: ' + (await client.pwd()));
-    console.log('4️⃣ Uploading updated files to Hostinger...');
+    try {
+      if (attempt > 1) {
+        console.log(`\n🔄 Retrying upload (attempt ${attempt}/3)...`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
 
-    // Upload files from hostinger-public_html to current root directory
-    await client.uploadFromDir(targetDir);
+      await client.access({
+        host: FTP_HOST,
+        user: FTP_USER,
+        password: FTP_PASS,
+        port: FTP_PORT,
+        secure: false,
+      });
 
+      console.log('   ✅ Connected! Current directory: ' + (await client.pwd()));
+      console.log('4️⃣ Uploading updated files to Hostinger...');
+
+      await client.uploadFromDir(targetDir);
+      success = true;
+      client.close();
+      break;
+    } catch (err) {
+      console.warn(`   ⚠️ Attempt ${attempt} failed: ${err.message}`);
+      client.close();
+      if (attempt === 3) {
+        console.error('\n❌ Deployment failed after 3 attempts.');
+        process.exit(1);
+      }
+    }
+  }
+
+  if (success) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n🎉 DEPLOYMENT COMPLETE in ${elapsed}s!`);
     console.log('🌐 Live Website: https://lightsteelblue-barracuda-559543.hostingersite.com\n');
-  } catch (err) {
-    console.error('\n❌ Deployment failed:', err.message);
-    process.exit(1);
-  } finally {
-    client.close();
   }
 }
 
