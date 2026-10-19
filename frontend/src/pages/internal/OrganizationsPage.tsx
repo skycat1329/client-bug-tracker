@@ -63,6 +63,13 @@ export const OrganizationsPage: React.FC = () => {
   const [clientPassword, setClientPassword] = useState('');
   const [generatedCreds, setGeneratedCreds] = useState<{ email: string; password: string; brand: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  // Send Official Brand Credentials modal/form
+  const [showSendCredsModal, setShowSendCredsModal] = useState(false);
+  const [selectedCredsOrg, setSelectedCredsOrg] = useState<Organization | null>(null);
+  const [credsEmail, setCredsEmail] = useState('');
+  const [credsName, setCredsName] = useState('');
+  const [credsPassword, setCredsPassword] = useState('');
+  const [sendingCreds, setSendingCreds] = useState(false);
 
   // Brand Google Sheet modal
   const [showSheetModal, setShowSheetModal] = useState(false);
@@ -189,6 +196,48 @@ export const OrganizationsPage: React.FC = () => {
       setError(err.message || 'Failed to update brand details');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleOpenSendCredentials = (org: Organization) => {
+    setSelectedCredsOrg(org);
+    setCredsEmail(org.contact_email || '');
+    setCredsName(org.contact_name || org.name);
+    setCredsPassword(generateTempPassword());
+    setShowSendCredsModal(true);
+  };
+
+  const handleSendCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCredsOrg) return;
+    setError(null);
+    setSuccess(null);
+    setSendingCreds(true);
+    try {
+      const res = await api.post<{
+        success: boolean;
+        message: string;
+        email: string;
+        temporary_password: string;
+      }>(`/organizations/${selectedCredsOrg.id}/send-credentials`, {
+        email: credsEmail.trim(),
+        name: credsName.trim(),
+        password: credsPassword.trim(),
+      });
+
+      setGeneratedCreds({
+        brand: selectedCredsOrg.name,
+        email: res.email,
+        password: res.temporary_password,
+      });
+
+      setShowSendCredsModal(false);
+      setSuccess(`Official credentials dispatched to ${res.email}! Login URL: ${window.location.origin}/brand/login, Temporary Password: ${res.temporary_password}`);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to dispatch credentials to official brand email');
+    } finally {
+      setSendingCreds(false);
     }
   };
 
@@ -427,6 +476,16 @@ export const OrganizationsPage: React.FC = () => {
                     >
                       <Download size={14} className="text-slate-500" />
                       <span>Download CSV</span>
+                    </button>
+
+                    {/* Send Credentials via Email */}
+                    <button
+                      onClick={() => handleOpenSendCredentials(org)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm cursor-pointer"
+                      title="Send or resend brand portal credentials directly to official brand email"
+                    >
+                      <Send size={13} />
+                      <span>Send Credentials via Email</span>
                     </button>
 
                     {/* Add Client Credentials */}
@@ -874,7 +933,7 @@ export const OrganizationsPage: React.FC = () => {
                   </p>
 
                   <div className="p-3 bg-white rounded-lg border border-emerald-200 font-mono text-xs space-y-1 text-slate-800">
-                    <div><strong>Portal URL:</strong> http://localhost:5173</div>
+                    <div><strong>Brand Login URL:</strong> {typeof window !== 'undefined' ? `${window.location.origin}/brand/login` : '/brand/login'}</div>
                     <div><strong>Brand:</strong> {generatedCreds.brand}</div>
                     <div><strong>Email:</strong> {generatedCreds.email}</div>
                     <div><strong>Password:</strong> {generatedCreds.password}</div>
@@ -964,6 +1023,110 @@ export const OrganizationsPage: React.FC = () => {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Send Official Brand Credentials via Email */}
+      {showSendCredsModal && selectedCredsOrg && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-xl border border-slate-200 p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
+                  <Send size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Send Brand Portal Credentials</h3>
+                  <p className="text-xs text-slate-500">Brand: <strong>{selectedCredsOrg.name}</strong></p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSendCredsModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-blue-900 text-xs mb-4 leading-relaxed">
+              <strong>🔒 Official Dispatch:</strong> Credentials will be emailed directly to the official brand email address from <code>tools.assurance@gmail.com</code>. The brand user will be forced to set their permanent password upon logging in.
+            </div>
+
+            <form onSubmit={handleSendCredentials} className="space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Official Brand Contact Email *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={credsEmail}
+                  onChange={(e) => setCredsEmail(e.target.value)}
+                  placeholder="contact@brand.com"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0066CC]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Contact Person Name
+                </label>
+                <input
+                  type="text"
+                  value={credsName}
+                  onChange={(e) => setCredsName(e.target.value)}
+                  placeholder="e.g. John Doe"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0066CC]"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase">
+                    Temporary Initial Password *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setCredsPassword(generateTempPassword())}
+                    className="text-[11px] text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Sparkles size={12} />
+                    <span>Regenerate</span>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={credsPassword}
+                  onChange={(e) => setCredsPassword(e.target.value)}
+                  placeholder="e.g. AM-X7k9#p2"
+                  className="w-full px-3 py-2 border rounded-lg font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0066CC]"
+                />
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Dedicated Brand Login: <strong className="text-slate-600">{typeof window !== 'undefined' ? `${window.location.origin}/brand/login` : '/brand/login'}</strong>
+                </span>
+              </div>
+
+              <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowSendCredsModal(false)}
+                  className="px-4 py-2 border rounded-lg text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={sendingCreds || !credsEmail.trim()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-sm disabled:opacity-50 cursor-pointer"
+                >
+                  <Send size={13} />
+                  <span>{sendingCreds ? 'Sending Email...' : 'Send Credentials to Brand'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

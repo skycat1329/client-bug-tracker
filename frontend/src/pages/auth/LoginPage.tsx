@@ -34,7 +34,7 @@ export const LoginPage: React.FC = () => {
   }, []);
 
   if (portalMode === 'brand') {
-    return <BrandLoginPage onSwitchToStaff={() => setPortalMode('staff')} />;
+    return <BrandLoginPage />;
   }
 
   const handleSubmit = async (e: React.FormEvent) => {

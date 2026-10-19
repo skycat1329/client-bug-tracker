@@ -1,12 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
-import { Building2, Lock, Mail, AlertCircle, ArrowRight, Shield, CheckCircle } from 'lucide-react';
+import { Building2, Lock, Mail, AlertCircle, ArrowRight, ShieldCheck } from 'lucide-react';
 
-interface BrandLoginPageProps {
-  onSwitchToStaff?: () => void;
-}
-
-export const BrandLoginPage: React.FC<BrandLoginPageProps> = ({ onSwitchToStaff }) => {
+export const BrandLoginPage: React.FC = () => {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -64,7 +60,7 @@ export const BrandLoginPage: React.FC<BrandLoginPageProps> = ({ onSwitchToStaff 
           <div className="bg-white py-8 px-6 sm:px-10 rounded-2xl shadow-md border border-slate-200 space-y-6">
             {/* First-time help banner */}
             <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-blue-900 text-xs flex items-start gap-2.5">
-              <Shield size={16} className="flex-shrink-0 mt-0.5 text-blue-600" />
+              <ShieldCheck size={16} className="flex-shrink-0 mt-0.5 text-blue-600" />
               <div className="leading-relaxed">
                 <strong>First-time sign in?</strong> Use the initial temporary password sent to your email by Assurance Media. You will be prompted to set your permanent password immediately.
               </div>
@@ -125,15 +121,10 @@ export const BrandLoginPage: React.FC<BrandLoginPageProps> = ({ onSwitchToStaff 
               </button>
             </form>
 
-            <div className="pt-4 border-t border-slate-100 flex flex-col items-center gap-2 text-center">
-              <span className="text-xs text-slate-500">Are you an internal team member?</span>
-              <button
-                type="button"
-                onClick={onSwitchToStaff}
-                className="text-xs text-[#0066CC] hover:text-[#004d99] font-bold inline-flex items-center gap-1 hover:underline cursor-pointer"
-              >
-                <span>Switch to Agency & Developer Login &rarr;</span>
-              </button>
+            <div className="pt-3 border-t border-slate-100 text-center">
+              <span className="text-[11px] text-slate-400">
+                Assurance Media Client Services &bull; Support: tools.assurance@gmail.com
+              </span>
             </div>
           </div>
         </div>

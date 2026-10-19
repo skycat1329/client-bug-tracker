@@ -97,6 +97,17 @@ function get_auth_user(): ?array {
     }
 
     $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [$decoded['userId']]);
+    if ($user && empty($user['organization_id'])) {
+        $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
+        if ($mem && !empty($mem['organization_id'])) {
+            $user['organization_id'] = $mem['organization_id'];
+        } elseif ($user['role'] === 'client') {
+            $orgByContact = db_query_one('SELECT id FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
+            if ($orgByContact) {
+                $user['organization_id'] = $orgByContact['id'];
+            }
+        }
+    }
     return $user ?: null;
 }
 
@@ -317,6 +328,25 @@ try {
         }
 
         db_execute("ALTER TABLE notification_deliveries MODIFY COLUMN channel VARCHAR(50) NOT NULL");
+
+        // Auto-link any client users without an organization_id to their matching brand
+        try {
+            $unlinkedClients = db_query("SELECT id, email, name FROM users WHERE role = 'client' AND (organization_id IS NULL OR organization_id = '')");
+            foreach ($unlinkedClients as $uc) {
+                $org = db_query_one("SELECT id FROM organizations WHERE contact_email = ? LIMIT 1", [$uc['email']]);
+                if (!$org) {
+                    $prefix = explode('@', $uc['email'])[0];
+                    $org = db_query_one("SELECT id FROM organizations WHERE LOWER(name) = ? OR LOWER(slug) = ? LIMIT 1", [strtolower($prefix), strtolower($prefix)]);
+                }
+                if ($org) {
+                    db_execute("UPDATE users SET organization_id = ? WHERE id = ?", [$org['id'], $uc['id']]);
+                    db_execute(
+                        "INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE organization_id = VALUES(organization_id)",
+                        ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $org['id'], $uc['id'], 'owner']
+                    );
+                }
+            }
+        } catch (Exception $e) {}
     }
 } catch (Exception $e) {
     // Non-blocking auto migration
@@ -474,6 +504,30 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         json_error('Invalid email or password', 401);
     }
 
+    // Auto-resolve organization_id if missing for client users
+    if (empty($user['organization_id'])) {
+        $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
+        if ($mem && !empty($mem['organization_id'])) {
+            $user['organization_id'] = $mem['organization_id'];
+            db_execute('UPDATE users SET organization_id = ? WHERE id = ?', [$mem['organization_id'], $user['id']]);
+        } elseif ($user['role'] === 'client') {
+            $orgByContact = db_query_one('SELECT id, name FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
+            if (!$orgByContact) {
+                $prefix = explode('@', $user['email'])[0];
+                $orgByContact = db_query_one('SELECT id, name FROM organizations WHERE LOWER(name) = ? OR LOWER(slug) = ? LIMIT 1', [strtolower($prefix), strtolower($prefix)]);
+            }
+            if ($orgByContact) {
+                $user['organization_id'] = $orgByContact['id'];
+                $user['organization_name'] = $orgByContact['name'];
+                db_execute('UPDATE users SET organization_id = ? WHERE id = ?', [$orgByContact['id'], $user['id']]);
+                db_execute(
+                    'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE organization_id = VALUES(organization_id)',
+                    ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgByContact['id'], $user['id'], 'owner']
+                );
+            }
+        }
+    }
+
     $token = jwt_encode([
         'userId' => $user['id'],
         'email' => $user['email'],
@@ -483,7 +537,7 @@ if ($method === 'POST' && $path === '/api/auth/login') {
     ], JWT_SECRET);
 
     // If organization_id is set, fetch organization name
-    if (!empty($user['organization_id'])) {
+    if (!empty($user['organization_id']) && empty($user['organization_name'])) {
         $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
         $user['organization_name'] = $org ? $org['name'] : null;
     }
@@ -891,7 +945,7 @@ if ($method === 'POST' && $path === '/api/organizations') {
     $name = trim($input['name'] ?? '');
     $contactName = trim($input['contact_name'] ?? '');
     $contactEmail = strtolower(trim($input['contact_email'] ?? ''));
-    $initialPassword = $input['initial_password'] ?? '';
+    $initialPassword = trim($input['initial_password'] ?? '');
     $websiteUrl = trim($input['website_url'] ?? '');
     $sheetUrl = trim($input['google_sheet_url'] ?? '');
     $status = trim($input['status'] ?? 'active');
@@ -906,36 +960,44 @@ if ($method === 'POST' && $path === '/api/organizations') {
         [$orgId, $name, $slug, $contactName ?: null, $contactEmail ?: null, $websiteUrl ?: null, $sheetUrl ?: null, $status]
     );
 
-    // If website URL provided, automatically create primary website
-    if (!empty($websiteUrl)) {
-        $webId = 'web-' . time() . '-' . bin2hex(random_bytes(4));
-        db_execute(
-            'INSERT INTO websites (id, organization_id, name, url, environment) VALUES (?, ?, ?, ?, ?)',
-            [$webId, $orgId, $name . ' Website', $websiteUrl, 'production']
-        );
-    }
+    // Primary website: URL provided or auto-generated default
+    $webId = 'web-' . time() . '-' . bin2hex(random_bytes(4));
+    $siteName = $name . ' Website';
+    $siteUrl = !empty($websiteUrl) ? $websiteUrl : ('https://' . strtolower(preg_replace('/[^a-zA-Z0-9]+/', '', $name)) . '.com');
+    db_execute(
+        'INSERT INTO websites (id, organization_id, name, url, environment) VALUES (?, ?, ?, ?, ?)',
+        [$webId, $orgId, $siteName, $siteUrl, 'production']
+    );
 
     $clientCreated = false;
     $emailSent = false;
+    $finalPassword = $initialPassword ?: ('AM-' . strtoupper(bin2hex(random_bytes(3))) . '#' . rand(10, 99));
 
-    // If contact email and initial password provided, automatically provision Brand Client user
-    if (!empty($contactEmail) && !empty($initialPassword)) {
+    // Automatically provision or update Brand Client user if contact email is provided
+    if (!empty($contactEmail)) {
         $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$contactEmail]);
-        if (!$existing) {
+        $hash = password_hash($finalPassword, PASSWORD_BCRYPT);
+        if ($existing) {
+            $clientId = $existing['id'];
+            db_execute(
+                'UPDATE users SET password_hash = ?, name = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?',
+                [$hash, $contactName ?: $name, $orgId, $clientId]
+            );
+        } else {
             $clientId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
-            $hash = password_hash($initialPassword, PASSWORD_BCRYPT);
             db_execute(
                 'INSERT INTO users (id, email, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 [$clientId, $contactEmail, $hash, $contactName ?: $name, 'client', $orgId, 1]
             );
-            db_execute(
-                'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?)',
-                ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgId, $clientId, 'owner']
-            );
-            $clientCreated = true;
-            // Send initial credentials email directly from tools.assurance@gmail.com
-            $emailSent = send_credentials_email($contactEmail, $contactName ?: $name, $initialPassword, 'Brand Client Account', $name, true);
         }
+
+        db_execute(
+            'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE organization_id = VALUES(organization_id)',
+            ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgId, $clientId, 'owner']
+        );
+        $clientCreated = true;
+        // Dispatch credentials directly from tools.assurance@gmail.com
+        $emailSent = send_credentials_email($contactEmail, $contactName ?: $name, $finalPassword, 'Brand Client Account', $name, true);
     }
 
     $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
@@ -944,9 +1006,78 @@ if ($method === 'POST' && $path === '/api/organizations') {
         'organization' => $org,
         'client_created' => $clientCreated,
         'email_sent' => $emailSent,
-        'initial_password' => $initialPassword ?: null,
+        'initial_password' => $finalPassword,
         'message' => "Brand '{$name}' created successfully." . ($emailSent ? " Login credentials emailed to {$contactEmail}." : '')
     ], 201);
+}
+
+// POST /api/organizations/{id}/send-credentials (Send or resend brand portal credentials)
+if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/send-credentials$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $orgId = $m[1];
+
+    $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
+    if (!$org) json_error('Brand organization not found', 404);
+
+    $input = get_json_input();
+    $targetEmail = strtolower(trim($input['email'] ?? ($org['contact_email'] ?? '')));
+    $contactName = trim($input['name'] ?? ($org['contact_name'] ?? $org['name']));
+    $customPassword = trim($input['password'] ?? '');
+
+    if (empty($targetEmail)) {
+        json_error('Official brand contact email is required to send credentials. Please enter a valid email address.', 400);
+    }
+
+    // Update organization contact details if changed
+    if ($targetEmail !== $org['contact_email'] || (!empty($contactName) && $contactName !== $org['contact_name'])) {
+        db_execute('UPDATE organizations SET contact_email = ?, contact_name = ?, updated_at = NOW() WHERE id = ?', [$targetEmail, $contactName, $orgId]);
+    }
+
+    $tempPassword = !empty($customPassword) ? $customPassword : ('AM-' . strtoupper(bin2hex(random_bytes(3))) . '#' . rand(10, 99));
+    $hash = password_hash($tempPassword, PASSWORD_BCRYPT);
+
+    $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$targetEmail]);
+    if ($existing) {
+        $clientId = $existing['id'];
+        db_execute(
+            'UPDATE users SET password_hash = ?, name = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?',
+            [$hash, $contactName ?: $org['name'], $orgId, $clientId]
+        );
+    } else {
+        $clientId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
+        db_execute(
+            'INSERT INTO users (id, email, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [$clientId, $targetEmail, $hash, $contactName ?: $org['name'], 'client', $orgId, 1]
+        );
+    }
+
+    db_execute(
+        'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE organization_id = VALUES(organization_id)',
+        ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgId, $clientId, 'owner']
+    );
+
+    // Ensure brand has at least 1 website
+    $hasSite = db_query_one('SELECT id FROM websites WHERE organization_id = ? LIMIT 1', [$orgId]);
+    if (!$hasSite) {
+        $webId = 'web-' . time() . '-' . bin2hex(random_bytes(4));
+        $siteName = $org['name'] . ' Main Website';
+        $siteUrl = !empty($org['website_url']) ? $org['website_url'] : ('https://' . strtolower(preg_replace('/[^a-zA-Z0-9]+/', '', $org['name'])) . '.com');
+        db_execute(
+            'INSERT INTO websites (id, organization_id, name, url, environment) VALUES (?, ?, ?, ?, ?)',
+            [$webId, $orgId, $siteName, $siteUrl, 'production']
+        );
+    }
+
+    $emailSent = send_credentials_email($targetEmail, $contactName ?: $org['name'], $tempPassword, 'Brand Client Account', $org['name'], true);
+
+    json_response([
+        'success' => true,
+        'email_sent' => $emailSent,
+        'email' => $targetEmail,
+        'temporary_password' => $tempPassword,
+        'message' => "Credentials dispatched to {$targetEmail} successfully!" . ($emailSent ? " Email delivered." : " (Email logged to database)")
+    ]);
 }
 
 // PUT /api/organizations/{id} or POST /api/organizations/{id}/update (Admin edits brand details)

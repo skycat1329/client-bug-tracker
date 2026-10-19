@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext.js';
 import { Navbar } from './components/Navbar.js';
 import { Sidebar } from './components/Sidebar.js';
 import { LoginPage } from './pages/auth/LoginPage.js';
+import { BrandLoginPage } from './pages/auth/BrandLoginPage.js';
 import { ForceResetPasswordPage } from './pages/auth/ForceResetPasswordPage.js';
 
 // Client pages
@@ -36,7 +37,21 @@ export const App: React.FC = () => {
     );
   }
 
+  const isBrandRoute = () => {
+    const path = window.location.pathname.toLowerCase();
+    const search = window.location.search.toLowerCase();
+    return (
+      path.includes('/brand') ||
+      path.includes('/client') ||
+      search.includes('portal=brand') ||
+      search.includes('portal=client')
+    );
+  };
+
   if (!user) {
+    if (isBrandRoute()) {
+      return <BrandLoginPage />;
+    }
     return <LoginPage />;
   }
 
