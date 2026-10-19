@@ -57,10 +57,10 @@ async function deploy() {
   console.log('\n3️⃣ Connecting to Hostinger FTP server (' + FTP_HOST + ')...');
 
   let success = false;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     const client = new ftp.Client();
     client.ftp.verbose = false;
-    client.ftp.timeout = 30000;
+    client.ftp.timeout = 60000;
 
     client.trackProgress((info) => {
       console.log(`   ⬆️ Uploading: ${info.name} (${Math.round(info.bytesOverall / 1024)} KB)`);
@@ -68,8 +68,9 @@ async function deploy() {
 
     try {
       if (attempt > 1) {
-        console.log(`\n🔄 Retrying upload (attempt ${attempt}/3)...`);
-        await new Promise((r) => setTimeout(r, 2000));
+        const delay = attempt * 4000;
+        console.log(`\n🔄 Retrying upload in ${delay / 1000}s (attempt ${attempt}/5)...`);
+        await new Promise((r) => setTimeout(r, delay));
       }
 
       await client.access({
@@ -89,9 +90,9 @@ async function deploy() {
       break;
     } catch (err) {
       console.warn(`   ⚠️ Attempt ${attempt} failed: ${err.message}`);
-      client.close();
-      if (attempt === 3) {
-        console.error('\n❌ Deployment failed after 3 attempts.');
+      try { client.close(); } catch (_) {}
+      if (attempt === 5) {
+        console.error('\n❌ Deployment failed after 5 attempts.');
         process.exit(1);
       }
     }

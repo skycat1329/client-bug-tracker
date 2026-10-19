@@ -80,6 +80,9 @@ export interface Ticket {
   assignee_id: string | null;
   assignee_name?: string | null;
   assignee_email?: string | null;
+  queue_id?: string | null;
+  queue_name?: string | null;
+  queue_color?: string | null;
   source: string;
   root_cause?: string | null;
   fix_details?: string | null;
@@ -143,4 +146,25 @@ export interface RoutingRule {
   default_assignee_name?: string;
   is_active: number | boolean;
   created_at: string;
+}
+
+export interface QueueMember {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  custom_role?: string | null;
+}
+
+export interface Queue {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  color: string;
+  is_active: number | boolean;
+  created_at: string;
+  open_tickets_count?: number;
+  members_count?: number;
+  members?: QueueMember[];
 }

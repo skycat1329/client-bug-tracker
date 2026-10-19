@@ -12,6 +12,7 @@ import {
   UserCheck,
   Hash,
   FileSpreadsheet,
+  Layers,
 } from 'lucide-react';
 
 interface NavItem {
@@ -45,6 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
     ...(isDev || isManagerOrAdmin ? [{ id: 'my-tickets', label: 'My Assigned Tickets', icon: UserCheck }] : []),
     ...(isManagerOrAdmin
       ? [
+          { id: 'queues', label: 'Ticket Queues', icon: Layers },
           { id: 'organizations', label: 'Brands & Websites', icon: Building2 },
           { id: 'team', label: 'Team & Developers', icon: Users },
           { id: 'routing', label: 'Routing Rules', icon: GitBranch },

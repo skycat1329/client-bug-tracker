@@ -333,6 +333,54 @@ try {
 
         db_execute("ALTER TABLE notification_deliveries MODIFY COLUMN channel VARCHAR(50) NOT NULL");
 
+        // Queues Table
+        db_execute("CREATE TABLE IF NOT EXISTS `queues` (
+            `id` VARCHAR(64) PRIMARY KEY,
+            `name` VARCHAR(150) NOT NULL,
+            `slug` VARCHAR(150) NOT NULL,
+            `description` TEXT NULL,
+            `color` VARCHAR(50) DEFAULT 'blue',
+            `is_active` TINYINT(1) DEFAULT 1,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Queue Members Table
+        db_execute("CREATE TABLE IF NOT EXISTS `queue_members` (
+            `id` VARCHAR(64) PRIMARY KEY,
+            `queue_id` VARCHAR(64) NOT NULL,
+            `user_id` VARCHAR(64) NOT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY `uk_queue_user` (`queue_id`, `user_id`),
+            INDEX `idx_qm_queue` (`queue_id`),
+            INDEX `idx_qm_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Add queue_id column to tickets
+        $ticketCols = db_query("SHOW COLUMNS FROM tickets LIKE 'queue_id'");
+        if (empty($ticketCols)) {
+            db_execute("ALTER TABLE tickets ADD COLUMN `queue_id` VARCHAR(64) NULL AFTER `assignee_id`");
+            try {
+                db_execute("ALTER TABLE tickets ADD INDEX `idx_ticket_queue` (`queue_id`)");
+            } catch (Exception $e) {}
+        }
+
+        // Seed default queues if table is empty
+        $existingQueues = db_query("SELECT COUNT(*) AS c FROM queues");
+        if (empty($existingQueues[0]['c'])) {
+            $defaultQueues = [
+                ['q-frontend', 'Frontend & UI Bugs', 'frontend-ui', 'CSS, responsive display, layout issues, and React client bugs', 'blue'],
+                ['q-backend', 'Backend & API', 'backend-api', 'PHP server logic, database records, and API endpoints', 'emerald'],
+                ['q-urgent', 'Critical Escalations', 'critical-escalations', 'High priority blockers, checkout errors, server timeouts', 'rose'],
+                ['q-general', 'General QA & Triage', 'general-qa', 'Initial bug reviews, reproduction tests, and customer QA', 'purple']
+            ];
+            foreach ($defaultQueues as $dq) {
+                db_execute(
+                    "INSERT INTO queues (id, name, slug, description, color, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+                    $dq
+                );
+            }
+        }
+
         // Auto-link any client users without an organization_id to their matching brand
         try {
             $unlinkedClients = db_query("SELECT id, email, name FROM users WHERE role = 'client' AND (organization_id IS NULL OR organization_id = '')");
@@ -1415,12 +1463,14 @@ if ($method === 'GET' && $path === '/api/tickets') {
     $user = require_auth();
     $sql = "SELECT t.*, o.name as organization_name, w.name as website_name, w.url as website_url,
                    req.name as requester_name, req.email as requester_email,
-                   dev.name as assignee_name, dev.email as assignee_email
+                   dev.name as assignee_name, dev.email as assignee_email,
+                   q.name as queue_name, q.color as queue_color
             FROM tickets t
             JOIN organizations o ON t.organization_id = o.id
             JOIN websites w ON t.website_id = w.id
             JOIN users req ON t.requester_id = req.id
             LEFT JOIN users dev ON t.assignee_id = dev.id
+            LEFT JOIN queues q ON t.queue_id = q.id
             WHERE 1=1";
     $params = [];
 
@@ -1433,8 +1483,26 @@ if ($method === 'GET' && $path === '/api/tickets') {
         $params[] = $_GET['organization_id'];
     }
 
-    // Triage Visibility Gate for regular team members
-    if ($user['role'] !== 'client') {
+    // Developer queue membership gate: only see tickets in queues developer is assigned to (or directly assigned tickets)
+    if ($user['role'] === 'developer') {
+        $myQueues = db_query("SELECT queue_id FROM queue_members WHERE user_id = ?", [$user['id']]);
+        $queueIds = array_filter(array_column($myQueues, 'queue_id'));
+        if (!empty($queueIds)) {
+            $inClause = implode(',', array_fill(0, count($queueIds), '?'));
+            $sql .= " AND (t.queue_id IN ($inClause) OR t.assignee_id = ?)";
+            foreach ($queueIds as $qid) {
+                $params[] = $qid;
+            }
+            $params[] = $user['id'];
+        } else {
+            // Not assigned to any queue yet: only see tickets explicitly assigned to them
+            $sql .= " AND t.assignee_id = ?";
+            $params[] = $user['id'];
+        }
+    }
+
+    // Triage Visibility Gate for regular team members (if configured)
+    if ($user['role'] !== 'client' && $user['role'] !== 'developer') {
         $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['triage_visibility_policy']);
         $policy = $setting ? json_decode($setting['value'], true) : ['triage_required_for_team' => true, 'allowed_roles' => ['super_admin', 'support_manager']];
         $isExempt = in_array($user['role'], $policy['allowed_roles'] ?? ['super_admin', 'support_manager']);
@@ -1444,6 +1512,14 @@ if ($method === 'GET' && $path === '/api/tickets') {
         }
     }
 
+    if (!empty($_GET['queue_id'])) {
+        if ($_GET['queue_id'] === 'unassigned') {
+            $sql .= " AND t.queue_id IS NULL";
+        } else {
+            $sql .= " AND t.queue_id = ?";
+            $params[] = $_GET['queue_id'];
+        }
+    }
     if (!empty($_GET['status'])) {
         $sql .= " AND t.status = ?";
         $params[] = $_GET['status'];
@@ -1478,6 +1554,18 @@ if ($method === 'GET' && $path === '/api/tickets') {
 
     $sql .= " ORDER BY t.created_at DESC";
     $tickets = db_query($sql, $params);
+
+    // Anonymize/mask brand details for developers as required ("brand is not visible" to developers)
+    if ($user['role'] === 'developer') {
+        foreach ($tickets as &$t) {
+            $t['organization_name'] = 'Client Project';
+            $t['organization_id'] = 'protected';
+            $t['requester_name'] = 'Client Contact';
+            $t['requester_email'] = 'client@protected';
+        }
+        unset($t);
+    }
+
     json_response(['success' => true, 'tickets' => $tickets]);
 }
 
@@ -1516,16 +1604,31 @@ if ($method === 'POST' && $path === '/api/tickets') {
     $slaHours = ['P1' => 4, 'P2' => 24, 'P3' => 48, 'P4' => 120][$priority] ?? 48;
     $targetResolution = date('Y-m-d H:i:s', strtotime("+$slaHours hours"));
 
+    // Auto-resolve Queue if not explicitly passed
+    $queue_id = !empty($input['queue_id']) ? $input['queue_id'] : null;
+    if (!$queue_id) {
+        if ($priority === 'P1') {
+            $qUrg = db_query_one("SELECT id FROM queues WHERE slug = 'critical-escalations' OR id = 'q-urgent' LIMIT 1");
+            if ($qUrg) $queue_id = $qUrg['id'];
+        } elseif (stripos($category, 'backend') !== false || stripos($category, 'api') !== false) {
+            $qBack = db_query_one("SELECT id FROM queues WHERE slug = 'backend-api' OR id = 'q-backend' LIMIT 1");
+            if ($qBack) $queue_id = $qBack['id'];
+        } else {
+            $qFront = db_query_one("SELECT id FROM queues WHERE slug = 'frontend-ui' OR id = 'q-frontend' LIMIT 1");
+            if ($qFront) $queue_id = $qFront['id'];
+        }
+    }
+
     db_execute(
         'INSERT INTO tickets (
             id, ticket_number, organization_id, website_id, requester_id,
             title, description, steps_to_reproduce, browser, device, environment,
-            category, priority, status, target_resolution_time
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'NEW\', ?)',
+            category, priority, status, queue_id, target_resolution_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'NEW\', ?, ?)',
         [
             $ticketId, $ticketNumber, $organization_id, $website_id, $user['id'],
             $title, $description, $steps, $browser, $device, $environment,
-            $category, $priority, $targetResolution
+            $category, $priority, $queue_id, $targetResolution
         ]
     );
 
@@ -1582,12 +1685,14 @@ if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)$#', $path, $m)) {
     $ticket = db_query_one(
         "SELECT t.*, o.name as organization_name, w.name as website_name, w.url as website_url,
                 req.name as requester_name, req.email as requester_email,
-                dev.name as assignee_name, dev.email as assignee_email
+                dev.name as assignee_name, dev.email as assignee_email,
+                q.name as queue_name, q.color as queue_color
          FROM tickets t
          JOIN organizations o ON t.organization_id = o.id
          JOIN websites w ON t.website_id = w.id
          JOIN users req ON t.requester_id = req.id
          LEFT JOIN users dev ON t.assignee_id = dev.id
+         LEFT JOIN queues q ON t.queue_id = q.id
          WHERE t.id = ?",
         [$ticketId]
     );
@@ -1597,11 +1702,30 @@ if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)$#', $path, $m)) {
         json_error('Forbidden: You can only view tickets belonging to your organization', 403);
     }
 
+    if ($user['role'] === 'developer') {
+        $hasAccess = false;
+        if ($ticket['assignee_id'] === $user['id']) {
+            $hasAccess = true;
+        } elseif (!empty($ticket['queue_id'])) {
+            $isMember = db_query_one("SELECT id FROM queue_members WHERE queue_id = ? AND user_id = ? LIMIT 1", [$ticket['queue_id'], $user['id']]);
+            if ($isMember) $hasAccess = true;
+        }
+        if (!$hasAccess) {
+            json_error('Forbidden: You do not have permission to view tickets in this queue', 403);
+        }
+
+        // Mask brand details from developers ("brand is not visible" to developers)
+        $ticket['organization_name'] = 'Client Project';
+        $ticket['organization_id'] = 'protected';
+        $ticket['requester_name'] = 'Client Contact';
+        $ticket['requester_email'] = 'client@protected';
+    }
+
     json_response(['success' => true, 'ticket' => $ticket]);
 }
 
-// PATCH /api/tickets/{id} (Update status, priority, assignee, resolution - also handles /status and /assign)
-if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assign|assignee))?$#', $path, $m)) {
+// PATCH /api/tickets/{id} (Update status, priority, assignee, queue, resolution - also handles /status and /assign)
+if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assign|assignee|queue))?$#', $path, $m)) {
     $user = require_auth();
     $ticketId = $m[1];
     $input = get_json_input();
@@ -1656,6 +1780,11 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
         $targetAssignee = $input['assignee_id'] ?? $input['assigneeId'] ?? null;
         $updates[] = 'assignee_id = ?';
         $params[] = !empty($targetAssignee) ? $targetAssignee : null;
+    }
+    if (array_key_exists('queue_id', $input) || array_key_exists('queueId', $input)) {
+        $targetQueue = $input['queue_id'] ?? $input['queueId'] ?? null;
+        $updates[] = 'queue_id = ?';
+        $params[] = !empty($targetQueue) ? $targetQueue : null;
     }
     if (isset($input['root_cause'])) {
         $updates[] = 'root_cause = ?';
@@ -2019,6 +2148,166 @@ if ($method === 'DELETE' && preg_match('#^/api/routing-rules/([^/]+)$#', $path, 
     $ruleId = $m[1];
     db_execute('DELETE FROM routing_rules WHERE id = ?', [$ruleId]);
     json_response(['success' => true, 'message' => 'Routing rule deleted successfully']);
+}
+
+// ==============================================================================
+// Queues Management Endpoints
+// ==============================================================================
+
+// GET /api/queues (List all queues with member list and open ticket counts)
+if ($method === 'GET' && ($path === '/api/queues' || $path === '/api/queues/')) {
+    $user = require_auth();
+    $queues = db_query(
+        "SELECT q.*, 
+            (SELECT COUNT(*) FROM tickets t WHERE t.queue_id = q.id AND t.status NOT IN ('RESOLVED', 'CLOSED')) AS open_tickets_count,
+            (SELECT COUNT(*) FROM queue_members qm WHERE qm.queue_id = q.id) AS members_count
+         FROM queues q 
+         WHERE q.is_active = 1 
+         ORDER BY q.name ASC"
+    );
+
+    foreach ($queues as &$q) {
+        $q['members'] = db_query(
+            "SELECT u.id, u.name, u.email, u.role, u.custom_role 
+             FROM queue_members qm 
+             JOIN users u ON qm.user_id = u.id 
+             WHERE qm.queue_id = ? 
+             ORDER BY u.name ASC",
+            [$q['id']]
+        );
+    }
+    unset($q);
+
+    json_response(['success' => true, 'queues' => $queues]);
+}
+
+// POST /api/queues (Create new queue)
+if ($method === 'POST' && $path === '/api/queues') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+
+    $name = trim($input['name'] ?? '');
+    if (empty($name)) {
+        json_error('Queue name is required', 400);
+    }
+
+    $id = 'q-' . time() . '-' . bin2hex(random_bytes(3));
+    $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $name), '-'));
+    $description = trim($input['description'] ?? '');
+    $color = trim($input['color'] ?? 'blue');
+
+    db_execute(
+        'INSERT INTO queues (id, name, slug, description, color, is_active) VALUES (?, ?, ?, ?, ?, 1)',
+        [$id, $name, $slug, $description, $color]
+    );
+
+    if (!empty($input['member_ids']) && is_array($input['member_ids'])) {
+        foreach ($input['member_ids'] as $uId) {
+            $mid = 'qm-' . time() . '-' . bin2hex(random_bytes(3));
+            db_execute('INSERT IGNORE INTO queue_members (id, queue_id, user_id) VALUES (?, ?, ?)', [$mid, $id, $uId]);
+        }
+    }
+
+    $created = db_query_one('SELECT * FROM queues WHERE id = ?', [$id]);
+    json_response(['success' => true, 'queue' => $created, 'message' => "Queue '{$name}' created successfully"], 201);
+}
+
+// PUT /api/queues/{id} (Update queue)
+if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/queues/([^/]+)(?:/update)?$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $queueId = $m[1];
+    $input = get_json_input();
+
+    $queue = db_query_one('SELECT * FROM queues WHERE id = ?', [$queueId]);
+    if (!$queue) json_error('Queue not found', 404);
+
+    $name = trim($input['name'] ?? $queue['name']);
+    $description = trim($input['description'] ?? $queue['description']);
+    $color = trim($input['color'] ?? $queue['color']);
+    $isActive = isset($input['is_active']) ? (int)$input['is_active'] : (int)$queue['is_active'];
+
+    db_execute(
+        'UPDATE queues SET name = ?, description = ?, color = ?, is_active = ? WHERE id = ?',
+        [$name, $description, $color, $isActive, $queueId]
+    );
+
+    if (isset($input['member_ids']) && is_array($input['member_ids'])) {
+        db_execute('DELETE FROM queue_members WHERE queue_id = ?', [$queueId]);
+        foreach ($input['member_ids'] as $uId) {
+            $mid = 'qm-' . time() . '-' . bin2hex(random_bytes(3));
+            db_execute('INSERT IGNORE INTO queue_members (id, queue_id, user_id) VALUES (?, ?, ?)', [$mid, $queueId, $uId]);
+        }
+    }
+
+    $updated = db_query_one('SELECT * FROM queues WHERE id = ?', [$queueId]);
+    json_response(['success' => true, 'queue' => $updated, 'message' => "Queue '{$name}' updated successfully"]);
+}
+
+// DELETE /api/queues/{id} (Delete queue)
+if (($method === 'DELETE' || ($method === 'POST' && strpos($path, '/delete') !== false)) && preg_match('#^/api/queues/([^/]+)(?:/delete)?$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $queueId = $m[1];
+
+    db_execute('UPDATE tickets SET queue_id = NULL WHERE queue_id = ?', [$queueId]);
+    db_execute('DELETE FROM queue_members WHERE queue_id = ?', [$queueId]);
+    db_execute('DELETE FROM queues WHERE id = ?', [$queueId]);
+
+    json_response(['success' => true, 'message' => 'Queue deleted successfully']);
+}
+
+// POST /api/queues/{id}/members (Add member to queue)
+if ($method === 'POST' && preg_match('#^/api/queues/([^/]+)/members$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $queueId = $m[1];
+    $input = get_json_input();
+    $targetUserId = $input['user_id'] ?? null;
+
+    if (empty($targetUserId)) json_error('user_id is required', 400);
+
+    $mid = 'qm-' . time() . '-' . bin2hex(random_bytes(3));
+    db_execute('INSERT IGNORE INTO queue_members (id, queue_id, user_id) VALUES (?, ?, ?)', [$mid, $queueId, $targetUserId]);
+
+    json_response(['success' => true, 'message' => 'User added to queue successfully']);
+}
+
+// DELETE /api/queues/{id}/members/{userId} (Remove member from queue)
+if (($method === 'DELETE' || $method === 'POST') && preg_match('#^/api/queues/([^/]+)/members/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $queueId = $m[1];
+    $targetUserId = $m[2];
+
+    db_execute('DELETE FROM queue_members WHERE queue_id = ? AND user_id = ?', [$queueId, $targetUserId]);
+
+    json_response(['success' => true, 'message' => 'User removed from queue successfully']);
+}
+
+// POST /api/tickets/{id}/assign-queue
+if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/assign-queue$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $ticketId = $m[1];
+    $input = get_json_input();
+    $queueId = !empty($input['queue_id']) ? $input['queue_id'] : null;
+
+    db_execute('UPDATE tickets SET queue_id = ? WHERE id = ?', [$queueId, $ticketId]);
+
+    $queueName = 'None (Unassigned)';
+    if ($queueId) {
+        $q = db_query_one('SELECT name FROM queues WHERE id = ?', [$queueId]);
+        if ($q) $queueName = $q['name'];
+    }
+
+    db_execute(
+        'INSERT INTO ticket_activity (id, ticket_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)',
+        ['act-' . time() . '-' . bin2hex(random_bytes(4)), $ticketId, $user['id'], 'queue_assigned', json_encode(['queue_id' => $queueId, 'queue_name' => $queueName])]
+    );
+
+    json_response(['success' => true, 'message' => "Ticket assigned to queue '{$queueName}'"]);
 }
 
 // GET /api/integrations/slack/health

@@ -203,6 +203,30 @@ CREATE TABLE IF NOT EXISTS `integration_settings` (
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 15. Queues
+CREATE TABLE IF NOT EXISTS `queues` (
+    `id` VARCHAR(64) PRIMARY KEY,
+    `name` VARCHAR(150) NOT NULL,
+    `slug` VARCHAR(150) NOT NULL,
+    `description` TEXT NULL,
+    `color` VARCHAR(50) DEFAULT 'blue',
+    `is_active` TINYINT(1) DEFAULT 1,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 16. Queue Members
+CREATE TABLE IF NOT EXISTS `queue_members` (
+    `id` VARCHAR(64) PRIMARY KEY,
+    `queue_id` VARCHAR(64) NOT NULL,
+    `user_id` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_queue_user` (`queue_id`, `user_id`),
+    INDEX `idx_qm_queue` (`queue_id`),
+    INDEX `idx_qm_user` (`user_id`),
+    FOREIGN KEY (`queue_id`) REFERENCES `queues`(`id`) ON DELETE CASCADE,
+    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==============================================================================

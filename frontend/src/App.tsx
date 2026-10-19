@@ -21,6 +21,7 @@ import { RoutingRulesPage } from './pages/internal/RoutingRulesPage.js';
 import { SlackHealthPage } from './pages/internal/SlackHealthPage.js';
 import { AuditLogsPage } from './pages/internal/AuditLogsPage.js';
 import { GoogleSheetsPage } from './pages/internal/GoogleSheetsPage.js';
+import { QueuesPage } from './pages/internal/QueuesPage.js';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
@@ -33,7 +34,7 @@ export const App: React.FC = () => {
       if (!['tickets', 'new-ticket', 'ticket-detail'].includes(currentView)) {
         setCurrentView('tickets');
       }
-    } else if (user && !['overview', 'tickets', 'my-tickets', 'ticket-detail', 'organizations', 'team', 'routing', 'sheets', 'slack', 'audit'].includes(currentView)) {
+    } else if (user && !['overview', 'tickets', 'my-tickets', 'ticket-detail', 'queues', 'organizations', 'team', 'routing', 'sheets', 'slack', 'audit'].includes(currentView)) {
       setCurrentView('overview');
     }
   }, [user, user?.role]);
@@ -152,6 +153,7 @@ export const App: React.FC = () => {
                 />
               )}
               {currentView === 'organizations' && <OrganizationsPage />}
+              {currentView === 'queues' && <QueuesPage />}
               {currentView === 'team' && <TeamPage />}
               {currentView === 'routing' && <RoutingRulesPage />}
               {currentView === 'sheets' && <GoogleSheetsPage />}

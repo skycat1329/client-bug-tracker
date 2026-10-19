@@ -7,9 +7,11 @@ import {
   TicketAttachment,
   TicketActivity,
   TicketStatus,
+  Queue,
 } from '../../types/index.js';
 import { StatusBadge } from '../../components/StatusBadge.js';
 import { PriorityBadge } from '../../components/PriorityBadge.js';
+import { getTicketSla } from '../../utils/sla.js';
 import {
   ArrowLeft,
   Send,
@@ -47,6 +49,7 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
   const [attachments, setAttachments] = useState<TicketAttachment[]>([]);
   const [activities, setActivities] = useState<TicketActivity[]>([]);
   const [duplicates, setDuplicates] = useState<any[]>([]);
+  const [queues, setQueues] = useState<Queue[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Salesforce Main View Tabs: Details | Chatter / Feed | Related / Audit
@@ -80,15 +83,17 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
     'CLOSED',
   ];
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const [ticketRes, commentsRes, attachmentsRes, activitiesRes, dupsRes, staffRes] = await Promise.all([
+      const [ticketRes, commentsRes, attachmentsRes, activitiesRes, dupsRes, staffRes, queuesRes] = await Promise.all([
         api.get<{ ticket: Ticket }>(`/tickets/${ticketId}`),
         api.get<{ comments: TicketComment[] }>(`/tickets/${ticketId}/comments`).catch(() => ({ comments: [] })),
         api.get<{ attachments: TicketAttachment[] }>(`/tickets/${ticketId}/attachments`).catch(() => ({ attachments: [] })),
         api.get<{ activities: TicketActivity[] }>(`/audit/tickets/${ticketId}/activity`).catch(() => ({ activities: [] })),
         api.get<{ duplicates: any[] }>(`/tickets/${ticketId}/duplicate-check`).catch(() => ({ duplicates: [] })),
         api.get<{ staff: any[] }>('/auth/staff').catch(() => ({ staff: [] })),
+        api.get<{ queues: Queue[] }>('/queues').catch(() => ({ queues: [] })),
       ]);
 
       setTicket(ticketRes.ticket);
@@ -97,16 +102,35 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
       setActivities(activitiesRes.activities || []);
       setDuplicates(dupsRes.duplicates || []);
       setStaffUsers(staffRes.staff || []);
+      setQueues(queuesRes.queues || []);
     } catch (err: any) {
       console.error('Failed to load data:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadData();
+
+    // Real-time polling every 6 seconds when active
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(true);
+      }
+    }, 6000);
+
+    return () => clearInterval(timer);
   }, [ticketId]);
+
+  const handleQueueChange = async (newQueueId: string) => {
+    try {
+      await api.patch(`/tickets/${ticketId}`, { queue_id: newQueueId });
+      await loadData(true);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update ticket queue');
+    }
+  };
 
   const handleStatusChange = async (newStatus: TicketStatus) => {
     if (newStatus === 'RESOLVED') {
@@ -332,18 +356,51 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
           <div className="flex items-center gap-2">
             <PriorityBadge priority={ticket.priority} />
             <StatusBadge status={ticket.status} />
+            {(() => {
+              const sla = getTicketSla(ticket);
+              return (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${sla.badgeBg} ${sla.badgeBorder}`}
+                  title={sla.description}
+                >
+                  <span className={`w-2 h-2 rounded-full ${sla.dotColor}`}></span>
+                  <span>{sla.label}</span>
+                </span>
+              );
+            })()}
           </div>
         </div>
 
         {/* 6 Key Highlights Fields in a crisp horizontal row */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs pt-1">
           <div>
-            <span className="text-slate-400 uppercase font-bold text-[10px] block">Account / Brand</span>
-            <span className="font-bold text-slate-800 truncate block mt-0.5">{ticket.organization_name}</span>
+            <span className="text-slate-400 uppercase font-bold text-[10px] block">
+              {user?.role === 'developer' ? 'Target Site' : 'Account / Brand'}
+            </span>
+            <span className="font-bold text-slate-800 truncate block mt-0.5">
+              {user?.role === 'developer' ? ticket.website_name || 'Protected Site' : ticket.organization_name}
+            </span>
           </div>
           <div>
-            <span className="text-slate-400 uppercase font-bold text-[10px] block">Contact / Requester</span>
-            <span className="font-bold text-slate-800 truncate block mt-0.5">{ticket.requester_name}</span>
+            <span className="text-slate-400 uppercase font-bold text-[10px] block">Incident Queue</span>
+            {['super_admin', 'support_manager'].includes(user?.role || '') && queues.length > 0 ? (
+              <select
+                value={ticket.queue_id || ''}
+                onChange={(e) => handleQueueChange(e.target.value)}
+                className="mt-0.5 text-xs font-bold bg-blue-50/60 border border-blue-200 rounded-lg px-2 py-0.5 text-blue-900 cursor-pointer"
+              >
+                <option value="">Move Queue...</option>
+                {queues.map((q) => (
+                  <option key={q.id} value={q.id}>
+                    {q.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="font-bold text-slate-800 truncate block mt-0.5">
+                {ticket.queue_name || 'No Queue'}
+              </span>
+            )}
           </div>
           <div>
             <span className="text-slate-400 uppercase font-bold text-[10px] block">Case Owner</span>
