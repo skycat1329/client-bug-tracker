@@ -34,6 +34,40 @@ integrationsRouter.post(
   }
 );
 
+// POST /api/integrations/email/test
+integrationsRouter.post(
+  '/email/test',
+  authenticate,
+  requireRoles('super_admin', 'support_manager'),
+  async (req, res) => {
+    const targetEmail = (req.body?.email || req.user!.email).trim();
+    const result = await EmailNotificationService.sendEmail({
+      to: targetEmail,
+      subject: 'Test Email Notification - Client Bug Tracker',
+      event: 'test_notification',
+      text: `Hello,\n\nThis is a verification email sent from Client Bug Tracker to confirm that email notifications via ${config.emailFrom} are working correctly.`,
+      html: `
+        <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
+          <h2 style="color: #0176D3;">Email Integration Active</h2>
+          <p>This is a verification test to confirm that your SMTP configuration is operational.</p>
+          <p><strong>Sender:</strong> ${config.emailFrom}</p>
+          <p><strong>Recipient:</strong> ${targetEmail}</p>
+        </div>
+      `,
+    });
+    res.json({
+      success: result.success,
+      recipient: targetEmail,
+      sender: config.emailFrom,
+      status: result.status,
+      error: result.error,
+      message: result.success
+        ? `Test email sent successfully to ${targetEmail}!`
+        : `Email delivery failed: ${result.error || 'Unknown error'}`,
+    });
+  }
+);
+
 // GET /api/integrations/sheets/config
 integrationsRouter.get(
   '/sheets/config',

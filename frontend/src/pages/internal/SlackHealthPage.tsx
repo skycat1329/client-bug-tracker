@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Bell,
   ExternalLink,
+  Mail,
 } from 'lucide-react';
 
 export const SlackHealthPage: React.FC = () => {
@@ -16,6 +17,9 @@ export const SlackHealthPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
+  const [targetEmail, setTargetEmail] = useState('irfan@assurancemedia.in');
+  const [testingEmail, setTestingEmail] = useState(false);
+  const [testEmailResult, setTestEmailResult] = useState<any>(null);
 
   const loadData = async () => {
     try {
@@ -47,6 +51,22 @@ export const SlackHealthPage: React.FC = () => {
       setTestResult({ success: false, message: err.message });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleTestEmail = async () => {
+    setTestingEmail(true);
+    setTestEmailResult(null);
+    try {
+      const res = await api.post<any>('/integrations/email/test', {
+        email: targetEmail.trim() || undefined,
+      });
+      setTestEmailResult(res);
+      await loadData();
+    } catch (err: any) {
+      setTestEmailResult({ success: false, message: err.message });
+    } finally {
+      setTestingEmail(false);
     }
   };
 
@@ -178,6 +198,89 @@ export const SlackHealthPage: React.FC = () => {
                 Triggered when a ticket is marked RESOLVED with root-cause analysis.
               </p>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Email Notification Health & Live Test Card */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 flex-shrink-0">
+              <Mail size={20} />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                Automated Email Dispatcher (Google Workspace / SMTP)
+                <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
+                  Active Sender
+                </span>
+              </h2>
+              <p className="text-xs text-slate-500">
+                Sends credentials to newly created team members and client bug updates directly via{' '}
+                <strong className="text-slate-800">irfan@assurancemedia.in</strong>.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="email"
+              value={targetEmail}
+              onChange={(e) => setTargetEmail(e.target.value)}
+              placeholder="Recipient email address"
+              className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+            />
+            <button
+              disabled={testingEmail}
+              onClick={handleTestEmail}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors whitespace-nowrap"
+            >
+              <Send size={12} />
+              {testingEmail ? 'Sending...' : 'Send Test Email'}
+            </button>
+          </div>
+        </div>
+
+        {testEmailResult && (
+          <div
+            className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+              testEmailResult.success
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}
+          >
+            {testEmailResult.success ? (
+              <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+            ) : (
+              <AlertTriangle size={16} className="flex-shrink-0 mt-0.5 text-rose-600" />
+            )}
+            <div>
+              <div className="font-bold">
+                {testEmailResult.success ? 'Email Delivered Successfully!' : 'Email Delivery Status'}
+              </div>
+              <div className="mt-0.5">{testEmailResult.message}</div>
+              {testEmailResult.error && (
+                <div className="mt-1 font-mono text-[11px] bg-rose-100/70 p-1.5 rounded text-rose-900">
+                  {testEmailResult.error}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
+          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+            <span className="text-slate-400 font-bold block text-[10px] uppercase">Sender Account</span>
+            <span className="font-mono text-slate-800 font-semibold">irfan@assurancemedia.in</span>
+          </div>
+          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+            <span className="text-slate-400 font-bold block text-[10px] uppercase">SMTP Relay</span>
+            <span className="font-mono text-slate-800 font-semibold">smtp.gmail.com : 465 (SSL)</span>
+          </div>
+          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+            <span className="text-slate-400 font-bold block text-[10px] uppercase">Email Triggers</span>
+            <span className="text-slate-700 font-medium">New Team Members, Client Tickets & Replies</span>
           </div>
         </div>
       </div>

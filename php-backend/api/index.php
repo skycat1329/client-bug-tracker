@@ -203,12 +203,14 @@ function send_credentials_email(string $recipientEmail, string $recipientName, s
 
     $delivered = false;
     $errorMessage = null;
+    global $lastEmailError;
 
     // 1. Try authenticated SMTP if enabled
     if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
         $smtpResult = send_smtp_email($recipientEmail, $subject, $html, $textBody);
         $delivered = $smtpResult['success'];
         $errorMessage = $smtpResult['error'] ?? null;
+        $lastEmailError = $errorMessage;
     } else {
         // 2. Standard PHP mail() with envelope sender parameter (-f)
         $headers = [
@@ -1586,13 +1588,15 @@ if ($method === 'POST' && $path === '/api/integrations/email/test') {
     $targetEmail = !empty($input['email']) ? trim($input['email']) : $user['email'];
 
     $ok = send_credentials_email($targetEmail, $user['name'], 'test-password-123', 'Super Admin');
+    global $lastEmailError;
 
     json_response([
         'success' => $ok,
         'recipient' => $targetEmail,
         'sender' => defined('EMAIL_FROM') ? EMAIL_FROM : 'auto-generated',
-        'mode' => (defined('SMTP_ENABLED') && SMTP_ENABLED) ? 'Hostinger SMTP (Authenticated)' : 'PHP mail() (Local Sendmail)',
-        'message' => $ok ? "Test email sent successfully to {$targetEmail}." : "Failed to send email. Check your SMTP settings in api/config.php."
+        'mode' => (defined('SMTP_ENABLED') && SMTP_ENABLED) ? ('SMTP Authenticated (' . (defined('SMTP_HOST') ? SMTP_HOST : 'custom') . ')') : 'PHP mail() (Local Sendmail)',
+        'error' => $ok ? null : $lastEmailError,
+        'message' => $ok ? "Test email sent successfully to {$targetEmail} from " . (defined('EMAIL_FROM') ? EMAIL_FROM : 'system') . "." : ("Failed to send email: " . ($lastEmailError ?: "Check your SMTP settings in api/config.php."))
     ]);
 }
 
