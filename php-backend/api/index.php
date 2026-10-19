@@ -44,6 +44,7 @@ function json_error(string $message, int $status = 400, $details = null) {
 function get_json_input(): array {
     $raw = file_get_contents('php://input');
     if (empty($raw)) return [];
+    $raw = preg_replace('/^\xEF\xBB\xBF/', '', trim($raw));
     $data = json_decode($raw, true);
     return is_array($data) ? $data : [];
 }
