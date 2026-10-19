@@ -42,9 +42,9 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
     try {
       const [ticketRes, commentsRes, attachmentsRes, activitiesRes] = await Promise.all([
         api.get<{ ticket: Ticket }>(`/tickets/${ticketId}`),
-        api.get<{ comments: TicketComment[] }>(`/tickets/${ticketId}/comments`),
-        api.get<{ attachments: TicketAttachment[] }>(`/tickets/${ticketId}/attachments`),
-        api.get<{ activities: TicketActivity[] }>(`/audit/tickets/${ticketId}/activity`),
+        api.get<{ comments: TicketComment[] }>(`/tickets/${ticketId}/comments`).catch(() => ({ comments: [] })),
+        api.get<{ attachments: TicketAttachment[] }>(`/tickets/${ticketId}/attachments`).catch(() => ({ attachments: [] })),
+        api.get<{ activities: TicketActivity[] }>(`/audit/tickets/${ticketId}/activity`).catch(() => ({ activities: [] })),
       ]);
 
       setTicket(ticketRes.ticket);
@@ -258,7 +258,7 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
               {attachments.map((att) => (
                 <a
                   key={att.id}
-                  href={`/api/attachments/${att.id}/download`}
+                  href={`/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`}
                   target="_blank"
                   rel="noreferrer"
                   className="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/30 transition-colors group"

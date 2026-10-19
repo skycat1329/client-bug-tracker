@@ -73,7 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate }) => 
       <nav className="flex-1 space-y-1">
         {items.map((item) => {
           const Icon = item.icon;
-          const isActive = currentView === item.id;
+          const isActive = currentView === item.id || (currentView === 'ticket-detail' && item.id === 'tickets');
           const isPrimary = item.isPrimary;
 
           if (isPrimary) {

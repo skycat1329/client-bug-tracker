@@ -1868,6 +1868,30 @@ if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/comments$#', $path,
     ]], 201);
 }
 
+// GET /api/tickets/{id}/attachments
+if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $path, $m)) {
+    $user = require_auth();
+    $ticketId = $m[1];
+
+    $sql = 'SELECT a.*, u.name AS uploader_name FROM ticket_attachments a LEFT JOIN users u ON a.uploader_id = u.id WHERE a.ticket_id = ?';
+    $params = [$ticketId];
+
+    if ($user['role'] === 'client') {
+        $sql .= ' AND a.is_internal = 0';
+    }
+
+    $sql .= ' ORDER BY a.created_at ASC';
+    $attachments = db_query($sql, $params);
+
+    foreach ($attachments as &$att) {
+        $att['is_internal'] = (bool)$att['is_internal'];
+        $att['file_size'] = (int)$att['file_size'];
+    }
+    unset($att);
+
+    json_response(['success' => true, 'attachments' => $attachments]);
+}
+
 // POST /api/tickets/{id}/attachments
 if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $path, $m)) {
     $user = require_auth();

@@ -84,10 +84,10 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
     try {
       const [ticketRes, commentsRes, attachmentsRes, activitiesRes, dupsRes, staffRes] = await Promise.all([
         api.get<{ ticket: Ticket }>(`/tickets/${ticketId}`),
-        api.get<{ comments: TicketComment[] }>(`/tickets/${ticketId}/comments`),
-        api.get<{ attachments: TicketAttachment[] }>(`/tickets/${ticketId}/attachments`),
-        api.get<{ activities: TicketActivity[] }>(`/audit/tickets/${ticketId}/activity`),
-        api.get<{ duplicates: any[] }>(`/tickets/${ticketId}/duplicate-check`),
+        api.get<{ comments: TicketComment[] }>(`/tickets/${ticketId}/comments`).catch(() => ({ comments: [] })),
+        api.get<{ attachments: TicketAttachment[] }>(`/tickets/${ticketId}/attachments`).catch(() => ({ attachments: [] })),
+        api.get<{ activities: TicketActivity[] }>(`/audit/tickets/${ticketId}/activity`).catch(() => ({ activities: [] })),
+        api.get<{ duplicates: any[] }>(`/tickets/${ticketId}/duplicate-check`).catch(() => ({ duplicates: [] })),
         api.get<{ staff: any[] }>('/auth/staff').catch(() => ({ staff: [] })),
       ]);
 
@@ -118,7 +118,7 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
     try {
       await api.patch(`/tickets/${ticketId}/status`, {
         status: newStatus,
-        notes: `Status changed to ${newStatus} from Salesforce Service console`,
+        notes: `Status changed to ${newStatus} from Assurance Media portal`,
       });
       await loadData();
     } catch (err: any) {
@@ -158,7 +158,7 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
     try {
       await api.patch(`/tickets/${ticketId}/assign`, {
         assignee_id: assigneeId,
-        notes: `Assigned via Salesforce Case Console`,
+        notes: `Assigned via Assurance Media console`,
       });
       await loadData();
     } catch (err: any) {
@@ -200,8 +200,34 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
     window.open(`/api/audit/tickets/${ticketId}/export/csv`, '_blank');
   };
 
-  if (loading || !ticket) {
-    return <div className="p-12 text-center text-slate-500">Loading Salesforce Service Console...</div>;
+  if (loading) {
+    return (
+      <div className="p-16 text-center text-slate-500 flex flex-col items-center justify-center gap-3">
+        <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        <div className="text-sm font-medium text-slate-600">Loading Ticket Details...</div>
+      </div>
+    );
+  }
+
+  if (!ticket) {
+    return (
+      <div className="p-16 text-center text-slate-500 max-w-md mx-auto space-y-4">
+        <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center mx-auto text-xl font-bold">
+          !
+        </div>
+        <h3 className="text-base font-bold text-slate-800">Ticket Not Found</h3>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          The requested ticket does not exist, or you do not have permission to view it.
+        </p>
+        <button
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer"
+        >
+          <ArrowLeft size={14} />
+          <span>Back to All Tickets</span>
+        </button>
+      </div>
+    );
   }
 
   const currentStageIndex = STAGES.indexOf(ticket.status as TicketStatus);
@@ -646,7 +672,7 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
                     {attachments.map((att) => (
                       <a
                         key={att.id}
-                        href={`/api/attachments/${att.id}/download`}
+                        href={`/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`}
                         target="_blank"
                         rel="noreferrer"
                         className="flex items-center justify-between p-3 rounded border border-slate-200 hover:border-blue-300 hover:bg-blue-50/20 text-slate-800"
