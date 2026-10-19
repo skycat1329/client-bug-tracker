@@ -48,6 +48,17 @@ export const App: React.FC = () => {
     );
   };
 
+  // Sync currentView when switching between client and internal roles
+  React.useEffect(() => {
+    if (user?.role === 'client') {
+      if (!['tickets', 'new-ticket', 'ticket-detail'].includes(currentView)) {
+        setCurrentView('tickets');
+      }
+    } else if (user && !['overview', 'tickets', 'my-tickets', 'ticket-detail', 'organizations', 'team', 'routing', 'sheets', 'slack', 'audit'].includes(currentView)) {
+      setCurrentView('overview');
+    }
+  }, [user, user?.role]);
+
   if (!user) {
     if (isBrandRoute()) {
       return <BrandLoginPage />;
@@ -56,7 +67,12 @@ export const App: React.FC = () => {
   }
 
   // Mandatory first-time password reset gate
-  if (user.must_reset_password) {
+  const requiresPasswordReset =
+    user.must_reset_password === true ||
+    user.must_reset_password === 1 ||
+    (user.must_reset_password as unknown) === '1';
+
+  if (requiresPasswordReset) {
     return <ForceResetPasswordPage />;
   }
 
@@ -89,22 +105,20 @@ export const App: React.FC = () => {
           {/* Customer Portal Views */}
           {isClient && (
             <>
-              {currentView === 'tickets' && (
-                <CustomerTicketsPage
-                  onSelectTicket={handleSelectTicket}
-                  onNewTicket={() => setCurrentView('new-ticket')}
-                />
-              )}
-              {currentView === 'new-ticket' && (
+              {currentView === 'new-ticket' ? (
                 <NewTicketPage
                   onTicketCreated={(id) => handleSelectTicket(id)}
                   onCancel={() => setCurrentView('tickets')}
                 />
-              )}
-              {currentView === 'ticket-detail' && selectedTicketId && (
+              ) : currentView === 'ticket-detail' && selectedTicketId ? (
                 <CustomerTicketDetailPage
                   ticketId={selectedTicketId}
                   onBack={handleBackToTickets}
+                />
+              ) : (
+                <CustomerTicketsPage
+                  onSelectTicket={handleSelectTicket}
+                  onNewTicket={() => setCurrentView('new-ticket')}
                 />
               )}
             </>

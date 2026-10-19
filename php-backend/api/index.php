@@ -97,14 +97,17 @@ function get_auth_user(): ?array {
     }
 
     $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [$decoded['userId']]);
-    if ($user && empty($user['organization_id'])) {
-        $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
-        if ($mem && !empty($mem['organization_id'])) {
-            $user['organization_id'] = $mem['organization_id'];
-        } elseif ($user['role'] === 'client') {
-            $orgByContact = db_query_one('SELECT id FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
-            if ($orgByContact) {
-                $user['organization_id'] = $orgByContact['id'];
+    if ($user) {
+        $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
+        if (empty($user['organization_id'])) {
+            $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
+            if ($mem && !empty($mem['organization_id'])) {
+                $user['organization_id'] = $mem['organization_id'];
+            } elseif ($user['role'] === 'client') {
+                $orgByContact = db_query_one('SELECT id FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
+                if ($orgByContact) {
+                    $user['organization_id'] = $orgByContact['id'];
+                }
             }
         }
     }
@@ -499,7 +502,7 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         json_error('Email and password are required', 400);
     }
 
-    $user = db_query_one('SELECT * FROM users WHERE email = ?', [$email]);
+    $user = db_query_one('SELECT * FROM users WHERE LOWER(TRIM(email)) = ?', [$email]);
     if (!$user || !password_verify($password, $user['password_hash'])) {
         json_error('Invalid email or password', 401);
     }
@@ -541,7 +544,7 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
         $user['organization_name'] = $org ? $org['name'] : null;
     }
-    $user['must_reset_password'] = (bool)($user['must_reset_password'] ?? 0);
+    $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
 
     unset($user['password_hash']);
     json_response([
@@ -600,6 +603,7 @@ if ($method === 'GET' && $path === '/api/auth/me') {
         $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
     }
     $user['organization_name'] = $org ? $org['name'] : null;
+    $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
     json_response(['user' => $user]);
 }
 
@@ -685,8 +689,8 @@ if ($method === 'POST' && $path === '/api/auth/create-user') {
     ], 201);
 }
 
-// DELETE /api/auth/staff/{id}
-if ($method === 'DELETE' && preg_match('#^/api/auth/staff/([^/]+)$#', $path, $m)) {
+// DELETE /api/auth/staff/{id} or DELETE /api/auth/users/{id}
+if (($method === 'DELETE' || ($method === 'POST' && strpos($path, '/delete') !== false)) && preg_match('#^/api/auth/(?:staff|users)/([^/]+)(?:/delete)?$#', $path, $m)) {
     $currentUser = require_auth();
     require_roles($currentUser, ['super_admin', 'support_manager']);
     $targetId = $m[1];
@@ -698,11 +702,16 @@ if ($method === 'DELETE' && preg_match('#^/api/auth/staff/([^/]+)$#', $path, $m)
         json_error('You cannot delete your own account while logged in', 400);
     }
 
+    $targetUser = db_query_one('SELECT * FROM users WHERE id = ?', [$targetId]);
+    if (!$targetUser) {
+        json_error('User not found', 404);
+    }
+
     db_execute('UPDATE tickets SET assignee_id = NULL WHERE assignee_id = ?', [$targetId]);
     db_execute('DELETE FROM organization_members WHERE user_id = ?', [$targetId]);
     db_execute('DELETE FROM users WHERE id = ?', [$targetId]);
 
-    json_response(['success' => true, 'message' => 'Team member removed successfully']);
+    json_response(['success' => true, 'message' => "User '{$targetUser['name']}' removed successfully"]);
 }
 
 // PUT /api/auth/users/{id} or POST /api/auth/users/{id}/update (Admin edits team member or user details)
@@ -1112,6 +1121,56 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/organization
     }
 }
 
+// DELETE /api/organizations/{id} or POST /api/organizations/{id}/delete (Admin deletes brand and all related records)
+if (($method === 'DELETE' || ($method === 'POST' && strpos($path, '/delete') !== false)) && preg_match('#^/api/organizations/([^/]+)(?:/delete)?$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $orgId = $m[1];
+
+    if ($orgId === 'all-websites' || $orgId === 'websites') {
+        json_error('Invalid brand identifier', 400);
+    }
+
+    $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
+    if (!$org) {
+        json_error('Brand organization not found', 404);
+    }
+
+    // 1. Delete tickets for this organization and dependent activity/comments/attachments/assignments
+    $tickets = db_query('SELECT id FROM tickets WHERE organization_id = ?', [$orgId]);
+    foreach ($tickets as $t) {
+        $tId = $t['id'];
+        db_execute('DELETE FROM ticket_activity WHERE ticket_id = ?', [$tId]);
+        db_execute('DELETE FROM ticket_comments WHERE ticket_id = ?', [$tId]);
+        db_execute('DELETE FROM ticket_attachments WHERE ticket_id = ?', [$tId]);
+        db_execute('DELETE FROM ticket_assignments WHERE ticket_id = ?', [$tId]);
+    }
+    db_execute('DELETE FROM tickets WHERE organization_id = ?', [$orgId]);
+
+    // 2. Delete managed websites
+    db_execute('DELETE FROM websites WHERE organization_id = ?', [$orgId]);
+
+    // 3. Delete organization memberships
+    db_execute('DELETE FROM organization_members WHERE organization_id = ?', [$orgId]);
+
+    // 4. Delete client users associated with this brand so email can be cleanly re-used
+    db_execute("DELETE FROM users WHERE organization_id = ? AND role = 'client'", [$orgId]);
+    if (!empty($org['contact_email'])) {
+        db_execute("DELETE FROM users WHERE LOWER(email) = ? AND role = 'client'", [strtolower($org['contact_email'])]);
+    }
+
+    // 5. Delete notification deliveries
+    db_execute("DELETE FROM notification_deliveries WHERE event = 'google_sheets' AND recipient LIKE ?", ['%' . $org['name'] . '%']);
+
+    // 6. Delete the organization record
+    db_execute('DELETE FROM organizations WHERE id = ?', [$orgId]);
+
+    json_response([
+        'success' => true,
+        'message' => "Brand '{$org['name']}' and all associated websites, client logins, and tickets were permanently deleted."
+    ]);
+}
+
 // GET /api/organizations/{id}/websites
 if ($method === 'GET' && preg_match('#^/api/organizations/([^/]+)/websites$#', $path, $m)) {
     require_auth();
@@ -1154,6 +1213,27 @@ if ($method === 'GET' && ($path === '/api/organizations/all-websites' || $path =
              ORDER BY w.name ASC",
             [$user['organization_id']]
         );
+
+        if (empty($websites) && !empty($user['organization_id'])) {
+            $org = db_query_one('SELECT name, website_url FROM organizations WHERE id = ?', [$user['organization_id']]);
+            if ($org) {
+                $webId = 'web-' . time() . '-' . bin2hex(random_bytes(4));
+                $siteName = $org['name'] . ' Main Website';
+                $siteUrl = !empty($org['website_url']) ? $org['website_url'] : ('https://' . strtolower(preg_replace('/[^a-zA-Z0-9]+/', '', $org['name'])) . '.com');
+                db_execute(
+                    'INSERT INTO websites (id, organization_id, name, url, environment) VALUES (?, ?, ?, ?, ?)',
+                    [$webId, $user['organization_id'], $siteName, $siteUrl, 'production']
+                );
+                $websites = db_query(
+                    "SELECT w.*, o.name as organization_name
+                     FROM websites w
+                     JOIN organizations o ON w.organization_id = o.id
+                     WHERE w.organization_id = ?
+                     ORDER BY w.name ASC",
+                    [$user['organization_id']]
+                );
+            }
+        }
     } else {
         $websites = db_query(
             "SELECT w.*, o.name as organization_name

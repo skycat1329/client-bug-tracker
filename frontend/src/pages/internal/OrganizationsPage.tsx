@@ -19,6 +19,7 @@ import {
   Edit2,
   RefreshCw,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 
 export const OrganizationsPage: React.FC = () => {
@@ -63,6 +64,12 @@ export const OrganizationsPage: React.FC = () => {
   const [clientPassword, setClientPassword] = useState('');
   const [generatedCreds, setGeneratedCreds] = useState<{ email: string; password: string; brand: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showCredsPopup, setShowCredsPopup] = useState(false);
+
+  // Delete Brand confirmation state
+  const [brandToDelete, setBrandToDelete] = useState<Organization | null>(null);
+  const [deletingBrand, setDeletingBrand] = useState(false);
+
   // Send Official Brand Credentials modal/form
   const [showSendCredsModal, setShowSendCredsModal] = useState(false);
   const [selectedCredsOrg, setSelectedCredsOrg] = useState<Organization | null>(null);
@@ -154,8 +161,9 @@ export const OrganizationsPage: React.FC = () => {
         setGeneratedCreds({
           brand: orgName.trim(),
           email: orgContactEmail.trim(),
-          password: orgInitialPassword,
+          password: res.initial_password || orgInitialPassword,
         });
+        setShowCredsPopup(true);
       }
 
       setOrgName('');
@@ -171,6 +179,36 @@ export const OrganizationsPage: React.FC = () => {
       setError(err.message || 'Failed to create brand organization');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDeleteBrand = async () => {
+    if (!brandToDelete) return;
+    setDeletingBrand(true);
+    setError(null);
+    try {
+      await api.delete(`/organizations/${brandToDelete.id}`);
+      setSuccess(`Brand "${brandToDelete.name}" and all associated websites and client logins were permanently deleted.`);
+      setBrandToDelete(null);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete brand organization');
+    } finally {
+      setDeletingBrand(false);
+    }
+  };
+
+  const handleDeleteUser = async (user: User) => {
+    if (!window.confirm(`Are you sure you want to remove client login "${user.name}" (${user.email})?`)) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.delete(`/auth/users/${user.id}`);
+      setSuccess(`Client login for "${user.name}" removed successfully.`);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to remove client login');
     }
   };
 
@@ -230,6 +268,7 @@ export const OrganizationsPage: React.FC = () => {
         email: res.email,
         password: res.temporary_password,
       });
+      setShowCredsPopup(true);
 
       setShowSendCredsModal(false);
       setSuccess(`Official credentials dispatched to ${res.email}! Login URL: ${window.location.origin}/brand/login, Temporary Password: ${res.temporary_password}`);
@@ -453,6 +492,16 @@ export const OrganizationsPage: React.FC = () => {
                       <span>Edit Brand</span>
                     </button>
 
+                    {/* Delete Brand */}
+                    <button
+                      onClick={() => setBrandToDelete(org)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-lg text-xs font-semibold transition-colors shadow-sm cursor-pointer"
+                      title="Permanently delete brand, websites and client accounts"
+                    >
+                      <Trash2 size={13} className="text-rose-600" />
+                      <span>Delete Brand</span>
+                    </button>
+
                     {/* Google Sheets Sync */}
                     <button
                       onClick={() => {
@@ -585,9 +634,33 @@ export const OrganizationsPage: React.FC = () => {
                                 <div className="text-slate-500 font-mono text-[11px]">{user.email}</div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              Active Client
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Active Client
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedCredsOrg(org);
+                                  setCredsEmail(user.email);
+                                  setCredsName(user.name);
+                                  setCredsPassword(generateTempPassword());
+                                  setShowSendCredsModal(true);
+                                }}
+                                className="p-1 rounded text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-colors"
+                                title="Reset & send new temporary password to this client"
+                              >
+                                <KeyRound size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteUser(user)}
+                                className="p-1 rounded text-rose-500 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors"
+                                title="Remove this client login"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1208,6 +1281,112 @@ export const OrganizationsPage: React.FC = () => {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Modal: Confirm Delete Brand */}
+      {brandToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 size={24} />
+            </div>
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-slate-900">Delete Brand "{brandToDelete.name}"?</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                This action is permanent and cannot be undone. It will delete the brand organization along with all its managed websites, client logins, and bug tracker tickets.
+              </p>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-1">
+              <div><strong>Brand:</strong> {brandToDelete.name}</div>
+              <div><strong>Slug:</strong> {brandToDelete.slug}</div>
+              {brandToDelete.contact_email && <div><strong>Contact Email:</strong> {brandToDelete.contact_email}</div>}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setBrandToDelete(null)}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingBrand}
+                onClick={handleDeleteBrand}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
+              >
+                {deletingBrand ? 'Deleting Brand...' : 'Yes, Permanently Delete Brand'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Credentials Popup (Dedicated display of generated credentials) */}
+      {showCredsPopup && generatedCreds && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+              <CheckCircle2 size={26} />
+            </div>
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-slate-900">Brand Portal Credentials</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Official access credentials for <strong>{generatedCreds.brand}</strong>
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2 text-slate-800">
+              <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                <span className="text-slate-500 font-semibold uppercase text-[10px]">Brand Login URL:</span>
+                <a
+                  href={`${typeof window !== 'undefined' ? window.location.origin : ''}/brand/login`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-600 hover:underline font-mono font-medium truncate max-w-[200px]"
+                >
+                  {`${typeof window !== 'undefined' ? window.location.origin : ''}/brand/login`}
+                </a>
+              </div>
+              <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                <span className="text-slate-500 font-semibold uppercase text-[10px]">Brand Email:</span>
+                <span className="font-mono font-bold text-slate-900">{generatedCreds.email}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-semibold uppercase text-[10px]">Initial Password:</span>
+                <span className="font-mono font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                  {generatedCreds.password}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs leading-relaxed">
+              <strong>Email Notice:</strong> Outgoing credentials are sent directly from <code>tools.assurance@gmail.com</code>. The client will be forced to choose their permanent password upon their first sign-in.
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={copyCredsToClipboard}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                <span>{copied ? 'Copied to Clipboard!' : 'Copy Credentials'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCredsPopup(false);
+                  setGeneratedCreds(null);
+                }}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

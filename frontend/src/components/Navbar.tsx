@@ -98,75 +98,77 @@ export const Navbar: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="px-3 py-2">
-                  <div className="text-[10px] uppercase font-bold text-slate-400 px-2 mb-1">
-                    ⚡ Instant Switch Account
-                  </div>
-
-                  <button
-                    onClick={async () => {
-                      setDropdownOpen(false);
-                      await switchDemoUser('admin@agency.com');
-                    }}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs hover:bg-slate-50 transition-colors ${
-                      user.email === 'admin@agency.com' ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Shield size={14} className="text-purple-600" />
-                      <div className="text-left">
-                        <div className="leading-tight font-semibold">Agency Administrator</div>
-                        <div className="text-[10px] text-slate-400 font-mono">admin@agency.com</div>
-                      </div>
+                {user.role !== 'client' && (
+                  <div className="px-3 py-2">
+                    <div className="text-[10px] uppercase font-bold text-slate-400 px-2 mb-1">
+                      ⚡ Instant Switch Account
                     </div>
-                    {user.email === 'admin@agency.com' && <Check size={14} className="text-blue-600" />}
-                  </button>
 
-                  <button
-                    onClick={async () => {
-                      setDropdownOpen(false);
-                      await switchDemoUser('dev@agency.com');
-                    }}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs hover:bg-slate-50 transition-colors mt-0.5 ${
-                      user.email === 'dev@agency.com' ? 'bg-emerald-50 font-bold text-emerald-700' : 'text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Code size={14} className="text-emerald-600" />
-                      <div className="text-left">
-                        <div className="leading-tight font-semibold">Alex Developer</div>
-                        <div className="text-[10px] text-slate-400 font-mono">dev@agency.com</div>
-                      </div>
-                    </div>
-                    {user.email === 'dev@agency.com' && <Check size={14} className="text-emerald-600" />}
-                  </button>
-
-                  {/* Other demo/client users */}
-                  {demoUsers
-                    .filter((u) => u.email !== 'admin@agency.com' && u.email !== 'dev@agency.com')
-                    .slice(0, 4)
-                    .map((u) => (
-                      <button
-                        key={u.id}
-                        onClick={async () => {
-                          setDropdownOpen(false);
-                          await switchDemoUser(u.email);
-                        }}
-                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs hover:bg-slate-50 transition-colors mt-0.5 ${
-                          user.email === u.email ? 'bg-amber-50 font-bold text-amber-700' : 'text-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <UserCircle2 size={14} className="text-amber-600" />
-                          <div className="text-left truncate max-w-[170px]">
-                            <div className="leading-tight font-semibold truncate">{u.name}</div>
-                            <div className="text-[10px] text-slate-400 font-mono truncate">{u.email}</div>
-                          </div>
+                    <button
+                      onClick={async () => {
+                        setDropdownOpen(false);
+                        await switchDemoUser('admin@agency.com');
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs hover:bg-slate-50 transition-colors ${
+                        user.email === 'admin@agency.com' ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Shield size={14} className="text-purple-600" />
+                        <div className="text-left">
+                          <div className="leading-tight font-semibold">Agency Administrator</div>
+                          <div className="text-[10px] text-slate-400 font-mono">admin@agency.com</div>
                         </div>
-                        {user.email === u.email && <Check size={14} className="text-amber-600" />}
-                      </button>
-                    ))}
-                </div>
+                      </div>
+                      {user.email === 'admin@agency.com' && <Check size={14} className="text-blue-600" />}
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        setDropdownOpen(false);
+                        await switchDemoUser('dev@agency.com');
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs hover:bg-slate-50 transition-colors mt-0.5 ${
+                        user.email === 'dev@agency.com' ? 'bg-emerald-50 font-bold text-emerald-700' : 'text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Code size={14} className="text-emerald-600" />
+                        <div className="text-left">
+                          <div className="leading-tight font-semibold">Alex Developer</div>
+                          <div className="text-[10px] text-slate-400 font-mono">dev@agency.com</div>
+                        </div>
+                      </div>
+                      {user.email === 'dev@agency.com' && <Check size={14} className="text-emerald-600" />}
+                    </button>
+
+                    {/* Other demo/client users */}
+                    {demoUsers
+                      .filter((u) => u.email !== 'admin@agency.com' && u.email !== 'dev@agency.com')
+                      .slice(0, 4)
+                      .map((u) => (
+                        <button
+                          key={u.id}
+                          onClick={async () => {
+                            setDropdownOpen(false);
+                            await switchDemoUser(u.email);
+                          }}
+                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs hover:bg-slate-50 transition-colors mt-0.5 ${
+                            user.email === u.email ? 'bg-amber-50 font-bold text-amber-700' : 'text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <UserCircle2 size={14} className="text-amber-600" />
+                            <div className="text-left truncate max-w-[170px]">
+                              <div className="leading-tight font-semibold truncate">{u.name}</div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate">{u.email}</div>
+                            </div>
+                          </div>
+                          {user.email === u.email && <Check size={14} className="text-amber-600" />}
+                        </button>
+                      ))}
+                  </div>
+                )}
 
                 <div className="pt-2 px-2 border-t border-slate-100">
                   <button

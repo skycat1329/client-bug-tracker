@@ -152,7 +152,10 @@ export const LoginPage: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setPortalMode('brand')}
+                onClick={() => {
+                  window.history.pushState(null, '', '/brand/login');
+                  setPortalMode('brand');
+                }}
                 className="text-xs bg-white hover:bg-blue-600 text-blue-700 hover:text-white font-bold px-3 py-1.5 rounded-lg border border-blue-300 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
               >
                 Go to Brand Login &rarr;
