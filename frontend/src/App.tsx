@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from './context/AuthContext.js';
 import { Navbar } from './components/Navbar.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -27,6 +27,17 @@ export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState('tickets');
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
 
+  // Sync currentView when switching between client and internal roles (must be called unconditionally)
+  useEffect(() => {
+    if (user?.role === 'client') {
+      if (!['tickets', 'new-ticket', 'ticket-detail'].includes(currentView)) {
+        setCurrentView('tickets');
+      }
+    } else if (user && !['overview', 'tickets', 'my-tickets', 'ticket-detail', 'organizations', 'team', 'routing', 'sheets', 'slack', 'audit'].includes(currentView)) {
+      setCurrentView('overview');
+    }
+  }, [user, user?.role]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -47,17 +58,6 @@ export const App: React.FC = () => {
       search.includes('portal=client')
     );
   };
-
-  // Sync currentView when switching between client and internal roles
-  React.useEffect(() => {
-    if (user?.role === 'client') {
-      if (!['tickets', 'new-ticket', 'ticket-detail'].includes(currentView)) {
-        setCurrentView('tickets');
-      }
-    } else if (user && !['overview', 'tickets', 'my-tickets', 'ticket-detail', 'organizations', 'team', 'routing', 'sheets', 'slack', 'audit'].includes(currentView)) {
-      setCurrentView('overview');
-    }
-  }, [user, user?.role]);
 
   if (!user) {
     if (isBrandRoute()) {
