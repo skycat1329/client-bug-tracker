@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../api/client.js';
+import { useAuth } from '../../context/AuthContext.js';
 import { Role } from '../../types/index.js';
 import {
   Users,
@@ -29,6 +30,7 @@ interface TeamMember {
 }
 
 export const TeamPage: React.FC = () => {
+  const { logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'members' | 'roles' | 'visibility'>('members');
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -82,6 +84,7 @@ export const TeamPage: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
 
   const loadData = async () => {
+    setError(null);
     try {
       const [staffRes, rolesRes, visRes] = await Promise.allSettled([
         api.get<{ staff: TeamMember[] }>('/auth/staff'),
@@ -99,7 +102,6 @@ export const TeamPage: React.FC = () => {
         setRoles(rolesRes.value.roles || []);
       } else {
         console.error('Roles load failed:', rolesRes.reason);
-        setError(`Failed to load roles: ${rolesRes.reason?.message || 'API error'}`);
       }
 
       if (visRes.status === 'fulfilled' && visRes.value.policy) {
@@ -107,7 +109,6 @@ export const TeamPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Failed to load team data:', err);
-      setError(err.message || 'Failed to load team data');
     } finally {
       setLoading(false);
     }
@@ -156,7 +157,12 @@ export const TeamPage: React.FC = () => {
     setDeletingId(id);
     setError(null);
     try {
-      await api.delete(`/auth/staff/${id}`);
+      try {
+        await api.delete(`/auth/staff/${id}`);
+      } catch (delErr: any) {
+        // Fallback to POST /delete in case DELETE method was intercepted by server proxy
+        await api.post(`/auth/staff/${id}/delete`);
+      }
       setSuccess(`Team member ${name} was removed successfully.`);
       await loadData();
     } catch (err: any) {
@@ -247,7 +253,11 @@ export const TeamPage: React.FC = () => {
   const handleDeleteRole = async (id: string, label: string) => {
     if (!confirm(`Delete custom role "${label}"?`)) return;
     try {
-      await api.delete(`/auth/roles/${id}`);
+      try {
+        await api.delete(`/auth/roles/${id}`);
+      } catch (delErr: any) {
+        await api.post(`/auth/roles/${id}/delete`);
+      }
       setSuccess(`Role "${label}" deleted.`);
       await loadData();
     } catch (err: any) {
@@ -389,9 +399,29 @@ export const TeamPage: React.FC = () => {
       )}
 
       {error && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-          <AlertCircle size={16} className="text-rose-600 flex-shrink-0" />
-          <span>{error}</span>
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} className="text-rose-600 flex-shrink-0" />
+            <span>
+              {error.toLowerCase().includes('token') || error.toLowerCase().includes('authentication')
+                ? 'Your session has expired. Please sign in again to continue.'
+                : error}
+            </span>
+          </div>
+          {(error.toLowerCase().includes('token') ||
+            error.toLowerCase().includes('authentication') ||
+            error.toLowerCase().includes('expired')) && (
+            <button
+              type="button"
+              onClick={() => {
+                logout();
+                window.location.reload();
+              }}
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg shadow-sm flex-shrink-0 transition-colors"
+            >
+              Sign in again
+            </button>
+          )}
         </div>
       )}
 

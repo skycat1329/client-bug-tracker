@@ -22,6 +22,8 @@ async function request<T>(
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+    headers['X-Authorization'] = `Bearer ${token}`;
+    headers['X-Auth-Token'] = token;
   }
 
   if (!(options.body instanceof FormData) && !headers['Content-Type']) {
@@ -31,6 +33,7 @@ async function request<T>(
   const response = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers,
+    credentials: 'same-origin',
   });
 
   if (!response.ok) {
@@ -43,6 +46,21 @@ async function request<T>(
     } catch {
       // Non-JSON response
     }
+
+    // Handle token expiration or unauthorized (401)
+    if (response.status === 401) {
+      const isAuthRoute =
+        endpoint.includes('/auth/login') ||
+        endpoint.includes('/auth/force-reset-password');
+      if (!isAuthRoute) {
+        console.warn('Session expired or unauthorized (401) on:', endpoint);
+        localStorage.removeItem('token');
+        window.dispatchEvent(
+          new CustomEvent('auth:expired', { detail: { message: errorMsg } })
+        );
+      }
+    }
+
     throw new ApiError(errorMsg, response.status, details);
   }
 

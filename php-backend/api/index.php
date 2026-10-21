@@ -56,12 +56,16 @@ function get_auth_user(): ?array {
         $_SERVER['REDIRECT_REDIRECT_HTTP_AUTHORIZATION'] ?? null,
         $_SERVER['Authorization'] ?? null,
         $_SERVER['HTTP_X_AUTHORIZATION'] ?? null,
+        $_SERVER['HTTP_X_AUTH_TOKEN'] ?? null,
+        $_SERVER['X_AUTHORIZATION'] ?? null,
+        $_SERVER['X-Authorization'] ?? null,
     ];
 
     if (function_exists('apache_request_headers')) {
         $ah = apache_request_headers();
         foreach ($ah as $k => $v) {
-            if (strtolower($k) === 'authorization') {
+            $lk = strtolower($k);
+            if ($lk === 'authorization' || $lk === 'x-authorization' || $lk === 'x-auth-token') {
                 $candidates[] = $v;
             }
         }
@@ -70,7 +74,8 @@ function get_auth_user(): ?array {
     if (function_exists('getallheaders')) {
         $gh = getallheaders();
         foreach ($gh as $k => $v) {
-            if (strtolower($k) === 'authorization') {
+            $lk = strtolower($k);
+            if ($lk === 'authorization' || $lk === 'x-authorization' || $lk === 'x-auth-token') {
                 $candidates[] = $v;
             }
         }
@@ -78,14 +83,25 @@ function get_auth_user(): ?array {
 
     $token = null;
     foreach ($candidates as $header) {
-        if (!empty($header) && preg_match('/Bearer\s+(\S+)/i', $header, $matches)) {
-            $token = $matches[1];
-            break;
+        if (!empty($header)) {
+            if (preg_match('/Bearer\s+(\S+)/i', $header, $matches)) {
+                $token = $matches[1];
+                break;
+            } else if (!str_contains($header, ' ') && strlen(trim($header)) > 20) {
+                $token = trim($header);
+                break;
+            }
         }
     }
 
     if (!$token && !empty($_GET['token'])) {
         $token = $_GET['token'];
+    }
+    if (!$token && !empty($_POST['token'])) {
+        $token = $_POST['token'];
+    }
+    if (!$token && !empty($_COOKIE['auth_token'])) {
+        $token = $_COOKIE['auth_token'];
     }
 
     if (!$token) {
@@ -399,6 +415,18 @@ try {
                 }
             }
         } catch (Exception $e) {}
+
+        // Ensure dev@agency.com exists for developer role
+        try {
+            $existingDev = db_query_one("SELECT id FROM users WHERE email = 'dev@agency.com'");
+            if (!$existingDev) {
+                $devHash = password_hash('dev123', PASSWORD_BCRYPT);
+                db_execute(
+                    "INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id) VALUES ('usr-dev-primary', 'dev@agency.com', ?, 'Alex Developer', 'developer', NULL, NULL)",
+                    [$devHash]
+                );
+            }
+        } catch (Exception $e) {}
     }
 } catch (Exception $e) {
     // Non-blocking auto migration
@@ -596,11 +624,18 @@ if ($method === 'POST' && $path === '/api/auth/login') {
     $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
 
     unset($user['password_hash']);
+    setcookie('auth_token', $token, time() + 2592000, '/', '', false, true);
     json_response([
         'success' => true,
         'token' => $token,
         'user' => $user
     ]);
+}
+
+// POST /api/auth/logout
+if ($method === 'POST' && $path === '/api/auth/logout') {
+    setcookie('auth_token', '', time() - 3600, '/', '', false, true);
+    json_response(['success' => true, 'message' => 'Logged out successfully']);
 }
 
 // POST /api/auth/force-reset-password (Mandatory first-login password reset)
@@ -635,6 +670,7 @@ if ($method === 'POST' && $path === '/api/auth/force-reset-password') {
         'role' => $updatedUser['role'],
         'organizationId' => $updatedUser['organization_id']
     ], JWT_SECRET);
+    setcookie('auth_token', $newToken, time() + 2592000, '/', '', false, true);
 
     json_response([
         'success' => true,
@@ -877,8 +913,8 @@ if ($method === 'POST' && $path === '/api/auth/roles') {
     ], 201);
 }
 
-// DELETE /api/auth/roles/{id}
-if ($method === 'DELETE' && preg_match('#^/api/auth/roles/([^/]+)$#', $path, $m)) {
+// DELETE /api/auth/roles/{id} or POST /api/auth/roles/{id}/delete
+if (($method === 'DELETE' || ($method === 'POST' && strpos($path, '/delete') !== false)) && preg_match('#^/api/auth/roles/([^/]+)(?:/delete)?$#', $path, $m)) {
     $currentUser = require_auth();
     require_roles($currentUser, ['super_admin']);
     $roleId = $m[1];

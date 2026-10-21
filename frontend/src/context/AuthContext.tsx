@@ -23,6 +23,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [demoUsers, setDemoUsers] = useState<any[]>([]);
 
   useEffect(() => {
+    // Listen for global auth:expired event from client interceptor
+    const handleAuthExpired = () => {
+      localStorage.removeItem('token');
+      setToken(null);
+      setUser(null);
+    };
+
+    window.addEventListener('auth:expired', handleAuthExpired);
+    return () => window.removeEventListener('auth:expired', handleAuthExpired);
+  }, []);
+
+  useEffect(() => {
     // Load available demo users for quick role testing
     api.get<{ users: any[] }>('/auth/demo-users')
       .then((res) => setDemoUsers(res.users || []))

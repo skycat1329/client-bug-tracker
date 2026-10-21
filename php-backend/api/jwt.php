@@ -11,7 +11,7 @@ function base64url_decode(string $data): string {
     return base64_decode(str_pad(strtr($data, '-_', '+/'), strlen($data) % 4 === 0 ? strlen($data) : strlen($data) + (4 - strlen($data) % 4), '=', STR_PAD_RIGHT));
 }
 
-function jwt_encode(array $payload, string $secret, int $exp_seconds = 604800): string {
+function jwt_encode(array $payload, string $secret, int $exp_seconds = 2592000): string {
     $header = ['typ' => 'JWT', 'alg' => 'HS256'];
     $payload['iat'] = time();
     $payload['exp'] = time() + $exp_seconds;
@@ -48,7 +48,8 @@ function jwt_decode(string $token, string $secret): ?array {
         return null;
     }
 
-    if (isset($payload['exp']) && $payload['exp'] < time()) {
+    // Leeway of 120 seconds for clock drift
+    if (isset($payload['exp']) && ($payload['exp'] + 120) < time()) {
         return null; // Expired
     }
 
