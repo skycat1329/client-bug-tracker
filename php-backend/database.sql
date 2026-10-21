@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS `organizations` (
     `name` VARCHAR(255) NOT NULL,
     `slug` VARCHAR(255) NOT NULL UNIQUE,
     `google_sheet_url` VARCHAR(500) NULL,
+    `contact_email` VARCHAR(255) NULL,
+    `contact_name` VARCHAR(255) NULL,
+    `phone` VARCHAR(50) NULL,
+    `website_url` VARCHAR(500) NULL,
+    `status` VARCHAR(50) DEFAULT 'active',
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -30,12 +35,14 @@ CREATE TABLE IF NOT EXISTS `roles` (
 CREATE TABLE IF NOT EXISTS `users` (
     `id` VARCHAR(64) PRIMARY KEY,
     `email` VARCHAR(255) NOT NULL UNIQUE,
+    `phone` VARCHAR(50) NULL,
     `password_hash` VARCHAR(255) NOT NULL,
     `name` VARCHAR(255) NOT NULL,
     `role` ENUM('super_admin', 'support_manager', 'developer', 'client') NOT NULL,
     `custom_role` VARCHAR(64) NULL,
     `organization_id` VARCHAR(64) NULL,
     `avatar_url` VARCHAR(500) NULL,
+    `must_reset_password` TINYINT(1) DEFAULT 0,
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX `idx_user_org` (`organization_id`),
@@ -247,11 +254,21 @@ INSERT INTO `roles` (`id`, `name`, `label`, `description`, `color`, `base_role`,
 ('role-client', 'client', 'Client Brand User', 'Submit bug reports and track resolution', 'amber', 'client', 1)
 ON DUPLICATE KEY UPDATE `label` = VALUES(`label`);
 
--- Initial Triage Visibility Policy
+-- Initial Triage Visibility Policy & Integrations
 INSERT INTO `integration_settings` (`key`, `value`, `description`) VALUES
 ('triage_visibility_policy', 'false', 'Controls whether new tickets are hidden from team members until assigned/triaged'),
-('google_sheets_config', '{"enabled":false,"global_webhook_url":"","create_brand_tabs":true,"sync_on_create":true,"sync_on_assign":true,"sync_on_status":true,"sync_on_comment":true}', 'Configuration for automatic real-time Google Sheets logging per brand')
+('google_sheets_config', '{"enabled":false,"global_webhook_url":"","create_brand_tabs":true,"sync_on_create":true,"sync_on_assign":true,"sync_on_status":true,"sync_on_comment":true}', 'Configuration for automatic real-time Google Sheets logging per brand'),
+('whatsapp_config', '{"enabled":true,"gateway_url":"","admin_phone":"+919999999999","send_on_create":true,"send_on_assign":true,"send_on_status":true}', 'WhatsApp notifications configuration for brand and team dispatches')
 ON DUPLICATE KEY UPDATE `key` = `key`;
+
+-- Initial Default Queues
+INSERT INTO `queues` (`id`, `name`, `slug`, `description`, `color`, `is_active`) VALUES
+('q-assigned', 'Assigned & In Progress', 'assigned-in-progress', 'Tickets currently assigned or opened by engineering personnel', 'indigo', 1),
+('q-frontend', 'Frontend & UI Bugs', 'frontend-ui', 'CSS, responsive display, layout issues, and React client bugs', 'blue', 1),
+('q-backend', 'Backend & API', 'backend-api', 'PHP server logic, database records, and API endpoints', 'emerald', 1),
+('q-urgent', 'Critical Escalations', 'critical-escalations', 'High priority blockers, checkout errors, server timeouts', 'rose', 1),
+('q-general', 'General QA & Triage', 'general-qa', 'Initial bug reviews, reproduction tests, and customer QA', 'purple', 1)
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- Primary Agency Super Admin (admin@agency.com / admin123)
 INSERT INTO `users` (`id`, `email`, `password_hash`, `name`, `role`, `custom_role`, `organization_id`) VALUES

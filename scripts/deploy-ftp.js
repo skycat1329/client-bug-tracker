@@ -53,23 +53,45 @@ async function deploy() {
   console.log('\n2️⃣ Packaging files into hostinger-public_html...');
   execSync('node scripts/package-hostinger.js', { stdio: 'inherit', cwd: rootDir });
 
-  // 3. Connect via FTP and Upload with retry
+  // 3. Connect via FTP and Upload with auto-resuming retry
   console.log('\n3️⃣ Connecting to Hostinger FTP server (' + FTP_HOST + ')...');
 
+  function getFilesRecursively(dir, base = '') {
+    let results = [];
+    const list = fs.readdirSync(dir);
+    for (const file of list) {
+      const fullPath = path.join(dir, file);
+      const relPath = path.join(base, file);
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) {
+        results = results.concat(getFilesRecursively(fullPath, relPath));
+      } else {
+        results.push({ fullPath, relPath: relPath.replace(/\\/g, '/') });
+      }
+    }
+    return results;
+  }
+
+  const filesToUpload = getFilesRecursively(targetDir);
+  console.log(`4️⃣ Uploading ${filesToUpload.length} files to Hostinger...`);
+
   let success = false;
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  const uploadedFiles = new Set();
+
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    if (uploadedFiles.size === filesToUpload.length) {
+      success = true;
+      break;
+    }
+
     const client = new ftp.Client();
     client.ftp.verbose = false;
-    client.ftp.timeout = 60000;
-
-    client.trackProgress((info) => {
-      console.log(`   ⬆️ Uploading: ${info.name} (${Math.round(info.bytesOverall / 1024)} KB)`);
-    });
+    client.ftp.timeout = 45000;
 
     try {
       if (attempt > 1) {
-        const delay = attempt * 4000;
-        console.log(`\n🔄 Retrying upload in ${delay / 1000}s (attempt ${attempt}/5)...`);
+        const delay = Math.min(attempt * 2000, 10000);
+        console.log(`\n🔄 Reconnecting in ${delay / 1000}s (resuming upload, attempt ${attempt}/10)...`);
         await new Promise((r) => setTimeout(r, delay));
       }
 
@@ -81,18 +103,41 @@ async function deploy() {
         secure: false,
       });
 
-      console.log('   ✅ Connected! Current directory: ' + (await client.pwd()));
-      console.log('4️⃣ Uploading updated files to Hostinger...');
+      const remoteRoot = await client.pwd();
 
-      await client.uploadFromDir(targetDir);
-      success = true;
+      for (const file of filesToUpload) {
+        if (uploadedFiles.has(file.relPath)) continue;
+
+        const remoteDir = path.dirname(file.relPath).replace(/\\/g, '/');
+        const remoteFileName = path.basename(file.relPath);
+
+        if (remoteDir && remoteDir !== '.') {
+          await client.ensureDir(`${remoteRoot}/${remoteDir}`);
+        } else {
+          await client.cd(remoteRoot);
+        }
+
+        // Remove any pure-ftpd temporary lock file left by interrupted uploads
+        try {
+          await client.remove(`.in.${remoteFileName}.`);
+        } catch (_) {}
+
+        await client.uploadFrom(file.fullPath, remoteFileName);
+        uploadedFiles.add(file.relPath);
+        console.log(`   ✅ Uploaded [${uploadedFiles.size}/${filesToUpload.length}]: ${file.relPath}`);
+
+        // Brief cooldown between data sockets to prevent firewall throttle
+        await new Promise((r) => setTimeout(r, 120));
+      }
+
       client.close();
+      success = true;
       break;
     } catch (err) {
-      console.warn(`   ⚠️ Attempt ${attempt} failed: ${err.message}`);
+      console.warn(`   ⚠️ Transient error on attempt ${attempt}: ${err.message}`);
       try { client.close(); } catch (_) {}
-      if (attempt === 5) {
-        console.error('\n❌ Deployment failed after 5 attempts.');
+      if (attempt === 10) {
+        console.error('\n❌ Deployment failed after 10 attempts.');
         process.exit(1);
       }
     }

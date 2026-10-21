@@ -32,6 +32,7 @@ import {
   Layers,
   History,
   FileSpreadsheet,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface InternalTicketDetailPageProps {
@@ -61,8 +62,11 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
   const [commentFile, setCommentFile] = useState<File | null>(null);
   const [submittingComment, setSubmittingComment] = useState(false);
 
-  // Status Modal
+  // Status Modal & Double Verification
   const [showResolveModal, setShowResolveModal] = useState(false);
+  const [showStatusConfirmModal, setShowStatusConfirmModal] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<TicketStatus | null>(null);
+  const [statusConfirmNotes, setStatusConfirmNotes] = useState('');
   const [rootCause, setRootCause] = useState('');
   const [fixDetails, setFixDetails] = useState('');
   const [resolutionNotes, setResolutionNotes] = useState('');
@@ -132,18 +136,33 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
     }
   };
 
-  const handleStatusChange = async (newStatus: TicketStatus) => {
+  // Status Change with Mandatory Double Verification Popup
+  const handleStatusChange = (newStatus: TicketStatus) => {
+    if (newStatus === ticket?.status) return;
+
     if (newStatus === 'RESOLVED') {
       setShowResolveModal(true);
       return;
     }
 
+    setPendingStatus(newStatus);
+    setStatusConfirmNotes('');
+    setShowStatusConfirmModal(true);
+  };
+
+  const handleConfirmStatusChange = async () => {
+    if (!pendingStatus) return;
+
     setStatusLoading(true);
     try {
       await api.patch(`/tickets/${ticketId}/status`, {
-        status: newStatus,
-        notes: `Status changed to ${newStatus} from Assurance Media portal`,
+        status: pendingStatus,
+        resolution_notes: statusConfirmNotes.trim() || undefined,
+        notes: statusConfirmNotes.trim() || `Status updated to ${pendingStatus}`,
       });
+      setShowStatusConfirmModal(false);
+      setPendingStatus(null);
+      setStatusConfirmNotes('');
       await loadData();
     } catch (err: any) {
       alert(err.message || 'Failed to update status');
@@ -461,10 +480,10 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
         {/* Left Column (Tabs Content) */}
         <div className="lg:col-span-2 space-y-4">
           {/* Salesforce Tab Headers */}
-          <div className="bg-white rounded-t-lg border-x border-t border-slate-200 flex text-xs font-bold">
+          <div className="bg-white rounded-t-lg border-x border-t border-slate-200 flex text-xs font-bold overflow-x-auto scrollbar-none whitespace-nowrap">
             <button
               onClick={() => setActiveTab('chatter')}
-              className={`py-3 px-5 flex items-center gap-2 border-b-2 transition-colors ${
+              className={`flex-shrink-0 py-3 px-4 sm:px-5 flex items-center gap-2 border-b-2 transition-colors ${
                 activeTab === 'chatter'
                   ? 'border-[#0176D3] text-[#0176D3] bg-white'
                   : 'border-transparent text-slate-600 hover:text-slate-900 bg-slate-50/50'
@@ -905,8 +924,8 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
 
       {/* RESOLVE CASE MODAL */}
       {showResolveModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-lg w-full shadow-2xl border border-slate-200 p-6">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 p-5 sm:p-6 max-h-[90vh] overflow-y-auto">
             <h3 className="text-base font-bold text-slate-900 mb-1 flex items-center gap-2">
               <CheckCircle className="text-emerald-600" />
               <span>Mark Case Resolved (Fix Ready for Client Testing)</span>
@@ -974,6 +993,112 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DOUBLE VERIFICATION STATUS CHANGE MODAL */}
+      {showStatusConfirmModal && pendingStatus && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-indigo-50/50 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm">
+                  <AlertTriangle size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    Confirm Status Change
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Double verification required &bull; Live client updates
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-5 space-y-4 text-xs overflow-y-auto flex-1">
+              {/* Transition pill comparison */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Current State</span>
+                  <StatusBadge status={ticket.status} />
+                </div>
+                <div className="text-slate-400 font-bold text-base px-2">➔</div>
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">New State</span>
+                  <StatusBadge status={pendingStatus} />
+                </div>
+              </div>
+
+              {/* Automatic Queue transition alert */}
+              {['IN PROGRESS', 'ASSIGNED', 'FIX READY FOR TESTING'].includes(pendingStatus) && (
+                <div className="flex items-start gap-2.5 p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-900">
+                  <Layers size={16} className="text-indigo-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">Automatic Queue Reassignment</span>
+                    <span className="text-[11px] text-indigo-700">
+                      This ticket will automatically move from its intake queue into <strong>Assigned &amp; In Progress (q-assigned)</strong>.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Email & WhatsApp notification warning */}
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl text-slate-700 space-y-1.5">
+                <div className="font-bold text-blue-900 text-[11px] flex items-center gap-1.5 uppercase tracking-wider">
+                  <span>⚡ Real-Time Notification Impact</span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span>📧</span>
+                  <span>
+                    Email sent from <strong>tools.assurance@gmail.com</strong> to {user?.role === 'developer' ? 'the client' : ticket.organization_name}.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span>💬</span>
+                  <span>Instant WhatsApp status alert sent to official brand contact.</span>
+                </div>
+              </div>
+
+              {/* Optional notes */}
+              <div>
+                <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1 text-[10px]">
+                  Update Notes / Client Communication (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={statusConfirmNotes}
+                  onChange={(e) => setStatusConfirmNotes(e.target.value)}
+                  placeholder="e.g. Investigating root cause / patch deployed to test environment..."
+                  className="w-full p-2.5 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                />
+              </div>
+
+              {/* Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStatusConfirmModal(false);
+                    setPendingStatus(null);
+                  }}
+                  className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={statusLoading}
+                  onClick={handleConfirmStatusChange}
+                  className="px-4 py-2 bg-[#0176D3] hover:bg-[#014486] text-white font-bold rounded-xl shadow-xs disabled:opacity-50 transition-colors cursor-pointer"
+                >
+                  {statusLoading ? 'Updating...' : 'Confirm Status Change'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

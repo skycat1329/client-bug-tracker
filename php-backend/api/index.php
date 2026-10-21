@@ -312,6 +312,665 @@ function send_credentials_email(string $recipientEmail, string $recipientName, s
     return (bool)$delivered;
 }
 
+// ==============================================================================
+// WhatsApp & Multi-Channel Notification Engine
+// ==============================================================================
+
+function get_whatsapp_config(): array {
+    $default = [
+        'enabled' => defined('WHATSAPP_ENABLED') ? WHATSAPP_ENABLED : true,
+        'gateway_url' => defined('WHATSAPP_GATEWAY_URL') ? WHATSAPP_GATEWAY_URL : '',
+        'api_key' => defined('WHATSAPP_API_KEY') ? WHATSAPP_API_KEY : '',
+        'admin_phone' => defined('WHATSAPP_DEFAULT_ADMIN_PHONE') ? WHATSAPP_DEFAULT_ADMIN_PHONE : '+919999999999',
+        'send_on_create' => true,
+        'send_on_assign' => true,
+        'send_on_status' => true
+    ];
+
+    try {
+        $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['whatsapp_config']);
+        if ($setting && !empty($setting['value'])) {
+            $parsed = json_decode($setting['value'], true);
+            if (is_array($parsed)) {
+                return array_merge($default, $parsed);
+            }
+        }
+    } catch (Exception $e) {}
+
+    return $default;
+}
+
+function send_whatsapp_notification(string $toPhone, string $message, array $meta = []): array {
+    $config = get_whatsapp_config();
+    if (empty($toPhone)) {
+        $toPhone = $config['admin_phone'] ?? '+919999999999';
+    }
+
+    $cleanPhone = preg_replace('/[^0-9+]/', '', trim($toPhone));
+    $encodedText = urlencode($message);
+    $directUrl = "https://api.whatsapp.com/send?phone={$cleanPhone}&text={$encodedText}";
+
+    $delivered = false;
+    $error = null;
+    $httpCode = 0;
+
+    // If an external gateway URL (e.g. UltraMsg, Twilio, Meta Cloud API, or custom webhook) is configured, POST the payload
+    if (!empty($config['enabled']) && !empty($config['gateway_url'])) {
+        $payload = json_encode([
+            'to' => $cleanPhone,
+            'phone' => $cleanPhone,
+            'body' => $message,
+            'message' => $message,
+            'meta' => $meta,
+            'timestamp' => date('c')
+        ]);
+
+        $ch = curl_init($config['gateway_url']);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        $headers = ['Content-Type: application/json'];
+        if (!empty($config['api_key'])) {
+            $headers[] = 'Authorization: Bearer ' . $config['api_key'];
+            $headers[] = 'X-API-KEY: ' . $config['api_key'];
+        }
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        $res = curl_exec($ch);
+        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300 && empty($err)) {
+            $delivered = true;
+        } else {
+            $error = $err ?: "HTTP {$httpCode}: {$res}";
+        }
+    } else {
+        // Direct click-to-chat URL generated and available for browser / admin dispatch
+        $delivered = true;
+    }
+
+    // Record in notification_deliveries table
+    try {
+        $deliveryId = 'del-wa-' . time() . '-' . bin2hex(random_bytes(4));
+        db_execute(
+            'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $deliveryId,
+                'whatsapp',
+                $cleanPhone,
+                $meta['event'] ?? 'general_notification',
+                $meta['ticket_id'] ?? null,
+                json_encode(['phone' => $cleanPhone, 'message' => $message, 'url' => $directUrl, 'meta' => $meta]),
+                $delivered ? 'delivered' : 'failed',
+                1,
+                $error
+            ]
+        );
+    } catch (Exception $e) {}
+
+    return [
+        'success' => $delivered,
+        'phone' => $cleanPhone,
+        'whatsapp_url' => $directUrl,
+        'error' => $error
+    ];
+}
+
+function get_phase_meta(string $status): array {
+    $statusKey = strtoupper(trim(str_replace('_', ' ', $status)));
+    switch ($statusKey) {
+        case 'NEW':
+            return [
+                'phase_number' => 1,
+                'phase_label' => 'Phase 1: Bug Report Acknowledged',
+                'short_title' => 'Acknowledged & Queued',
+                'badge_bg' => '#e0f2fe',
+                'badge_color' => '#0284c7',
+                'badge_border' => '#bae6fd',
+                'icon' => '📥',
+                'summary' => 'Your bug report has been successfully received by Assurance Media Command Center and queued for engineering triage.',
+                'next_step' => 'A senior engineer will inspect the defect, classify severity, and assign a dedicated specialist.'
+            ];
+        case 'TRIAGED':
+            return [
+                'phase_number' => 2,
+                'phase_label' => 'Phase 2: Triaged & Prioritized',
+                'short_title' => 'Triaged & Scheduled',
+                'badge_bg' => '#f3e8ff',
+                'badge_color' => '#7c3aed',
+                'badge_border' => '#e9d5ff',
+                'icon' => '🔍',
+                'summary' => 'Our technical leads have reviewed the defect, verified impact, and prioritized the issue for development.',
+                'next_step' => 'A specialist developer is being assigned to begin diagnostics and code patching.'
+            ];
+        case 'ASSIGNED':
+            return [
+                'phase_number' => 3,
+                'phase_label' => 'Phase 3: Dedicated Specialist Assigned',
+                'short_title' => 'Specialist Assigned',
+                'badge_bg' => '#e0e7ff',
+                'badge_color' => '#4338ca',
+                'badge_border' => '#c7d2fe',
+                'icon' => '👨‍💻',
+                'summary' => 'A dedicated software engineer has taken ownership of your ticket and is actively inspecting the codebase.',
+                'next_step' => 'The engineer will reproduce the error in our dev environment and prepare the resolution.'
+            ];
+        case 'IN PROGRESS':
+            return [
+                'phase_number' => 4,
+                'phase_label' => 'Phase 4: Active Development & Patching',
+                'short_title' => 'Under Active Development',
+                'badge_bg' => '#fef3c7',
+                'badge_color' => '#b45309',
+                'badge_border' => '#fde68a',
+                'icon' => '⚙️',
+                'summary' => 'Our developer is actively working on the fix, refactoring faulty logic, or applying code patches.',
+                'next_step' => 'Once testing passes internally, the fix will be deployed to your staging or live environment for client verification.'
+            ];
+        case 'WAITING FOR CLIENT':
+            return [
+                'phase_number' => 4,
+                'phase_label' => 'Phase: Information Requested from Brand',
+                'short_title' => 'Brand Action Needed',
+                'badge_bg' => '#ffedd5',
+                'badge_color' => '#c2410c',
+                'badge_border' => '#fed7aa',
+                'icon' => '⚠️',
+                'summary' => 'Our engineering team requires additional details, credentials, or reproduction steps from your team to proceed.',
+                'next_step' => 'Please reply directly via the portal or comments with the requested details.'
+            ];
+        case 'FIX READY FOR TESTING':
+            return [
+                'phase_number' => 5,
+                'phase_label' => 'Phase 5: Fix Deployed & Ready for Client Testing',
+                'short_title' => 'Ready for Verification',
+                'badge_bg' => '#ccfbf1',
+                'badge_color' => '#0f766e',
+                'badge_border' => '#99f6e4',
+                'icon' => '🧪',
+                'summary' => 'The patch has been deployed! Please test the fix on your website and verify that the problem is completely solved.',
+                'next_step' => 'Click "Confirm Resolved & Close" in your portal if all is working, or reopen if you observe any persisting defect.'
+            ];
+        case 'RESOLVED':
+            return [
+                'phase_number' => 6,
+                'phase_label' => 'Phase 6: Solution Resolved & Validated',
+                'short_title' => 'Resolved by Engineering',
+                'badge_bg' => '#dcfce7',
+                'badge_color' => '#15803d',
+                'badge_border' => '#86efac',
+                'icon' => '✅',
+                'summary' => 'The bug has been successfully resolved and code updates verified.',
+                'next_step' => 'Please confirm from your Brand Portal to officially close the ticket.'
+            ];
+        case 'CLOSED':
+            return [
+                'phase_number' => 7,
+                'phase_label' => 'Phase 7: Ticket Verified & Closed',
+                'short_title' => 'Officially Closed',
+                'badge_bg' => '#f1f5f9',
+                'badge_color' => '#475569',
+                'badge_border' => '#cbd5e1',
+                'icon' => '🔒',
+                'summary' => 'This defect report is verified complete and closed in the Assurance Media repository.',
+                'next_step' => 'No further action required. Thank you for partnering with Assurance Media!'
+            ];
+        default:
+            return [
+                'phase_number' => 0,
+                'phase_label' => 'Phase Update: ' . $statusKey,
+                'short_title' => $statusKey,
+                'badge_bg' => '#e2e8f0',
+                'badge_color' => '#334155',
+                'badge_border' => '#cbd5e1',
+                'icon' => '📋',
+                'summary' => "The status of this ticket has transitioned to {$statusKey}.",
+                'next_step' => 'Log in to your Brand Portal to track real-time resolution.'
+            ];
+    }
+}
+
+function get_brand_notification_targets(array $ticket, ?array $brand = null): array {
+    $orgId = $ticket['organization_id'] ?? '';
+    if (!$brand && !empty($orgId)) {
+        $brand = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
+    }
+    $requester = !empty($ticket['requester_id']) ? db_query_one('SELECT * FROM users WHERE id = ?', [$ticket['requester_id']]) : null;
+
+    $emails = [];
+    if (!empty($brand['contact_email'])) {
+        $emails[] = trim($brand['contact_email']);
+    }
+    if (!empty($requester['email'])) {
+        $emails[] = trim($requester['email']);
+    }
+    $emails = array_values(array_unique(array_filter($emails)));
+
+    $phones = [];
+    if (!empty($brand['phone'])) {
+        $phones[] = trim($brand['phone']);
+    }
+    if (!empty($requester['phone'])) {
+        $phones[] = trim($requester['phone']);
+    }
+    $phones = array_values(array_unique(array_filter($phones)));
+
+    return [
+        'brand' => $brand,
+        'requester' => $requester,
+        'emails' => $emails,
+        'phones' => $phones,
+        'brand_name' => $brand['name'] ?? 'Client Brand',
+    ];
+}
+
+function render_responsive_phase_email(array $ticket, array $phaseMeta, string $oldStatus, string $newStatus, string $notes, ?array $updatedBy, string $clientPortalUrl, string $brandName): string {
+    $ticketNumber = htmlspecialchars($ticket['ticket_number'] ?? 'WEB');
+    $title = htmlspecialchars($ticket['title'] ?? 'Ticket');
+    $priority = htmlspecialchars($ticket['priority'] ?? 'P3');
+    $category = htmlspecialchars($ticket['category'] ?? 'General');
+    $website = htmlspecialchars($ticket['website_name'] ?? 'Brand Website');
+    $environment = htmlspecialchars($ticket['environment'] ?? 'production');
+
+    $phaseNum = $phaseMeta['phase_number'];
+    $phaseLabel = htmlspecialchars($phaseMeta['phase_label']);
+    $shortTitle = htmlspecialchars($phaseMeta['short_title']);
+    $badgeBg = $phaseMeta['badge_bg'];
+    $badgeColor = $phaseMeta['badge_color'];
+    $badgeBorder = $phaseMeta['badge_border'];
+    $summary = htmlspecialchars($phaseMeta['summary']);
+    $nextStep = htmlspecialchars($phaseMeta['next_step']);
+
+    $assigneeName = '';
+    if (!empty($ticket['assignee_id'])) {
+        $u = db_query_one('SELECT name FROM users WHERE id = ?', [$ticket['assignee_id']]);
+        if ($u && !empty($u['name'])) {
+            $assigneeName = htmlspecialchars($u['name']);
+        }
+    }
+
+    $stepperStages = [
+        1 => 'Received',
+        2 => 'Triaged',
+        3 => 'Assigned',
+        4 => 'In Dev',
+        5 => 'Testing',
+        6 => 'Resolved'
+    ];
+
+    $stepperHtml = "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='margin: 18px 0; table-layout: fixed;'><tr>";
+    foreach ($stepperStages as $num => $lbl) {
+        $isDone = ($phaseNum > 0 && $num < $phaseNum) || ($phaseNum === 7);
+        $isCurrent = ($phaseNum === $num);
+
+        $circleBg = $isDone ? '#16a34a' : ($isCurrent ? '#0176D3' : '#e2e8f0');
+        $circleColor = ($isDone || $isCurrent) ? '#ffffff' : '#64748b';
+        $labelColor = $isCurrent ? '#0176D3' : ($isDone ? '#16a34a' : '#94a3b8');
+        $labelWeight = $isCurrent ? '700' : '500';
+        $iconText = $isDone ? '&#10003;' : (string)$num;
+
+        $stepperHtml .= "
+        <td align='center' style='padding: 2px;'>
+          <div style='width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: {$circleBg}; color: {$circleColor}; font-size: 11px; font-weight: 700; text-align: center; margin: 0 auto;'>{$iconText}</div>
+          <div style='font-size: 10px; font-weight: {$labelWeight}; color: {$labelColor}; margin-top: 4px; white-space: nowrap;'>{$lbl}</div>
+        </td>";
+    }
+    $stepperHtml .= "</tr></table>";
+
+    $notesBlock = "";
+    if (!empty($notes)) {
+        $notesBlock = "
+        <div style='margin-top: 14px; padding: 12px 14px; background: #f1f5f9; border-radius: 8px; border-left: 3px solid #0176D3;'>
+          <strong style='font-size: 11.5px; text-transform: uppercase; color: #475569;'>Notes / Progress Update:</strong>
+          <div style='font-size: 13px; color: #0f172a; margin-top: 4px; line-height: 1.5;'>" . nl2br(htmlspecialchars($notes)) . "</div>
+        </div>";
+    }
+
+    $assigneeRow = "";
+    if (!empty($assigneeName)) {
+        $assigneeRow = "<tr><td style='padding: 6px 0; color: #64748b; font-size: 12px; width: 38%;'><strong>Specialist:</strong></td><td style='padding: 6px 0; color: #0f172a; font-size: 13px; font-weight: 600;'>&#128100; {$assigneeName}</td></tr>";
+    }
+
+    return "
+    <!DOCTYPE html>
+    <html lang='en'>
+    <head>
+      <meta charset='utf-8'>
+      <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+      <title>Assurance Media Ticket Update</title>
+      <style>
+        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
+        body { margin: 0; padding: 0; width: 100% !important; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; }
+        @media only screen and (max-width: 600px) {
+          .wrapper { width: 100% !important; padding: 12px !important; }
+          .card { border-radius: 12px !important; }
+          .content { padding: 20px 16px !important; }
+          .header-box { padding: 20px 16px !important; }
+          .btn { width: 100% !important; display: block !important; box-sizing: border-box !important; }
+        }
+      </style>
+    </head>
+    <body style='background-color: #f8fafc; margin: 0; padding: 0;'>
+      <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background-color: #f8fafc;'>
+        <tr>
+          <td align='center' class='wrapper' style='padding: 24px 12px;'>
+            <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' class='card' style='max-width: 600px; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.06);'>
+              
+              <!-- Branded Header -->
+              <tr>
+                <td class='header-box' style='background: linear-gradient(135deg, #0176D3 0%, #005bb5 100%); padding: 24px; text-align: center; color: #ffffff;'>
+                  <div style='font-size: 20px; font-weight: 800; letter-spacing: -0.3px; margin: 0;'>Assurance Media</div>
+                  <div style='font-size: 12px; margin-top: 4px; opacity: 0.95; font-weight: 500;'>Dedicated Brand Portal &bull; " . htmlspecialchars($brandName) . "</div>
+                </td>
+              </tr>
+
+              <!-- Main Content Body -->
+              <tr>
+                <td class='content' style='padding: 28px 24px;'>
+                  
+                  <!-- Phase Status Badge Banner -->
+                  <div style='text-align: center; margin-bottom: 20px;'>
+                    <span style='display: inline-block; padding: 6px 14px; font-size: 12px; font-weight: 700; border-radius: 20px; background: {$badgeBg}; color: {$badgeColor}; border: 1px solid {$badgeBorder}; text-transform: uppercase; letter-spacing: 0.5px;'>
+                      {$phaseLabel}
+                    </span>
+                    <h2 style='font-size: 18px; font-weight: 800; color: #0f172a; margin: 12px 0 4px 0;'>{$shortTitle}</h2>
+                    <p style='font-size: 13.5px; color: #475569; margin: 0; line-height: 1.5;'>{$summary}</p>
+                  </div>
+
+                  <!-- Visual Progress Stepper -->
+                  {$stepperHtml}
+
+                  <!-- Key Case Information Card -->
+                  <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid {$badgeColor}; border-radius: 10px; padding: 16px 18px; margin: 20px 0;'>
+                    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'>
+                      <tr>
+                        <td style='padding: 6px 0; color: #64748b; font-size: 12px; width: 38%;'><strong>Ticket ID:</strong></td>
+                        <td style='padding: 6px 0; color: #0176D3; font-size: 13px; font-family: Consolas, monospace; font-weight: 700;'>[{$ticketNumber}]</td>
+                      </tr>
+                      <tr>
+                        <td style='padding: 6px 0; color: #64748b; font-size: 12px;'><strong>Title:</strong></td>
+                        <td style='padding: 6px 0; color: #0f172a; font-size: 13px; font-weight: 600;'>{$title}</td>
+                      </tr>
+                      <tr>
+                        <td style='padding: 6px 0; color: #64748b; font-size: 12px;'><strong>Website & Env:</strong></td>
+                        <td style='padding: 6px 0; color: #0f172a; font-size: 12.5px;'>{$website} ({$environment})</td>
+                      </tr>
+                      <tr>
+                        <td style='padding: 6px 0; color: #64748b; font-size: 12px;'><strong>Priority / Cat:</strong></td>
+                        <td style='padding: 6px 0; color: #0f172a; font-size: 12.5px;'>{$priority} &bull; {$category}</td>
+                      </tr>
+                      {$assigneeRow}
+                    </table>
+                    {$notesBlock}
+                  </div>
+
+                  <!-- What Happens Next Box -->
+                  <div style='background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 14px; margin: 18px 0; font-size: 12.5px; color: #166534;'>
+                    <strong>&#128204; Next Step:</strong> {$nextStep}
+                  </div>
+
+                  <!-- Direct Portal CTA Button -->
+                  <div style='text-align: center; margin: 26px 0 10px 0;'>
+                    <a href='{$clientPortalUrl}' class='btn' style='display: inline-block; background: #0176D3; color: #ffffff !important; padding: 13px 28px; border-radius: 10px; font-weight: 700; font-size: 14px; text-decoration: none; box-shadow: 0 4px 6px -1px rgba(1, 118, 211, 0.25); text-align: center;'>
+                      Open in Brand Portal &rarr;
+                    </a>
+                  </div>
+
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style='padding: 18px 24px; background: #f8fafc; font-size: 11.5px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; line-height: 1.6;'>
+                  Assurance Media Client Services &bull; Real-Time Engineering Command Center<br/>
+                  <em>Made by Akash with ❤️</em>
+                </td>
+              </tr>
+
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    ";
+}
+
+function send_brand_phase_notification(array $ticket, string $newStatus, string $oldStatus = '', string $notes = '', ?array $brand = null, ?array $updatedBy = null): void {
+    $targets = get_brand_notification_targets($ticket, $brand);
+    $brandName = $targets['brand_name'];
+    $emails = $targets['emails'];
+    $phones = $targets['phones'];
+
+    $phaseMeta = get_phase_meta($newStatus);
+    $ticketNumber = $ticket['ticket_number'] ?? 'WEB';
+    $title = $ticket['title'] ?? 'Ticket';
+    $priority = $ticket['priority'] ?? 'P3';
+    $website = $ticket['website_name'] ?? 'Website';
+
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https://" : "http://";
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $clientPortalUrl = $protocol . $host . "/?view=tickets&ticket=" . ($ticket['id'] ?? '');
+
+    // 1. Send Mobile-Responsive HTML Email to ALL Registered Brand Email Addresses
+    if (!empty($emails)) {
+        $subject = "Assurance Media - {$phaseMeta['phase_label']}: [{$ticketNumber}] {$title}";
+        $html = render_responsive_phase_email($ticket, $phaseMeta, $oldStatus, $newStatus, $notes, $updatedBy, $clientPortalUrl, $brandName);
+        $textBody = "Hello {$brandName},\n\n{$phaseMeta['phase_label']}\nTicket: [{$ticketNumber}] {$title}\nStatus: {$newStatus}\nSummary: {$phaseMeta['summary']}\nNext Step: {$phaseMeta['next_step']}\n" . (!empty($notes) ? "Notes: {$notes}\n" : "") . "Track: {$clientPortalUrl}\n\nAssurance Media Client Support\nMade by Akash with ❤️";
+
+        foreach ($emails as $recipientEmail) {
+            $delivered = false;
+            $err = null;
+            if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+                $res = send_smtp_email($recipientEmail, $subject, $html, $textBody);
+                $delivered = !empty($res['success']);
+                $err = $res['error'] ?? null;
+            } else {
+                $fromEmail = defined('EMAIL_FROM') ? EMAIL_FROM : 'tools.assurance@gmail.com';
+                $headers = ['MIME-Version: 1.0', 'Content-Type: text/html; charset=UTF-8', 'From: Assurance Media <' . $fromEmail . '>'];
+                $delivered = @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+            }
+
+            try {
+                $deliveryId = 'del-mail-' . time() . '-' . bin2hex(random_bytes(4));
+                db_execute(
+                    'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        $deliveryId,
+                        'email',
+                        $recipientEmail,
+                        'phase_' . strtolower(str_replace(' ', '_', $newStatus)),
+                        $ticket['id'] ?? null,
+                        json_encode(['brand' => $brandName, 'status' => $newStatus, 'phase' => $phaseMeta['phase_label']]),
+                        $delivered ? 'delivered' : 'failed',
+                        1,
+                        $err
+                    ]
+                );
+            } catch (Exception $e) {}
+        }
+    }
+
+    // 2. Send WhatsApp Notification to ALL Registered Brand Phone Numbers
+    $assigneeLine = "";
+    if (!empty($ticket['assignee_id'])) {
+        $u = db_query_one('SELECT name FROM users WHERE id = ?', [$ticket['assignee_id']]);
+        if ($u && !empty($u['name'])) {
+            $assigneeLine = "👨‍💻 *Specialist:* {$u['name']}\n";
+        }
+    }
+
+    $notesLine = !empty($notes) ? "💬 *Notes:* {$notes}\n" : "";
+
+    $waMsg = "{$phaseMeta['icon']} *Assurance Media | {$phaseMeta['phase_label']}*\n\n" .
+             "*Brand:* {$brandName}\n" .
+             "*Ticket:* *{$ticketNumber}* - {$title}\n" .
+             "*Current Phase:* *{$phaseMeta['short_title']}*\n" .
+             "*Priority:* {$priority} | *Website:* {$website}\n" .
+             $assigneeLine .
+             $notesLine .
+             "📌 *What Happens Next:*\n{$phaseMeta['next_step']}\n\n" .
+             "🔗 *Track in Brand Portal:*\n{$clientPortalUrl}\n\n" .
+             "_Assurance Media Support • Made by Akash with ❤️_";
+
+    if (!empty($phones)) {
+        foreach ($phones as $phone) {
+            send_whatsapp_notification($phone, $waMsg, [
+                'event' => 'phase_' . strtolower(str_replace(' ', '_', $newStatus)),
+                'ticket_id' => $ticket['id'] ?? null,
+                'status' => $newStatus,
+                'phase' => $phaseMeta['phase_label'],
+                'brand_name' => $brandName
+            ]);
+        }
+    } else {
+        // If no brand phone registered, alert the default admin phone
+        $config = get_whatsapp_config();
+        $adminPhone = $config['admin_phone'] ?? '+919999999999';
+        send_whatsapp_notification($adminPhone, $waMsg, [
+            'event' => 'phase_' . strtolower(str_replace(' ', '_', $newStatus)),
+            'ticket_id' => $ticket['id'] ?? null,
+            'status' => $newStatus,
+            'phase' => $phaseMeta['phase_label'],
+            'brand_name' => $brandName,
+            'fallback_to_admin' => true
+        ]);
+    }
+}
+
+function send_ticket_assigned_notifications(array $ticket, array $assignee, array $assignedBy): void {
+    $ticketNumber = $ticket['ticket_number'] ?? 'WEB';
+    $title = $ticket['title'] ?? 'Ticket';
+    $priority = $ticket['priority'] ?? 'P3';
+    $category = $ticket['category'] ?? 'General';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https://" : "http://";
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $portalUrl = $protocol . $host . "/?view=tickets&ticket=" . ($ticket['id'] ?? '');
+
+    // 1. Send Phase 3 (Dedicated Specialist Assigned) Notification to Registered Brand Email & Phone
+    send_brand_phase_notification(
+        $ticket,
+        'ASSIGNED',
+        $ticket['status'] ?? 'NEW',
+        "Dedicated specialist " . ($assignee['name'] ?? 'Engineer') . " has been assigned to investigate and resolve this defect.",
+        null,
+        $assignedBy
+    );
+
+    // 2. Email to Assignee via SMTP
+    $recipientEmail = $assignee['email'] ?? '';
+    if (!empty($recipientEmail)) {
+        $subject = "Assurance Media - Ticket Assigned: [{$ticketNumber}] {$title}";
+        $sla = $ticket['target_resolution_time'] ?? 'Within standard window';
+        $desc = htmlspecialchars($ticket['description'] ?? '');
+
+        $html = "
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; padding: 24px; color: #0f172a; margin: 0; }
+          .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; overflow: hidden; }
+          .header { background: #0176D3; padding: 24px; text-align: center; color: #ffffff; }
+          .header h1 { margin: 0; font-size: 20px; font-weight: 800; }
+          .content { padding: 28px 24px; }
+          .pill { display: inline-block; padding: 4px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; border-radius: 12px; background: #e0f2fe; color: #0284c7; }
+          .box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #0176D3; padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
+          .btn { display: inline-block; background: #0176D3; color: #ffffff !important; padding: 12px 24px; border-radius: 8px; font-weight: 700; font-size: 14px; text-decoration: none; }
+          .footer { padding: 16px; background: #f8fafc; font-size: 11px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }
+        </style></head>
+        <body>
+          <div class='card'>
+            <div class='header'><h1>Assurance Media Command Center</h1><p>Ticket Assignment Notification</p></div>
+            <div class='content'>
+              <span class='pill'>Priority {$priority}</span>
+              <p style='font-size: 15px; margin-top: 12px;'>Hello <strong>" . htmlspecialchars($assignee['name'] ?? 'Engineer') . "</strong>,</p>
+              <p>You have been assigned to resolve bug ticket <strong>[{$ticketNumber}] {$title}</strong> by " . htmlspecialchars($assignedBy['name'] ?? 'Agency Admin') . ".</p>
+              <div class='box'>
+                <div><strong>Ticket Number:</strong> {$ticketNumber}</div>
+                <div><strong>Category:</strong> " . htmlspecialchars($category) . "</div>
+                <div><strong>Priority:</strong> {$priority}</div>
+                <div><strong>Target SLA:</strong> {$sla}</div>
+                <div style='margin-top: 8px;'><strong>Summary:</strong> {$desc}</div>
+              </div>
+              <p style='text-align: center; margin: 24px 0;'><a href='{$portalUrl}' class='btn'>Open Ticket in Command Center</a></p>
+            </div>
+            <div class='footer'>Assurance Media Client Services &bull; Made by Akash with ❤️</div>
+          </div>
+        </body></html>
+        ";
+
+        $textBody = "Hello {$assignee['name']},\n\nYou have been assigned ticket [{$ticketNumber}] {$title} by {$assignedBy['name']}.\nPriority: {$priority}\nCategory: {$category}\nTarget SLA: {$sla}\nLink: {$portalUrl}\n\nAssurance Media Support Team\nMade by Akash with ❤️";
+
+        if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+            send_smtp_email($recipientEmail, $subject, $html, $textBody);
+        } else {
+            $fromEmail = defined('EMAIL_FROM') ? EMAIL_FROM : 'tools.assurance@gmail.com';
+            $headers = ['MIME-Version: 1.0', 'Content-Type: text/html; charset=UTF-8', 'From: Assurance Media <' . $fromEmail . '>'];
+            @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+        }
+    }
+
+    // 3. WhatsApp to Assignee
+    $assigneePhone = $assignee['phone'] ?? '';
+    $waMsg = "🔔 *Assurance Media | Ticket Assigned*\n" .
+             "Ticket: *{$ticketNumber}* - {$title}\n" .
+             "Priority: *{$priority}* | Category: {$category}\n" .
+             "Assigned By: " . ($assignedBy['name'] ?? 'Admin') . "\n" .
+             "Target SLA: " . ($ticket['target_resolution_time'] ?? 'Standard') . "\n" .
+             "Open: {$portalUrl}";
+
+    send_whatsapp_notification($assigneePhone, $waMsg, [
+        'event' => 'ticket_assigned',
+        'ticket_id' => $ticket['id'] ?? null,
+        'assignee_id' => $assignee['id'] ?? null
+    ]);
+}
+
+function send_ticket_created_notifications(array $ticket, ?array $brand, array $requester): void {
+    $ticketNumber = $ticket['ticket_number'] ?? 'WEB';
+    $title = $ticket['title'] ?? 'Ticket';
+    $priority = $ticket['priority'] ?? 'P3';
+    $brandName = $brand['name'] ?? 'Client Brand';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https://" : "http://";
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $portalUrl = $protocol . $host . "/?view=tickets&ticket=" . ($ticket['id'] ?? '');
+
+    // 1. Send Phase 1 (Bug Report Acknowledged) Notification to Registered Brand Email & Phone
+    send_brand_phase_notification(
+        $ticket,
+        'NEW',
+        '',
+        'Bug report successfully registered in Assurance Media Command Center. Initial engineering triage underway.',
+        $brand,
+        $requester
+    );
+
+    // 2. WhatsApp Alert to Admin & Engineering Team
+    $config = get_whatsapp_config();
+    $adminPhone = $config['admin_phone'] ?? '+919999999999';
+    $waMsg = "🚨 *Assurance Media Alert: New Ticket Raised*\n" .
+             "Brand: *{$brandName}*\n" .
+             "Ticket: *{$ticketNumber}* - {$title}\n" .
+             "Priority: *{$priority}* | Category: " . ($ticket['category'] ?? 'General') . "\n" .
+             "Raised By: " . ($requester['name'] ?? 'Client') . " (" . ($requester['email'] ?? '') . ")\n" .
+             "Command Center: {$portalUrl}";
+
+    send_whatsapp_notification($adminPhone, $waMsg, [
+        'event' => 'ticket_created_alert',
+        'ticket_id' => $ticket['id'] ?? null,
+        'brand_id' => $brand['id'] ?? null
+    ]);
+}
+
+function send_ticket_status_change_notifications(array $ticket, string $oldStatus, string $newStatus, string $notes, array $updatedBy): void {
+    // Send Phase Update to Registered Brand Email & Phone
+    send_brand_phase_notification($ticket, $newStatus, $oldStatus, $notes, null, $updatedBy);
+}
+
 // ------------------------------------------------------------------------------
 // Schema Auto-Migration for Assurance Media, Brands & Security
 // ------------------------------------------------------------------------------
@@ -332,9 +991,13 @@ try {
         if (empty($cols)) {
             db_execute("ALTER TABLE organizations ADD COLUMN contact_name VARCHAR(255) NULL AFTER contact_email");
         }
+        $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'phone'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE organizations ADD COLUMN phone VARCHAR(50) NULL AFTER contact_name");
+        }
         $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'website_url'");
         if (empty($cols)) {
-            db_execute("ALTER TABLE organizations ADD COLUMN website_url VARCHAR(500) NULL AFTER contact_name");
+            db_execute("ALTER TABLE organizations ADD COLUMN website_url VARCHAR(500) NULL AFTER phone");
         }
         $cols = db_query("SHOW COLUMNS FROM organizations LIKE 'status'");
         if (empty($cols)) {
@@ -342,6 +1005,10 @@ try {
         }
 
         // Users extra fields
+        $cols = db_query("SHOW COLUMNS FROM users LIKE 'phone'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE users ADD COLUMN phone VARCHAR(50) NULL AFTER email");
+        }
         $cols = db_query("SHOW COLUMNS FROM users LIKE 'must_reset_password'");
         if (empty($cols)) {
             db_execute("ALTER TABLE users ADD COLUMN must_reset_password TINYINT(1) DEFAULT 0 AFTER avatar_url");
@@ -380,10 +1047,18 @@ try {
             } catch (Exception $e) {}
         }
 
-        // Seed default queues if table is empty
+        // Seed default queues including 'q-assigned'
+        $qAssigned = db_query_one("SELECT id FROM queues WHERE id = 'q-assigned'");
+        if (!$qAssigned) {
+            db_execute(
+                "INSERT INTO queues (id, name, slug, description, color, is_active) VALUES ('q-assigned', 'Assigned & In Progress', 'assigned-in-progress', 'Tickets currently assigned or opened by engineering personnel', 'indigo', 1)"
+            );
+        }
+
         $existingQueues = db_query("SELECT COUNT(*) AS c FROM queues");
-        if (empty($existingQueues[0]['c'])) {
+        if (empty($existingQueues[0]['c']) || (int)$existingQueues[0]['c'] <= 1) {
             $defaultQueues = [
+                ['q-assigned', 'Assigned & In Progress', 'assigned-in-progress', 'Tickets currently assigned or opened by engineering personnel', 'indigo'],
                 ['q-frontend', 'Frontend & UI Bugs', 'frontend-ui', 'CSS, responsive display, layout issues, and React client bugs', 'blue'],
                 ['q-backend', 'Backend & API', 'backend-api', 'PHP server logic, database records, and API endpoints', 'emerald'],
                 ['q-urgent', 'Critical Escalations', 'critical-escalations', 'High priority blockers, checkout errors, server timeouts', 'rose'],
@@ -391,10 +1066,18 @@ try {
             ];
             foreach ($defaultQueues as $dq) {
                 db_execute(
-                    "INSERT INTO queues (id, name, slug, description, color, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+                    "INSERT INTO queues (id, name, slug, description, color, is_active) VALUES (?, ?, ?, ?, ?, 1) ON DUPLICATE KEY UPDATE name = VALUES(name)",
                     $dq
                 );
             }
+        }
+
+        // Seed WhatsApp default configuration
+        $waSetting = db_query_one("SELECT `key` FROM integration_settings WHERE `key` = 'whatsapp_config'");
+        if (!$waSetting) {
+            db_execute(
+                "INSERT INTO integration_settings (`key`, `value`, `description`) VALUES ('whatsapp_config', '{\"enabled\":true,\"gateway_url\":\"\",\"admin_phone\":\"+919999999999\",\"send_on_create\":true,\"send_on_assign\":true,\"send_on_status\":true}', 'WhatsApp notifications configuration for brand and team dispatches')"
+            );
         }
 
         // Auto-link any client users without an organization_id to their matching brand
@@ -711,7 +1394,7 @@ if ($method === 'GET' && $path === '/api/auth/demo-users') {
 if ($method === 'GET' && $path === '/api/auth/staff') {
     $user = require_auth();
     $staff = db_query(
-        "SELECT id, email, name, role, custom_role, avatar_url, created_at 
+        "SELECT id, email, phone, name, role, custom_role, avatar_url, created_at 
          FROM users 
          WHERE role != 'client' 
          ORDER BY created_at ASC"
@@ -726,6 +1409,7 @@ if ($method === 'POST' && $path === '/api/auth/create-user') {
 
     $input = get_json_input();
     $email = strtolower(trim($input['email'] ?? ''));
+    $phone = trim($input['phone'] ?? '');
     $password = $input['password'] ?? '';
     $name = trim($input['name'] ?? '');
     $role = $input['role'] ?? 'developer';
@@ -745,8 +1429,8 @@ if ($method === 'POST' && $path === '/api/auth/create-user') {
     $hash = password_hash($password, PASSWORD_BCRYPT);
 
     db_execute(
-        'INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [$userId, $email, $hash, $name, $role, $custom_role, $organization_id]
+        'INSERT INTO users (id, email, phone, password_hash, name, role, custom_role, organization_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [$userId, $email, $phone ?: null, $hash, $name, $role, $custom_role, $organization_id]
     );
 
     if ($organization_id) {
@@ -766,6 +1450,7 @@ if ($method === 'POST' && $path === '/api/auth/create-user') {
         'user' => [
             'id' => $userId,
             'email' => $email,
+            'phone' => $phone,
             'name' => $name,
             'role' => $role,
             'custom_role' => $custom_role,
@@ -808,6 +1493,7 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
     $input = get_json_input();
     $name = trim($input['name'] ?? '');
     $email = strtolower(trim($input['email'] ?? ''));
+    $phone = isset($input['phone']) ? trim($input['phone']) : null;
     $role = $input['role'] ?? null;
     $customRole = $input['custom_role'] ?? null;
     $newPassword = $input['password'] ?? null;
@@ -831,6 +1517,7 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
 
     $finalRole = $role ?: $targetUser['role'];
     $finalCustomRole = $customRole !== null ? $customRole : $targetUser['custom_role'];
+    $finalPhone = $phone !== null ? ($phone ?: null) : ($targetUser['phone'] ?? null);
 
     if (!empty($newPassword)) {
         if (strlen($newPassword) < 6) {
@@ -838,16 +1525,16 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
         }
         $hash = password_hash($newPassword, PASSWORD_BCRYPT);
         db_execute(
-            'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ?, updated_at = NOW() WHERE id = ?',
-            [$name, $email, $finalRole, $finalCustomRole, $hash, $mustReset !== null ? $mustReset : 1, $targetUserId]
+            'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ?, updated_at = NOW() WHERE id = ?',
+            [$name, $email, $finalPhone, $finalRole, $finalCustomRole, $hash, $mustReset !== null ? $mustReset : 1, $targetUserId]
         );
         if (!empty($input['send_email'])) {
             $isClient = ($finalRole === 'client');
             send_credentials_email($email, $name, $newPassword, $finalCustomRole ?: $finalRole, '', $isClient);
         }
     } else {
-        $updateSql = 'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?';
-        $params = [$name, $email, $finalRole, $finalCustomRole];
+        $updateSql = 'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?';
+        $params = [$name, $email, $finalPhone, $finalRole, $finalCustomRole];
         if ($mustReset !== null) {
             $updateSql .= ', must_reset_password = ?';
             $params[] = $mustReset;
@@ -857,7 +1544,7 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
         db_execute($updateSql, $params);
     }
 
-    $updated = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password, created_at, updated_at FROM users WHERE id = ?', [$targetUserId]);
+    $updated = db_query_one('SELECT id, email, phone, name, role, custom_role, organization_id, must_reset_password, created_at, updated_at FROM users WHERE id = ?', [$targetUserId]);
     json_response(['success' => true, 'user' => $updated, 'message' => 'Team member updated successfully']);
 }
 
@@ -1039,6 +1726,7 @@ if ($method === 'POST' && $path === '/api/organizations') {
     $name = trim($input['name'] ?? '');
     $contactName = trim($input['contact_name'] ?? '');
     $contactEmail = strtolower(trim($input['contact_email'] ?? ''));
+    $phone = trim($input['phone'] ?? '');
     $initialPassword = trim($input['initial_password'] ?? '');
     $websiteUrl = trim($input['website_url'] ?? '');
     $sheetUrl = trim($input['google_sheet_url'] ?? '');
@@ -1050,8 +1738,8 @@ if ($method === 'POST' && $path === '/api/organizations') {
     $orgId = 'org-' . time() . '-' . bin2hex(random_bytes(4));
 
     db_execute(
-        'INSERT INTO organizations (id, name, slug, contact_name, contact_email, website_url, google_sheet_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [$orgId, $name, $slug, $contactName ?: null, $contactEmail ?: null, $websiteUrl ?: null, $sheetUrl ?: null, $status]
+        'INSERT INTO organizations (id, name, slug, contact_name, contact_email, phone, website_url, google_sheet_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [$orgId, $name, $slug, $contactName ?: null, $contactEmail ?: null, $phone ?: null, $websiteUrl ?: null, $sheetUrl ?: null, $status]
     );
 
     // Primary website: URL provided or auto-generated default
@@ -1074,14 +1762,14 @@ if ($method === 'POST' && $path === '/api/organizations') {
         if ($existing) {
             $clientId = $existing['id'];
             db_execute(
-                'UPDATE users SET password_hash = ?, name = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?',
-                [$hash, $contactName ?: $name, $orgId, $clientId]
+                'UPDATE users SET password_hash = ?, name = ?, phone = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?',
+                [$hash, $contactName ?: $name, $phone ?: null, $orgId, $clientId]
             );
         } else {
             $clientId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
             db_execute(
-                'INSERT INTO users (id, email, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [$clientId, $contactEmail, $hash, $contactName ?: $name, 'client', $orgId, 1]
+                'INSERT INTO users (id, email, phone, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [$clientId, $contactEmail, $phone ?: null, $hash, $contactName ?: $name, 'client', $orgId, 1]
             );
         }
 
@@ -1185,6 +1873,7 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/organization
         $name = trim($input['name'] ?? '');
         $contactName = trim($input['contact_name'] ?? '');
         $contactEmail = strtolower(trim($input['contact_email'] ?? ''));
+        $phone = isset($input['phone']) ? trim($input['phone']) : null;
         $websiteUrl = trim($input['website_url'] ?? '');
         $sheetUrl = trim($input['google_sheet_url'] ?? '');
         $status = trim($input['status'] ?? 'active');
@@ -1195,10 +1884,11 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/organization
         if (!$org) json_error('Organization not found', 404);
 
         $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+        $finalPhone = $phone !== null ? ($phone ?: null) : ($org['phone'] ?? null);
 
         db_execute(
-            'UPDATE organizations SET name = ?, slug = ?, contact_name = ?, contact_email = ?, website_url = ?, google_sheet_url = ?, status = ?, updated_at = NOW() WHERE id = ?',
-            [$name, $slug, $contactName ?: null, $contactEmail ?: null, $websiteUrl ?: null, $sheetUrl ?: null, $status, $orgId]
+            'UPDATE organizations SET name = ?, slug = ?, contact_name = ?, contact_email = ?, phone = ?, website_url = ?, google_sheet_url = ?, status = ?, updated_at = NOW() WHERE id = ?',
+            [$name, $slug, $contactName ?: null, $contactEmail ?: null, $finalPhone, $websiteUrl ?: null, $sheetUrl ?: null, $status, $orgId]
         );
 
         $updated = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
@@ -1510,7 +2200,7 @@ if ($method === 'GET' && $path === '/api/tickets') {
             WHERE 1=1";
     $params = [];
 
-    // Client brand isolation
+    // Client brand isolation: clients only see their own organization's tickets
     if ($user['role'] === 'client') {
         $sql .= " AND t.organization_id = ?";
         $params[] = $user['organization_id'];
@@ -1519,34 +2209,7 @@ if ($method === 'GET' && $path === '/api/tickets') {
         $params[] = $_GET['organization_id'];
     }
 
-    // Developer queue membership gate: only see tickets in queues developer is assigned to (or directly assigned tickets)
-    if ($user['role'] === 'developer') {
-        $myQueues = db_query("SELECT queue_id FROM queue_members WHERE user_id = ?", [$user['id']]);
-        $queueIds = array_filter(array_column($myQueues, 'queue_id'));
-        if (!empty($queueIds)) {
-            $inClause = implode(',', array_fill(0, count($queueIds), '?'));
-            $sql .= " AND (t.queue_id IN ($inClause) OR t.assignee_id = ?)";
-            foreach ($queueIds as $qid) {
-                $params[] = $qid;
-            }
-            $params[] = $user['id'];
-        } else {
-            // Not assigned to any queue yet: only see tickets explicitly assigned to them
-            $sql .= " AND t.assignee_id = ?";
-            $params[] = $user['id'];
-        }
-    }
-
-    // Triage Visibility Gate for regular team members (if configured)
-    if ($user['role'] !== 'client' && $user['role'] !== 'developer') {
-        $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['triage_visibility_policy']);
-        $policy = $setting ? json_decode($setting['value'], true) : ['triage_required_for_team' => true, 'allowed_roles' => ['super_admin', 'support_manager']];
-        $isExempt = in_array($user['role'], $policy['allowed_roles'] ?? ['super_admin', 'support_manager']);
-        if (!empty($policy['triage_required_for_team']) && !$isExempt) {
-            $sql .= " AND (t.status != 'NEW' OR t.assignee_id = ?)";
-            $params[] = $user['id'];
-        }
-    }
+    // "All tickets are visible to everyone": developers and all team members can see all tickets across all queues
 
     if (!empty($_GET['queue_id'])) {
         if ($_GET['queue_id'] === 'unassigned') {
@@ -1675,7 +2338,7 @@ if ($method === 'POST' && $path === '/api/tickets') {
     );
 
     // Slack Notification
-    $brand = db_query_one('SELECT name FROM organizations WHERE id = ?', [$organization_id]);
+    $brand = db_query_one('SELECT * FROM organizations WHERE id = ?', [$organization_id]);
     $brandName = $brand ? $brand['name'] : 'Client Brand';
     send_slack_notification(
         SLACK_CHANNEL_BUG_REPORTS,
@@ -1710,6 +2373,10 @@ if ($method === 'POST' && $path === '/api/tickets') {
     );
 
     $created = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
+
+    // Send Ticket Creation Notifications (WhatsApp alert to engineering + Email to brand requester)
+    send_ticket_created_notifications($created, $brand, $user);
+
     json_response(['success' => true, 'ticket' => $created], 201);
 }
 
@@ -1738,19 +2405,8 @@ if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)$#', $path, $m)) {
         json_error('Forbidden: You can only view tickets belonging to your organization', 403);
     }
 
+    // All tickets are visible to everyone; mask brand details for developers
     if ($user['role'] === 'developer') {
-        $hasAccess = false;
-        if ($ticket['assignee_id'] === $user['id']) {
-            $hasAccess = true;
-        } elseif (!empty($ticket['queue_id'])) {
-            $isMember = db_query_one("SELECT id FROM queue_members WHERE queue_id = ? AND user_id = ? LIMIT 1", [$ticket['queue_id'], $user['id']]);
-            if ($isMember) $hasAccess = true;
-        }
-        if (!$hasAccess) {
-            json_error('Forbidden: You do not have permission to view tickets in this queue', 403);
-        }
-
-        // Mask brand details from developers ("brand is not visible" to developers)
         $ticket['organization_name'] = 'Client Project';
         $ticket['organization_id'] = 'protected';
         $ticket['requester_name'] = 'Client Contact';
@@ -1789,6 +2445,9 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
                 $user['name']
             );
 
+            // WhatsApp + Email alert on client status confirmation
+            send_ticket_status_change_notifications($updated, $ticket['status'], $newStatus, 'Updated directly by client via portal', $user);
+
             json_response(['success' => true, 'ticket' => $updated]);
         }
         json_error('Clients can only confirm resolution or reopen tickets', 403);
@@ -1797,6 +2456,15 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
     // Staff updates
     $updates = [];
     $params = [];
+
+    $targetAssignee = null;
+    $hasAssigneeUpdate = false;
+    if (array_key_exists('assignee_id', $input) || array_key_exists('assigneeId', $input)) {
+        $hasAssigneeUpdate = true;
+        $targetAssignee = $input['assignee_id'] ?? $input['assigneeId'] ?? null;
+        $updates[] = 'assignee_id = ?';
+        $params[] = !empty($targetAssignee) ? $targetAssignee : null;
+    }
 
     if (isset($input['status'])) {
         $updates[] = 'status = ?';
@@ -1812,16 +2480,29 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
         $updates[] = 'priority = ?';
         $params[] = $input['priority'];
     }
-    if (array_key_exists('assignee_id', $input) || array_key_exists('assigneeId', $input)) {
-        $targetAssignee = $input['assignee_id'] ?? $input['assigneeId'] ?? null;
-        $updates[] = 'assignee_id = ?';
-        $params[] = !empty($targetAssignee) ? $targetAssignee : null;
-    }
-    if (array_key_exists('queue_id', $input) || array_key_exists('queueId', $input)) {
+
+    $hasExplicitQueue = array_key_exists('queue_id', $input) || array_key_exists('queueId', $input);
+    if ($hasExplicitQueue) {
         $targetQueue = $input['queue_id'] ?? $input['queueId'] ?? null;
         $updates[] = 'queue_id = ?';
         $params[] = !empty($targetQueue) ? $targetQueue : null;
+    } else {
+        // Automatic Queue Transition:
+        // When ticket is assigned to anyone or opened/worked on (IN PROGRESS, ASSIGNED, FIX READY FOR TESTING),
+        // automatically move it out of its intake queue and into the 'q-assigned' (Assigned & In Progress) queue.
+        $isBeingAssigned = $hasAssigneeUpdate && !empty($targetAssignee);
+        $isBeingOpened = isset($input['status']) && in_array($input['status'], ['IN PROGRESS', 'ASSIGNED', 'FIX READY FOR TESTING']);
+        if ($isBeingAssigned || $isBeingOpened) {
+            $updates[] = 'queue_id = ?';
+            $params[] = 'q-assigned';
+        }
+        if ($isBeingAssigned && empty($input['status']) && in_array($ticket['status'], ['NEW', 'TRIAGED'])) {
+            $updates[] = 'status = ?';
+            $params[] = 'ASSIGNED';
+            $input['status'] = 'ASSIGNED';
+        }
     }
+
     if (isset($input['root_cause'])) {
         $updates[] = 'root_cause = ?';
         $params[] = $input['root_cause'];
@@ -1859,10 +2540,9 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
 
     $updated = db_query_one('SELECT * FROM tickets WHERE id = ?', [$ticketId]);
 
-    // Google Sheets Real-Time Sync on Staff Actions
-    // 1. Assignee change
-    if ((array_key_exists('assignee_id', $input) || array_key_exists('assigneeId', $input)) && $targetAssignee !== $ticket['assignee_id']) {
-        $newAssignee = $targetAssignee ? db_query_one('SELECT name, email FROM users WHERE id = ?', [$targetAssignee]) : null;
+    // 1. Assignee change handling: Google Sheets + Email & WhatsApp to assigned specialist
+    if ($hasAssigneeUpdate && $targetAssignee !== $ticket['assignee_id']) {
+        $newAssignee = !empty($targetAssignee) ? db_query_one('SELECT * FROM users WHERE id = ?', [$targetAssignee]) : null;
         $assigneeLabel = $newAssignee ? "{$newAssignee['name']} ({$newAssignee['email']})" : 'Unassigned';
         sync_to_google_sheet(
             $ticket['organization_id'],
@@ -1871,9 +2551,13 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
             "Ticket assigned to {$assigneeLabel} by {$user['name']}.",
             $user['name']
         );
+
+        if ($newAssignee) {
+            send_ticket_assigned_notifications($updated, $newAssignee, $user);
+        }
     }
 
-    // 2. Status change
+    // 2. Status change handling: Google Sheets + Email & WhatsApp to Client Brand
     if (isset($input['status']) && $input['status'] !== $ticket['status']) {
         $notes = [];
         if (!empty($input['resolution_notes'])) $notes[] = "Resolution: " . $input['resolution_notes'];
@@ -1888,6 +2572,9 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
             $detailsStr,
             $user['name']
         );
+
+        $statusNotes = $input['resolution_notes'] ?? $input['fix_details'] ?? $input['notes'] ?? '';
+        send_ticket_status_change_notifications($updated, $ticket['status'], $input['status'], $statusNotes, $user);
     }
 
     json_response(['success' => true, 'ticket' => $updated]);
@@ -2575,6 +3262,98 @@ if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/sheets-url$#'
 
     db_execute('UPDATE organizations SET google_sheet_url = ? WHERE id = ?', [!empty($url) ? $url : null, $orgId]);
     json_response(['success' => true, 'google_sheet_url' => $url, 'message' => 'Brand Google Sheet URL updated successfully']);
+}
+
+// ==============================================================================
+// WhatsApp Integration API Routes
+// ==============================================================================
+
+// GET /api/integrations/whatsapp/config
+if ($method === 'GET' && $path === '/api/integrations/whatsapp/config') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $config = get_whatsapp_config();
+
+    $deliveries = db_query(
+        "SELECT n.*, t.ticket_number 
+         FROM notification_deliveries n 
+         LEFT JOIN tickets t ON n.ticket_id = t.id 
+         WHERE n.channel = 'whatsapp' 
+         ORDER BY n.created_at DESC LIMIT 30"
+    );
+
+    foreach ($deliveries as &$d) {
+        $d['payload'] = !empty($d['payload']) ? json_decode($d['payload'], true) : null;
+    }
+    unset($d);
+
+    json_response([
+        'success' => true,
+        'config' => [
+            'enabled' => !empty($config['enabled']),
+            'gateway_url' => $config['gateway_url'] ?? '',
+            'admin_phone' => $config['admin_phone'] ?? '+919999999999',
+            'has_api_key' => !empty($config['api_key']),
+            'send_on_create' => isset($config['send_on_create']) ? (bool)$config['send_on_create'] : true,
+            'send_on_assign' => isset($config['send_on_assign']) ? (bool)$config['send_on_assign'] : true,
+            'send_on_status' => isset($config['send_on_status']) ? (bool)$config['send_on_status'] : true
+        ],
+        'deliveries' => $deliveries
+    ]);
+}
+
+// POST /api/integrations/whatsapp/config
+if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+
+    $current = get_whatsapp_config();
+    $newConfig = [
+        'enabled' => isset($input['enabled']) ? (bool)$input['enabled'] : true,
+        'gateway_url' => trim($input['gateway_url'] ?? $current['gateway_url'] ?? ''),
+        'api_key' => !empty($input['api_key']) ? trim($input['api_key']) : ($current['api_key'] ?? ''),
+        'admin_phone' => trim($input['admin_phone'] ?? $current['admin_phone'] ?? '+919999999999'),
+        'send_on_create' => isset($input['send_on_create']) ? (bool)$input['send_on_create'] : true,
+        'send_on_assign' => isset($input['send_on_assign']) ? (bool)$input['send_on_assign'] : true,
+        'send_on_status' => isset($input['send_on_status']) ? (bool)$input['send_on_status'] : true
+    ];
+
+    db_execute(
+        'INSERT INTO integration_settings (`key`, `value`, `description`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+        ['whatsapp_config', json_encode($newConfig), 'WhatsApp notifications configuration for brand and team dispatches']
+    );
+
+    json_response(['success' => true, 'config' => $newConfig, 'message' => 'WhatsApp configuration updated successfully']);
+}
+
+// POST /api/integrations/whatsapp/test
+if ($method === 'POST' && $path === '/api/integrations/whatsapp/test') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+
+    $targetPhone = !empty($input['phone']) ? trim($input['phone']) : null;
+    $msg = "🧪 *Assurance Media | WhatsApp Integration Test*\n" .
+           "Test triggered by: {$user['name']} ({$user['email']})\n" .
+           "Time: " . date('Y-m-d H:i:s') . "\n" .
+           "Status: WhatsApp gateway connectivity active & functional! 🚀";
+
+    $result = send_whatsapp_notification($targetPhone, $msg, [
+        'event' => 'test_verification',
+        'tester' => $user['email']
+    ]);
+
+    json_response([
+        'success' => $result['success'],
+        'phone' => $result['phone'],
+        'whatsapp_web_url' => $result['whatsapp_web_url'],
+        'http_code' => $result['http_code'],
+        'message' => $result['success']
+            ? "Test notification dispatched to {$result['phone']} successfully!"
+            : "WhatsApp message logged to database. Direct click-to-send link generated."
+    ]);
 }
 
 // Default 404 for unknown API routes

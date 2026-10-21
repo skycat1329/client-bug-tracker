@@ -150,11 +150,11 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2.5 w-full sm:w-auto">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
             <button
               disabled={actionLoading}
               onClick={() => handleStatusChange('CLOSED', 'Client verified fix and confirmed resolution.')}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors text-center cursor-pointer"
             >
               Confirm Resolved & Close
             </button>
@@ -166,7 +166,7 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
                   handleStatusChange('IN PROGRESS', `Reopened by client: ${reason}`);
                 }
               }}
-              className="px-4 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-700 text-xs font-bold rounded-lg transition-colors"
+              className="px-4 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-700 text-xs font-bold rounded-lg transition-colors text-center cursor-pointer"
             >
               Issue Persists / Reopen
             </button>
@@ -381,7 +381,7 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
             className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
           />
 
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <input
                 type="file"
@@ -391,17 +391,17 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
               />
               <label
                 htmlFor="comment-file"
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 cursor-pointer"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50 cursor-pointer"
               >
                 <Upload size={13} />
-                {replyFile ? replyFile.name : 'Attach file'}
+                <span className="truncate">{replyFile ? replyFile.name : 'Attach file'}</span>
               </label>
             </div>
 
             <button
               type="submit"
               disabled={submittingReply || (!replyText.trim() && !replyFile)}
-              className="inline-flex items-center gap-2 px-5 py-2 bg-[#0176D3] hover:bg-[#014486] disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#0176D3] hover:bg-[#014486] disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors cursor-pointer"
             >
               <Send size={13} />
               {submittingReply ? 'Sending...' : 'Send Reply'}

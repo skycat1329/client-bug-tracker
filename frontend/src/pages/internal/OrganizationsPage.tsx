@@ -33,6 +33,7 @@ export const OrganizationsPage: React.FC = () => {
   const [orgName, setOrgName] = useState('');
   const [orgContactName, setOrgContactName] = useState('');
   const [orgContactEmail, setOrgContactEmail] = useState('');
+  const [orgPhone, setOrgPhone] = useState('');
   const [orgInitialPassword, setOrgInitialPassword] = useState('');
   const [orgWebsiteUrl, setOrgWebsiteUrl] = useState('');
   const [orgSheetUrlInput, setOrgSheetUrlInput] = useState('');
@@ -44,6 +45,7 @@ export const OrganizationsPage: React.FC = () => {
     name: '',
     contact_name: '',
     contact_email: '',
+    phone: '',
     website_url: '',
     google_sheet_url: '',
     status: 'active',
@@ -152,6 +154,7 @@ export const OrganizationsPage: React.FC = () => {
         name: orgName.trim(),
         contact_name: orgContactName.trim() || undefined,
         contact_email: orgContactEmail.trim() || undefined,
+        phone: orgPhone.trim() || undefined,
         initial_password: orgInitialPassword || undefined,
         website_url: orgWebsiteUrl.trim() || undefined,
         google_sheet_url: orgSheetUrlInput.trim() || undefined,
@@ -169,6 +172,7 @@ export const OrganizationsPage: React.FC = () => {
       setOrgName('');
       setOrgContactName('');
       setOrgContactEmail('');
+      setOrgPhone('');
       setOrgInitialPassword('');
       setOrgWebsiteUrl('');
       setOrgSheetUrlInput('');
@@ -222,6 +226,7 @@ export const OrganizationsPage: React.FC = () => {
         name: editForm.name.trim(),
         contact_name: editForm.contact_name.trim() || null,
         contact_email: editForm.contact_email.trim() || null,
+        phone: editForm.phone.trim() || null,
         website_url: editForm.website_url.trim() || null,
         google_sheet_url: editForm.google_sheet_url.trim() || null,
         status: editForm.status || 'active',
@@ -461,6 +466,15 @@ export const OrganizationsPage: React.FC = () => {
                             </span>
                           </>
                         )}
+                        {org.phone && (
+                          <>
+                            <span>•</span>
+                            <span className="text-emerald-700 font-medium inline-flex items-center gap-1">
+                              <span>💬</span>
+                              <span>{org.phone}</span>
+                            </span>
+                          </>
+                        )}
                         <span>•</span>
                         <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -479,6 +493,7 @@ export const OrganizationsPage: React.FC = () => {
                           name: org.name,
                           contact_name: org.contact_name || '',
                           contact_email: org.contact_email || '',
+                          phone: org.phone || '',
                           website_url: org.website_url || '',
                           google_sheet_url: org.google_sheet_url || '',
                           status: org.status || 'active',
@@ -710,7 +725,7 @@ export const OrganizationsPage: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
                     Contact Person Name
@@ -733,6 +748,18 @@ export const OrganizationsPage: React.FC = () => {
                     onChange={(e) => setOrgContactEmail(e.target.value)}
                     placeholder="sarah@acme.com"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    WhatsApp Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    value={orgPhone}
+                    onChange={(e) => setOrgPhone(e.target.value)}
+                    placeholder="+919876543210"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>
@@ -821,7 +848,7 @@ export const OrganizationsPage: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
                     Contact Person Name
@@ -844,6 +871,18 @@ export const OrganizationsPage: React.FC = () => {
                     onChange={(e) => setEditForm({ ...editForm, contact_email: e.target.value })}
                     placeholder="contact@brand.com"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    WhatsApp Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    placeholder="+919876543210"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>

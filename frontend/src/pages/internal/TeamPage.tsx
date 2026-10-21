@@ -23,6 +23,7 @@ interface TeamMember {
   id: string;
   name: string;
   email: string;
+  phone?: string | null;
   role: 'super_admin' | 'support_manager' | 'developer';
   custom_role?: string | null;
   created_at: string;
@@ -41,6 +42,7 @@ export const TeamPage: React.FC = () => {
   const [memberForm, setMemberForm] = useState({
     name: '',
     email: '',
+    phone: '',
     password: '',
     role: 'developer',
     custom_role: '',
@@ -52,6 +54,7 @@ export const TeamPage: React.FC = () => {
   const [editMemberForm, setEditMemberForm] = useState({
     name: '',
     email: '',
+    phone: '',
     role: 'developer',
     custom_role: '',
     password: '',
@@ -133,13 +136,14 @@ export const TeamPage: React.FC = () => {
       await api.post('/auth/create-user', {
         name: memberForm.name.trim(),
         email: memberForm.email.trim(),
+        phone: memberForm.phone.trim() || undefined,
         password: memberForm.password,
         role: baseRole,
         custom_role: customRoleLabel || memberForm.custom_role.trim() || undefined,
       });
 
       setSuccess(`Account for ${memberForm.name} created successfully! Login credentials have been automatically emailed to ${memberForm.email}.`);
-      setMemberForm({ name: '', email: '', password: '', role: 'developer', custom_role: '' });
+      setMemberForm({ name: '', email: '', phone: '', password: '', role: 'developer', custom_role: '' });
       setShowAddMemberModal(false);
       await loadData();
     } catch (err: any) {
@@ -177,6 +181,7 @@ export const TeamPage: React.FC = () => {
     setEditMemberForm({
       name: member.name,
       email: member.email,
+      phone: member.phone || '',
       role: member.role,
       custom_role: member.custom_role || '',
       password: '',
@@ -201,6 +206,7 @@ export const TeamPage: React.FC = () => {
       const payload: any = {
         name: editMemberForm.name.trim(),
         email: editMemberForm.email.trim(),
+        phone: editMemberForm.phone.trim() || null,
         role: baseRole,
         custom_role: customRoleLabel || editMemberForm.custom_role.trim() || null,
       };
@@ -472,7 +478,13 @@ export const TeamPage: React.FC = () => {
                           </div>
                         </td>
                         <td className="py-4 px-6 text-slate-600 font-mono text-xs">
-                          {member.email}
+                          <div>{member.email}</div>
+                          {member.phone && (
+                            <div className="text-[11px] text-emerald-700 flex items-center gap-1 mt-0.5 font-sans">
+                              <span>💬</span>
+                              <span>{member.phone}</span>
+                            </div>
+                          )}
                         </td>
                         <td className="py-4 px-6">{getRoleBadge(member.role, member.custom_role)}</td>
                         <td className="py-4 px-6 text-center">
@@ -692,6 +704,19 @@ export const TeamPage: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  WhatsApp Phone Number (Optional)
+                </label>
+                <input
+                  type="tel"
+                  value={memberForm.phone}
+                  onChange={(e) => setMemberForm({ ...memberForm, phone: e.target.value })}
+                  placeholder="+919876543210"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Password *
                 </label>
                 <input
@@ -779,6 +804,19 @@ export const TeamPage: React.FC = () => {
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, email: e.target.value })}
                   placeholder="name@assurancemedia.in"
                   className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  WhatsApp Phone Number (Optional)
+                </label>
+                <input
+                  type="tel"
+                  value={editMemberForm.phone}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, phone: e.target.value })}
+                  placeholder="+919876543210"
+                  className="w-full px-3 py-2 border rounded-lg text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-[#0176D3]"
                 />
               </div>
 

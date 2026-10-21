@@ -1,8 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.js';
-import { LogOut, Bug, ChevronDown, Check, UserCircle2, Shield, Code, UserCheck } from 'lucide-react';
+import { LogOut, Bug, ChevronDown, Check, UserCircle2, Shield, Code, UserCheck, Menu } from 'lucide-react';
 
-export const Navbar: React.FC = () => {
+interface NavbarProps {
+  onToggleMobileMenu?: () => void;
+}
+
+export const Navbar: React.FC<NavbarProps> = ({ onToggleMobileMenu }) => {
   const { user, logout, switchDemoUser, demoUsers } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -45,18 +49,27 @@ export const Navbar: React.FC = () => {
   };
 
   return (
-    <header className="h-14 bg-[#0176D3] text-white px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40 shadow-md">
+    <header className="h-14 bg-[#0176D3] text-white px-3 sm:px-6 flex items-center justify-between sticky top-0 z-40 shadow-md">
       {/* Brand & Title (Assurance Media Header) */}
-      <div className="flex items-center gap-3">
-        <div className="h-9 px-2.5 py-1 rounded-lg bg-white shadow-sm flex items-center justify-center">
+      <div className="flex items-center gap-2 sm:gap-3">
+        {onToggleMobileMenu && (
+          <button
+            onClick={onToggleMobileMenu}
+            className="md:hidden p-2 -ml-1 text-white/90 hover:text-white hover:bg-white/15 rounded-lg transition-colors cursor-pointer"
+            aria-label="Toggle Navigation Menu"
+          >
+            <Menu size={20} />
+          </button>
+        )}
+        <div className="h-8 sm:h-9 px-2 sm:px-2.5 py-1 rounded-lg bg-white shadow-sm flex items-center justify-center">
           <img
             src="/assurance-media-logo.jpg"
             alt="Assurance Media"
-            className="h-6 object-contain"
+            className="h-5 sm:h-6 object-contain"
           />
         </div>
         <div className="flex items-center gap-2">
-          <span className="font-bold text-white text-base tracking-tight">Assurance Media</span>
+          <span className="font-bold text-white text-sm sm:text-base tracking-tight truncate max-w-[130px] sm:max-w-none">Assurance Media</span>
           <span className="hidden md:inline-block text-[11px] font-semibold uppercase px-2 py-0.5 rounded bg-white/15 text-white/90 border border-white/20">
             {user?.role === 'client' ? (user?.organization_name || 'Brand Portal') : 'Agency Command Center'}
           </span>

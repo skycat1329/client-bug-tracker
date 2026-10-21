@@ -40,6 +40,12 @@ define('SLACK_CHANNEL_RESOLUTIONS', '#ticket-resolutions');
 // Google Sheets Webhook URL (Optional global fallback, or configure dynamically in Web UI)
 define('GOOGLE_SHEETS_WEBHOOK_URL', '');
 
+// WhatsApp Gateway / Webhook Notification Settings
+define('WHATSAPP_ENABLED', true);
+define('WHATSAPP_GATEWAY_URL', '');
+define('WHATSAPP_API_KEY', '');
+define('WHATSAPP_DEFAULT_ADMIN_PHONE', '+919999999999');
+
 // Storage directory for attachments
 define('UPLOAD_DIR', __DIR__ . '/../uploads');
 if (!is_dir(UPLOAD_DIR)) {

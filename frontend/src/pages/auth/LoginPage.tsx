@@ -91,8 +91,8 @@ export const LoginPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4">
-          <div className="bg-white py-8 px-6 sm:px-10 rounded-2xl shadow-md border border-slate-200 space-y-6">
+        <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
+          <div className="bg-white py-8 px-5 sm:px-10 rounded-2xl shadow-md border border-slate-200 space-y-6">
             {error && (
               <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2.5">
                 <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />

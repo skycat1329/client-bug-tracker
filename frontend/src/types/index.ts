@@ -15,6 +15,7 @@ export type TicketPriority = 'P1' | 'P2' | 'P3' | 'P4';
 export interface User {
   id: string;
   email: string;
+  phone?: string | null;
   name: string;
   role: UserRole;
   custom_role?: string | null;
@@ -41,6 +42,7 @@ export interface Organization {
   slug: string;
   contact_name?: string | null;
   contact_email?: string | null;
+  phone?: string | null;
   website_url?: string | null;
   google_sheet_url?: string | null;
   status?: string | null;

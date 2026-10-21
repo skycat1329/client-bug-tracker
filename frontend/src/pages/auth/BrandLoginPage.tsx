@@ -57,7 +57,7 @@ export const BrandLoginPage: React.FC = () => {
         </div>
 
         <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
-          <div className="bg-white py-8 px-6 sm:px-10 rounded-2xl shadow-md border border-slate-200 space-y-6">
+          <div className="bg-white py-8 px-5 sm:px-10 rounded-2xl shadow-md border border-slate-200 space-y-6">
             {/* First-time help banner */}
             <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-blue-900 text-xs flex items-start gap-2.5">
               <ShieldCheck size={16} className="flex-shrink-0 mt-0.5 text-blue-600" />

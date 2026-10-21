@@ -164,70 +164,122 @@ export const CustomerTicketsPage: React.FC<CustomerTicketsPageProps> = ({
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3 px-4">Ticket</th>
-                  <th className="py-3 px-4">Title & Website</th>
-                  <th className="py-3 px-4">Priority</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Support Contact</th>
-                  <th className="py-3 px-4">Created</th>
-                  <th className="py-3 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredTickets.map((t) => (
-                  <tr
-                    key={t.id}
-                    onClick={() => onSelectTicket(t.id)}
-                    className="hover:bg-blue-50/40 transition-colors cursor-pointer group"
-                  >
-                    <td className="py-3.5 px-4 font-mono font-semibold text-blue-600 text-xs">
+          <>
+            {/* Mobile Card View (Screens < 640px) */}
+            <div className="sm:hidden divide-y divide-slate-100">
+              {filteredTickets.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => onSelectTicket(t.id)}
+                  className="p-4 hover:bg-blue-50/50 active:bg-blue-100/50 transition-colors cursor-pointer space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-md border border-blue-200">
                       {t.ticket_number}
-                    </td>
-                    <td className="py-3.5 px-4 max-w-md">
-                      <div className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">
-                        {t.title}
-                      </div>
-                      <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2">
-                        <span>{t.website_name || 'Website'}</span>
-                        <span>•</span>
-                        <span className="capitalize">{t.environment}</span>
-                        <span>•</span>
-                        <span>{t.category}</span>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4">
+                    </span>
+                    <div className="flex items-center gap-1.5">
                       <PriorityBadge priority={t.priority} size="sm" />
-                    </td>
-                    <td className="py-3.5 px-4">
                       <StatusBadge status={t.status} size="sm" />
-                    </td>
-                    <td className="py-3.5 px-4 text-xs text-slate-600">
-                      {t.assignee_name ? (
-                        <span className="font-medium text-slate-800">👤 {t.assignee_name}</span>
-                      ) : (
-                        <span className="text-slate-400 italic">In agency triage</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4 text-xs text-slate-400">
+                    </div>
+                  </div>
+
+                  <div className="font-semibold text-slate-900 text-sm leading-snug">
+                    {t.title}
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-slate-500 pt-0.5">
+                    <div className="flex items-center gap-1.5 truncate max-w-[210px]">
+                      <span>🌐</span>
+                      <span className="truncate">{t.website_name || 'Website'}</span>
+                      <span>•</span>
+                      <span className="capitalize">{t.environment}</span>
+                    </div>
+                    <div className="text-slate-400 font-medium flex-shrink-0">
                       {new Date(t.created_at).toLocaleDateString(undefined, {
                         month: 'short',
                         day: 'numeric',
                       })}
-                    </td>
-                    <td className="py-3.5 px-4 text-right text-xs">
-                      <span className="text-blue-600 group-hover:underline font-medium inline-flex items-center gap-1">
-                        View <ExternalLink size={12} />
-                      </span>
-                    </td>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-50">
+                    <span className="text-slate-600 font-medium">
+                      {t.assignee_name ? `👤 ${t.assignee_name}` : '⏳ Agency triage'}
+                    </span>
+                    <span className="text-blue-600 font-bold flex items-center gap-1">
+                      View Details &rarr;
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table View (Screens >= 640px) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    <th className="py-3 px-4">Ticket</th>
+                    <th className="py-3 px-4">Title & Website</th>
+                    <th className="py-3 px-4">Priority</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Support Contact</th>
+                    <th className="py-3 px-4">Created</th>
+                    <th className="py-3 px-4 text-right">Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredTickets.map((t) => (
+                    <tr
+                      key={t.id}
+                      onClick={() => onSelectTicket(t.id)}
+                      className="hover:bg-blue-50/40 transition-colors cursor-pointer group"
+                    >
+                      <td className="py-3.5 px-4 font-mono font-semibold text-blue-600 text-xs">
+                        {t.ticket_number}
+                      </td>
+                      <td className="py-3.5 px-4 max-w-md">
+                        <div className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">
+                          {t.title}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2">
+                          <span>{t.website_name || 'Website'}</span>
+                          <span>•</span>
+                          <span className="capitalize">{t.environment}</span>
+                          <span>•</span>
+                          <span>{t.category}</span>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <PriorityBadge priority={t.priority} size="sm" />
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <StatusBadge status={t.status} size="sm" />
+                      </td>
+                      <td className="py-3.5 px-4 text-xs text-slate-600">
+                        {t.assignee_name ? (
+                          <span className="font-medium text-slate-800">👤 {t.assignee_name}</span>
+                        ) : (
+                          <span className="text-slate-400 italic">In agency triage</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 text-xs text-slate-400">
+                        {new Date(t.created_at).toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </td>
+                      <td className="py-3.5 px-4 text-right text-xs">
+                        <span className="text-blue-600 group-hover:underline font-medium inline-flex items-center gap-1">
+                          View <ExternalLink size={12} />
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>
