@@ -155,7 +155,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLockTerminal }) => {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@agency.com"
+                      placeholder="admin@assurancemedia.com"
                       autoFocus
                       className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all placeholder-slate-600"
                     />

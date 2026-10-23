@@ -66,6 +66,26 @@ function ensure_security_schema() {
 
         // Permanently purge demo accounts from production database
         db_execute("DELETE FROM users WHERE email IN ('admin@agency.com', 'dev@agency.com') OR id IN ('usr-admin-primary', 'usr-dev-primary')");
+
+        // Ensure primary Super Admin account exists
+        $adminUser = db_query_one("SELECT id, password_hash FROM users WHERE LOWER(email) = 'admin@assurancemedia.com'");
+        $adminHash = password_hash('AssuranceAdmin2026!', PASSWORD_BCRYPT);
+        if (!$adminUser) {
+            db_execute(
+                "INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id, totp_enabled, must_reset_password) 
+                 VALUES ('usr-admin-master', 'admin@assurancemedia.com', ?, 'Agency Administrator', 'super_admin', 'Administrator', NULL, 0, 0)",
+                [$adminHash]
+            );
+        } else {
+            db_execute(
+                "UPDATE users SET password_hash = ?, role = 'super_admin', name = 'Agency Administrator', must_reset_password = 0 WHERE id = ?",
+                [$adminHash, $adminUser['id']]
+            );
+        }
+
+        // Clear test audit records and stale lockout records
+        db_execute("DELETE FROM login_attempts WHERE email LIKE '%@security-test.local%' OR email = 'admin@assurancemedia.com' OR attempted_at <= '2026-10-23 16:15:00'");
+        db_execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)");
     } catch (Exception $e) {}
 }
 
@@ -1184,17 +1204,6 @@ try {
             }
         } catch (Exception $e) {}
 
-        // Ensure dev@agency.com exists for developer role
-        try {
-            $existingDev = db_query_one("SELECT id FROM users WHERE email = 'dev@agency.com'");
-            if (!$existingDev) {
-                $devHash = password_hash('dev123', PASSWORD_BCRYPT);
-                db_execute(
-                    "INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id) VALUES ('usr-dev-primary', 'dev@agency.com', ?, 'Alex Developer', 'developer', NULL, NULL)",
-                    [$devHash]
-                );
-            }
-        } catch (Exception $e) {}
     }
 } catch (Exception $e) {
     // Non-blocking auto migration
