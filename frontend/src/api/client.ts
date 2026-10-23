@@ -49,9 +49,7 @@ async function request<T>(
 
     // Handle token expiration or unauthorized (401)
     if (response.status === 401) {
-      const isAuthRoute =
-        endpoint.includes('/auth/login') ||
-        endpoint.includes('/auth/force-reset-password');
+      const isAuthRoute = endpoint.startsWith('/auth/');
       if (!isAuthRoute) {
         console.warn('Session expired or unauthorized (401) on:', endpoint);
         localStorage.removeItem('token');

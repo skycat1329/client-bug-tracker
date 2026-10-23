@@ -66,96 +66,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     portal?: 'brand' | 'admin',
     totpCode?: string
   ): Promise<LoginResult> => {
-    setLoading(true);
-    try {
-      const res = await api.post<{
-        token?: string;
-        user?: User;
-        require_2fa?: boolean;
-        setup_2fa?: boolean;
-        temp_token?: string;
-        totp_secret?: string;
-        totp_uri?: string;
-      }>('/auth/login', {
-        email,
-        password,
-        portal,
-        totp_code: totpCode,
-      });
+    const res = await api.post<{
+      token?: string;
+      user?: User;
+      require_2fa?: boolean;
+      setup_2fa?: boolean;
+      temp_token?: string;
+      totp_secret?: string;
+      totp_uri?: string;
+    }>('/auth/login', {
+      email,
+      password,
+      portal,
+      totp_code: totpCode,
+    });
 
-      if (res.require_2fa || res.setup_2fa) {
-        return res;
-      }
-
-      if (res.token && res.user) {
-        localStorage.setItem('token', res.token);
-        setToken(res.token);
-        setUser(res.user);
-      }
+    if (res.require_2fa || res.setup_2fa) {
       return res;
-    } finally {
-      setLoading(false);
     }
+
+    if (res.token && res.user) {
+      localStorage.setItem('token', res.token);
+      setToken(res.token);
+      setUser(res.user);
+    }
+    return res;
   };
 
   const verify2FA = async (tempToken: string, totpCode: string): Promise<User> => {
-    setLoading(true);
-    try {
-      const res = await api.post<{ token: string; user: User }>('/auth/2fa/verify', {
-        temp_token: tempToken,
-        totp_code: totpCode,
-      });
-      localStorage.setItem('token', res.token);
-      setToken(res.token);
-      setUser(res.user);
-      return res.user;
-    } finally {
-      setLoading(false);
-    }
+    const res = await api.post<{ token: string; user: User }>('/auth/2fa/verify', {
+      temp_token: tempToken,
+      totp_code: totpCode,
+    });
+    localStorage.setItem('token', res.token);
+    setToken(res.token);
+    setUser(res.user);
+    return res.user;
   };
 
   const setup2FA = async (tempToken: string, totpCode: string): Promise<User> => {
-    setLoading(true);
-    try {
-      const res = await api.post<{ token: string; user: User }>('/auth/2fa/setup', {
-        temp_token: tempToken,
-        totp_code: totpCode,
-      });
-      localStorage.setItem('token', res.token);
-      setToken(res.token);
-      setUser(res.user);
-      return res.user;
-    } finally {
-      setLoading(false);
-    }
+    const res = await api.post<{ token: string; user: User }>('/auth/2fa/setup', {
+      temp_token: tempToken,
+      totp_code: totpCode,
+    });
+    localStorage.setItem('token', res.token);
+    setToken(res.token);
+    setUser(res.user);
+    return res.user;
   };
 
   const forceResetPassword = async (newPassword: string) => {
-    setLoading(true);
-    try {
-      const res = await api.post<{ token: string; user: User; message: string }>('/auth/force-reset-password', {
-        new_password: newPassword,
-      });
-      if (res.token) {
-        localStorage.setItem('token', res.token);
-        setToken(res.token);
-      }
-      setUser(res.user);
-    } finally {
-      setLoading(false);
+    const res = await api.post<{ token: string; user: User; message: string }>('/auth/force-reset-password', {
+      new_password: newPassword,
+    });
+    if (res.token) {
+      localStorage.setItem('token', res.token);
+      setToken(res.token);
     }
+    setUser(res.user);
   };
 
   const register = async (data: any) => {
-    setLoading(true);
-    try {
-      const res = await api.post<{ token: string; user: User }>('/auth/register', data);
-      localStorage.setItem('token', res.token);
-      setToken(res.token);
-      setUser(res.user);
-    } finally {
-      setLoading(false);
-    }
+    const res = await api.post<{ token: string; user: User }>('/auth/register', data);
+    localStorage.setItem('token', res.token);
+    setToken(res.token);
+    setUser(res.user);
   };
 
   const logout = () => {

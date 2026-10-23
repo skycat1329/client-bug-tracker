@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
-import { Lock, Mail, AlertCircle, Shield, ArrowLeft, KeyRound, QrCode, CheckCircle2 } from 'lucide-react';
+import { Lock, Mail, AlertCircle, Shield, ArrowLeft, KeyRound, QrCode, CheckCircle2, Copy } from 'lucide-react';
 
 interface LoginPageProps {
   onLockTerminal?: () => void;
@@ -13,6 +13,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLockTerminal }) => {
   const [totpCode, setTotpCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // 2FA state: 'login' | 'verify_2fa' | 'setup_2fa'
   const [step, setStep] = useState<'login' | 'verify_2fa' | 'setup_2fa'>('login');
@@ -96,6 +97,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLockTerminal }) => {
       setError(err.message || 'Invalid email, password, or authentication code');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCopySecret = () => {
+    if (setupSecret) {
+      navigator.clipboard.writeText(setupSecret);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -253,10 +262,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLockTerminal }) => {
                 </div>
 
                 <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-center">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Manual Setup Key (Base32)
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
+                    <span>Manual Setup Key (Base32)</span>
+                    <button
+                      type="button"
+                      onClick={handleCopySecret}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 font-bold cursor-pointer"
+                    >
+                      {copied ? <CheckCircle2 size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                      <span>{copied ? 'Copied!' : 'Copy Key'}</span>
+                    </button>
                   </div>
-                  <div className="font-mono text-xs font-bold text-amber-300 tracking-wider select-all break-all py-1">
+                  <div className="font-mono text-sm font-bold text-amber-300 tracking-wider select-all break-all py-1.5 bg-slate-900/90 rounded px-2 mt-1 border border-amber-900/30">
                     {setupSecret}
                   </div>
                 </div>
