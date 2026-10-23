@@ -383,7 +383,7 @@ export const OrganizationsPage: React.FC = () => {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="py-6 px-4 sm:p-8 max-w-7xl mx-auto space-y-6">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

@@ -18,7 +18,7 @@ export const BrandLoginPage: React.FC = () => {
       if (!email.trim() || !password) {
         throw new Error('Please enter both your brand email and password');
       }
-      await login(email.trim(), password);
+      await login(email.trim(), password, 'brand');
     } catch (err: any) {
       if (err.details && Array.isArray(err.details)) {
         setError(err.details.map((d: any) => d.message).join(' • '));

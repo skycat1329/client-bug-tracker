@@ -46,6 +46,9 @@ define('WHATSAPP_GATEWAY_URL', '');
 define('WHATSAPP_API_KEY', '');
 define('WHATSAPP_DEFAULT_ADMIN_PHONE', '+919999999999');
 
+// Agency Command Center Master Security Key
+define('AGENCY_ACCESS_KEY', 'assurance2026');
+
 // Storage directory for attachments
 define('UPLOAD_DIR', __DIR__ . '/../uploads');
 if (!is_dir(UPLOAD_DIR)) {

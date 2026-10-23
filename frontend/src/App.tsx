@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { LayoutDashboard, Ticket, UserCheck, Menu, PlusCircle } from 'lucide-react';
 import { useAuth } from './context/AuthContext.js';
 import { Navbar } from './components/Navbar.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -22,6 +23,7 @@ import { SlackHealthPage } from './pages/internal/SlackHealthPage.js';
 import { AuditLogsPage } from './pages/internal/AuditLogsPage.js';
 import { GoogleSheetsPage } from './pages/internal/GoogleSheetsPage.js';
 import { QueuesPage } from './pages/internal/QueuesPage.js';
+import { AdminSecurityGate } from './components/AdminSecurityGate.js';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
@@ -29,16 +31,70 @@ export const App: React.FC = () => {
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  // Sync currentView when switching between client and internal roles (must be called unconditionally)
+  // Agency Security Passcode detection from URL query parameters (e.g. ?agency_key=assurance2026 or ?key=assurance2026)
+  const [agencyUnlocked, setAgencyUnlocked] = useState<boolean>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const keyParam = params.get('agency_key') || params.get('key');
+      if (keyParam === 'assurance2026') {
+        sessionStorage.setItem('agency_portal_unlocked', 'true');
+        sessionStorage.setItem('agency_access_key', keyParam);
+        return true;
+      }
+      return sessionStorage.getItem('agency_portal_unlocked') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const isAdminRoute = () => {
+    const path = window.location.pathname.toLowerCase();
+    const search = window.location.search.toLowerCase();
+    return (
+      path.includes('/admin') ||
+      path.includes('/agency') ||
+      path.includes('/staff') ||
+      search.includes('portal=admin') ||
+      search.includes('agency_key=')
+    );
+  };
+
+  // Strict route & view jailing for client brands
   useEffect(() => {
     if (user?.role === 'client') {
+      const path = window.location.pathname.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (
+        path.includes('/admin') ||
+        path.includes('/agency') ||
+        path.includes('/staff') ||
+        search.includes('portal=admin') ||
+        search.includes('agency_key=')
+      ) {
+        window.history.replaceState(null, '', '/');
+      }
       if (!['tickets', 'new-ticket', 'ticket-detail'].includes(currentView)) {
         setCurrentView('tickets');
       }
-    } else if (user && !['overview', 'tickets', 'my-tickets', 'ticket-detail', 'queues', 'organizations', 'team', 'routing', 'sheets', 'slack', 'audit'].includes(currentView)) {
+    } else if (
+      user &&
+      ![
+        'overview',
+        'tickets',
+        'my-tickets',
+        'ticket-detail',
+        'queues',
+        'organizations',
+        'team',
+        'routing',
+        'sheets',
+        'slack',
+        'audit',
+      ].includes(currentView)
+    ) {
       setCurrentView('overview');
     }
-  }, [user, user?.role]);
+  }, [user, user?.role, currentView]);
 
   if (loading) {
     return (
@@ -50,22 +106,38 @@ export const App: React.FC = () => {
     );
   }
 
-  const isBrandRoute = () => {
-    const path = window.location.pathname.toLowerCase();
-    const search = window.location.search.toLowerCase();
-    return (
-      path.includes('/brand') ||
-      path.includes('/client') ||
-      search.includes('portal=brand') ||
-      search.includes('portal=client')
-    );
-  };
-
+  // Unauthenticated user routing:
+  // Brand Login is the STRICT DEFAULT for all visitors.
+  // The Admin Command Center is protected by the Agency Security Gate.
   if (!user) {
-    if (isBrandRoute()) {
-      return <BrandLoginPage />;
+    if (isAdminRoute()) {
+      if (!agencyUnlocked) {
+        return (
+          <AdminSecurityGate
+            onUnlock={() => setAgencyUnlocked(true)}
+            onReturnToBrand={() => {
+              window.history.replaceState(null, '', '/');
+              setAgencyUnlocked(false);
+              window.location.href = '/';
+            }}
+          />
+        );
+      }
+      return (
+        <LoginPage
+          onLockTerminal={() => {
+            setAgencyUnlocked(false);
+            sessionStorage.removeItem('agency_portal_unlocked');
+            sessionStorage.removeItem('agency_access_key');
+            window.history.replaceState(null, '', '/');
+            window.location.href = '/';
+          }}
+        />
+      );
     }
-    return <LoginPage />;
+
+    // Default for everyone: Dedicated Client Brand Portal
+    return <BrandLoginPage />;
   }
 
   // Mandatory first-time password reset gate
@@ -107,7 +179,7 @@ export const App: React.FC = () => {
           onCloseMobile={() => setMobileNavOpen(false)}
         />
 
-        <main className={`flex-1 overflow-y-auto bg-slate-50 ${isClient ? 'pb-16 sm:pb-0' : ''}`}>
+        <main className="flex-1 overflow-y-auto bg-slate-50 pb-16 sm:pb-0">
           {/* Customer Portal Views */}
           {isClient && (
             <>
@@ -185,7 +257,7 @@ export const App: React.FC = () => {
                 : 'text-slate-500'
             }`}
           >
-            <span className="text-base">🎫</span>
+            <Ticket size={18} />
             <span className="text-[10px]">My Tickets</span>
           </button>
 
@@ -196,7 +268,7 @@ export const App: React.FC = () => {
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-full text-xs font-bold shadow-md shadow-blue-500/30"
           >
-            <span>+</span>
+            <PlusCircle size={15} />
             <span>Report Bug</span>
           </button>
 
@@ -204,8 +276,60 @@ export const App: React.FC = () => {
             onClick={() => setMobileNavOpen(true)}
             className="flex flex-col items-center gap-0.5 text-xs font-semibold text-slate-500"
           >
-            <span className="text-base">☰</span>
+            <Menu size={18} />
             <span className="text-[10px]">Menu</span>
+          </button>
+        </div>
+      )}
+
+      {/* Mobile Bottom Navigation Bar for Internal Staff */}
+      {!isClient && (
+        <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 py-1.5 flex items-center justify-around shadow-lg">
+          <button
+            onClick={() => {
+              setSelectedTicketId(null);
+              setCurrentView('overview');
+            }}
+            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
+              currentView === 'overview' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <LayoutDashboard size={18} />
+            <span className="text-[10px] mt-0.5">Overview</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setSelectedTicketId(null);
+              setCurrentView('tickets');
+            }}
+            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
+              currentView === 'tickets' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Ticket size={18} />
+            <span className="text-[10px] mt-0.5">Queues</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setSelectedTicketId(null);
+              setCurrentView('my-tickets');
+            }}
+            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
+              currentView === 'my-tickets' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <UserCheck size={18} />
+            <span className="text-[10px] mt-0.5">My Tasks</span>
+          </button>
+
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            className="flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-700"
+          >
+            <Menu size={18} />
+            <span className="text-[10px] mt-0.5">More</span>
           </button>
         </div>
       )}

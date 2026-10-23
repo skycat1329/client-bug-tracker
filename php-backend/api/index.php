@@ -11,7 +11,7 @@ require_once __DIR__ . '/smtp.php';
 // 1. CORS Headers
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PATCH, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Agency-Key");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -1267,6 +1267,21 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         json_error('Invalid email or password', 401);
     }
 
+    $portal = strtolower(trim($input['portal'] ?? ''));
+    $headerAgencyKey = $_SERVER['HTTP_X_AGENCY_KEY'] ?? ($_SERVER['HTTP_X_AGENCY_ACCESS_KEY'] ?? '');
+    $providedAgencyKey = trim($input['agency_key'] ?? $headerAgencyKey);
+    $expectedAgencyKey = defined('AGENCY_ACCESS_KEY') ? AGENCY_ACCESS_KEY : 'assurance2026';
+
+    // Strict Security Barrier: Prohibit brand clients from accessing Admin Command Center
+    if ($portal === 'admin') {
+        if ($user['role'] === 'client') {
+            json_error('Access Denied: Brand client accounts are strictly prohibited from logging into the Agency Command Center. Please sign in via the Brand Portal.', 403);
+        }
+        if ($providedAgencyKey !== $expectedAgencyKey) {
+            json_error('Access Denied: Invalid or missing Agency Master Security Passcode.', 403);
+        }
+    }
+
     // Auto-resolve organization_id if missing for client users
     if (empty($user['organization_id'])) {
         $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
@@ -1375,8 +1390,10 @@ if ($method === 'GET' && $path === '/api/auth/me') {
     json_response(['user' => $user]);
 }
 
-// GET /api/auth/demo-users
+// GET /api/auth/demo-users (Restricted to authenticated administrators only)
 if ($method === 'GET' && $path === '/api/auth/demo-users') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
     $users = db_query(
         'SELECT u.id, u.email, u.name, u.role, u.custom_role, u.organization_id, o.name as organization_name
          FROM users u
@@ -1385,8 +1402,7 @@ if ($method === 'GET' && $path === '/api/auth/demo-users') {
     );
     json_response([
         'success' => true,
-        'users' => $users,
-        'defaultPassword' => 'password123'
+        'users' => $users
     ]);
 }
 

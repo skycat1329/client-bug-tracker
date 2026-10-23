@@ -316,9 +316,9 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
   };
 
   return (
-    <div className="bg-[#F4F6F9] min-h-[calc(100vh-3.5rem)] py-4 px-4 sm:px-6 space-y-4">
+    <div className="py-4 px-4 sm:px-6 max-w-7xl mx-auto space-y-4">
       {/* Top back button & breadcrumb navigation */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <button
           onClick={onBack}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#0176D3] transition-colors"
@@ -327,7 +327,7 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
           <span>Back to Case List</span>
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {user?.role === 'developer' && ticket.assignee_id !== user.id && (
             <button
               disabled={assigningLoading}

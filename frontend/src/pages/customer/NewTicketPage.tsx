@@ -304,18 +304,18 @@ export const NewTicketPage: React.FC<NewTicketPageProps> = ({
           </div>
 
           {/* Form Actions */}
-          <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
+          <div className="pt-4 border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-3">
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+              className="w-full sm:w-auto px-4 py-2.5 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors text-center"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="px-6 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm shadow-blue-500/20"
+              className="w-full sm:w-auto px-6 py-2.5 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm shadow-blue-500/20 text-center"
             >
               {submitting ? 'Submitting Report...' : 'Submit Bug Report'}
             </button>

@@ -194,10 +194,10 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1 sm:pb-0 sm:flex-wrap">
           <button
             onClick={() => setSelectedQueue('')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer ${
               selectedQueue === ''
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80'
@@ -212,7 +212,7 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
               <button
                 key={q.id}
                 onClick={() => setSelectedQueue(isSelected ? '' : q.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex-shrink-0 cursor-pointer ${
                   isSelected
                     ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
                     : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
@@ -231,7 +231,7 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
           {isAdminOrManager && (
             <button
               onClick={() => setSelectedQueue('unassigned')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex-shrink-0 cursor-pointer ${
                 selectedQueue === 'unassigned'
                   ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
                   : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
@@ -244,8 +244,8 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
       </div>
 
       {/* 2. SLA AGING COLOR TABS */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-100/70 p-2 rounded-2xl border border-slate-200/80">
-        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      <div className="flex items-center justify-between gap-3 bg-slate-100/70 p-2 rounded-2xl border border-slate-200/80 overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1.5 text-xs whitespace-nowrap overflow-x-auto scrollbar-none pb-0.5 sm:pb-0 sm:flex-wrap">
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-2">
             Aging SLA:
           </span>
@@ -402,98 +402,73 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
             <p className="text-xs text-slate-400">Try adjusting the queue, status, or search query.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3 px-4">Ticket & Queue</th>
-                  <th className="py-3 px-4">Title & Problem</th>
-                  {!isDeveloper && <th className="py-3 px-4">Brand / Client</th>}
-                  <th className="py-3 px-4">Target Website</th>
-                  <th className="py-3 px-4">Priority</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Aging SLA Color</th>
-                  <th className="py-3 px-4">Assignee</th>
-                  <th className="py-3 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredTickets.map((t) => {
-                  const sla = getTicketSla(t);
-                  return (
-                    <tr
-                      key={t.id}
-                      onClick={() => onSelectTicket(t.id)}
-                      className={`transition-colors cursor-pointer group ${sla.rowBorderLeft} ${sla.rowBg || 'hover:bg-blue-50/30'}`}
-                    >
-                      {/* Ticket Number & Queue Tag */}
-                      <td className="py-3 px-4">
-                        <div className="font-mono font-bold text-xs text-blue-600 group-hover:underline">
+          <>
+            {/* Mobile Card View (Screens < 640px) */}
+            <div className="sm:hidden divide-y divide-slate-100">
+              {filteredTickets.map((t) => {
+                const sla = getTicketSla(t);
+                return (
+                  <div
+                    key={t.id}
+                    onClick={() => onSelectTicket(t.id)}
+                    className={`p-4 transition-colors cursor-pointer space-y-2.5 active:bg-blue-50/50 ${sla.rowBorderLeft} ${sla.rowBg || 'hover:bg-slate-50'}`}
+                  >
+                    {/* Top line: Ticket #, Queue badge, Priority & Status badges */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
                           {t.ticket_number}
-                        </div>
+                        </span>
                         {t.queue_name ? (
-                          <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold text-slate-700 border border-slate-200">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold text-slate-700 border border-slate-200">
                             <Layers size={10} className="text-blue-500" />
                             <span>{t.queue_name}</span>
-                          </div>
+                          </span>
                         ) : (
-                          <div className="text-[10px] text-amber-600 font-semibold mt-0.5">
+                          <span className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
                             No Queue
-                          </div>
+                          </span>
                         )}
-                      </td>
-
-                      {/* Title & Description */}
-                      <td className="py-3 px-4 max-w-xs">
-                        <div className="font-semibold text-slate-900 group-hover:text-blue-600 truncate text-xs">
-                          {t.title}
-                        </div>
-                        <div className="text-[11px] text-slate-400 truncate mt-0.5">
-                          {t.category} &bull; {t.environment}
-                        </div>
-                      </td>
-
-                      {/* Brand Name (HIDDEN for developers, VISIBLE for Admin/Manager) */}
-                      {!isDeveloper && (
-                        <td className="py-3 px-4 text-xs">
-                          <div className="font-bold text-slate-800">{t.organization_name}</div>
-                          <div className="text-[11px] text-slate-400 truncate">{t.requester_name}</div>
-                        </td>
-                      )}
-
-                      {/* Target Website */}
-                      <td className="py-3 px-4 text-xs">
-                        <div className="font-medium text-slate-700">{t.website_name || 'Main Website'}</div>
-                        {t.website_url && (
-                          <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
-                            {t.website_url.replace(/^https?:\/\//, '')}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Priority Badge */}
-                      <td className="py-3 px-4">
+                      </div>
+                      <div className="flex items-center gap-1.5">
                         <PriorityBadge priority={t.priority} size="sm" />
-                      </td>
-
-                      {/* Status Badge */}
-                      <td className="py-3 px-4">
                         <StatusBadge status={t.status} size="sm" />
-                      </td>
+                      </div>
+                    </div>
 
-                      {/* SLA Aging Pill with user requested color coding */}
-                      <td className="py-3 px-4">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${sla.badgeBg} ${sla.badgeBorder}`}
-                          title={sla.description}
-                        >
-                          <span className={`w-2 h-2 rounded-full ${sla.dotColor}`}></span>
-                          <span>{sla.label}</span>
-                        </span>
-                      </td>
+                    {/* Title & Category */}
+                    <div>
+                      <div className="font-semibold text-slate-900 text-sm leading-snug">
+                        {t.title}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        {t.category} &bull; {t.environment}
+                      </div>
+                    </div>
 
-                      {/* Assignee & Quick Queue Reassignment */}
-                      <td className="py-3 px-4 text-xs">
+                    {/* Metadata row: SLA pill + Target Website / Brand */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap text-xs pt-0.5">
+                      <div className="flex items-center gap-1.5 text-slate-500 truncate max-w-[220px]">
+                        <span>🌐</span>
+                        <span className="truncate font-medium text-slate-700">{t.website_name || 'Main Website'}</span>
+                        {!isDeveloper && t.organization_name && (
+                          <>
+                            <span>•</span>
+                            <span className="truncate text-slate-600 font-semibold">{t.organization_name}</span>
+                          </>
+                        )}
+                      </div>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border ${sla.badgeBg} ${sla.badgeBorder}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${sla.dotColor}`}></span>
+                        <span>{sla.label}</span>
+                      </span>
+                    </div>
+
+                    {/* Bottom row: Assignee / Quick Assign + Open */}
+                    <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
+                      <div className="flex items-center gap-1.5">
                         {t.assignee_name ? (
                           <span className="font-medium text-slate-800 flex items-center gap-1">
                             <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[9px] font-bold">
@@ -506,36 +481,171 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
                             Unassigned
                           </span>
                         )}
+                      </div>
+                      <span className="text-blue-600 font-bold flex items-center gap-1">
+                        Open <ExternalLink size={12} />
+                      </span>
+                    </div>
 
-                        {isAdminOrManager && queues.length > 0 && (
-                          <select
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => handleQuickAssignQueue(t.id, e.target.value, e as any)}
-                            value={t.queue_id || ''}
-                            className="mt-1 text-[10px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 block text-slate-600 cursor-pointer"
-                          >
-                            <option value="">Move Queue...</option>
-                            {queues.map((q) => (
-                              <option key={q.id} value={q.id}>
-                                {q.name}
-                              </option>
-                            ))}
-                          </select>
+                    {/* Quick Queue Assign on Mobile for Admins */}
+                    {isAdminOrManager && queues.length > 0 && (
+                      <div className="pt-1.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <span className="text-[10px] text-slate-400 font-medium">Queue:</span>
+                        <select
+                          value={t.queue_id || ''}
+                          onChange={(e) => handleQuickAssignQueue(t.id, e.target.value, e as any)}
+                          className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-slate-700 font-medium cursor-pointer flex-1"
+                        >
+                          <option value="">Move Queue...</option>
+                          {queues.map((q) => (
+                            <option key={q.id} value={q.id}>
+                              {q.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table View (Screens >= 640px) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <th className="py-3 px-4">Ticket & Queue</th>
+                    <th className="py-3 px-4">Title & Problem</th>
+                    {!isDeveloper && <th className="py-3 px-4">Brand / Client</th>}
+                    <th className="py-3 px-4">Target Website</th>
+                    <th className="py-3 px-4">Priority</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Aging SLA Color</th>
+                    <th className="py-3 px-4">Assignee</th>
+                    <th className="py-3 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredTickets.map((t) => {
+                    const sla = getTicketSla(t);
+                    return (
+                      <tr
+                        key={t.id}
+                        onClick={() => onSelectTicket(t.id)}
+                        className={`transition-colors cursor-pointer group ${sla.rowBorderLeft} ${sla.rowBg || 'hover:bg-blue-50/30'}`}
+                      >
+                        {/* Ticket Number & Queue Tag */}
+                        <td className="py-3 px-4">
+                          <div className="font-mono font-bold text-xs text-blue-600 group-hover:underline">
+                            {t.ticket_number}
+                          </div>
+                          {t.queue_name ? (
+                            <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold text-slate-700 border border-slate-200">
+                              <Layers size={10} className="text-blue-500" />
+                              <span>{t.queue_name}</span>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-amber-600 font-semibold mt-0.5">
+                              No Queue
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Title & Description */}
+                        <td className="py-3 px-4 max-w-xs">
+                          <div className="font-semibold text-slate-900 group-hover:text-blue-600 truncate text-xs">
+                            {t.title}
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate mt-0.5">
+                            {t.category} &bull; {t.environment}
+                          </div>
+                        </td>
+
+                        {/* Brand Name (HIDDEN for developers, VISIBLE for Admin/Manager) */}
+                        {!isDeveloper && (
+                          <td className="py-3 px-4 text-xs">
+                            <div className="font-bold text-slate-800">{t.organization_name}</div>
+                            <div className="text-[11px] text-slate-400 truncate">{t.requester_name}</div>
+                          </td>
                         )}
-                      </td>
 
-                      {/* Action */}
-                      <td className="py-3 px-4 text-right text-xs">
-                        <span className="text-blue-600 font-bold group-hover:underline inline-flex items-center gap-1">
-                          Open <ExternalLink size={12} />
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        {/* Target Website */}
+                        <td className="py-3 px-4 text-xs">
+                          <div className="font-medium text-slate-700">{t.website_name || 'Main Website'}</div>
+                          {t.website_url && (
+                            <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
+                              {t.website_url.replace(/^https?:\/\//, '')}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Priority Badge */}
+                        <td className="py-3 px-4">
+                          <PriorityBadge priority={t.priority} size="sm" />
+                        </td>
+
+                        {/* Status Badge */}
+                        <td className="py-3 px-4">
+                          <StatusBadge status={t.status} size="sm" />
+                        </td>
+
+                        {/* SLA Aging Pill with user requested color coding */}
+                        <td className="py-3 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${sla.badgeBg} ${sla.badgeBorder}`}
+                            title={sla.description}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${sla.dotColor}`}></span>
+                            <span>{sla.label}</span>
+                          </span>
+                        </td>
+
+                        {/* Assignee & Quick Queue Reassignment */}
+                        <td className="py-3 px-4 text-xs">
+                          {t.assignee_name ? (
+                            <span className="font-medium text-slate-800 flex items-center gap-1">
+                              <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[9px] font-bold">
+                                {t.assignee_name.charAt(0)}
+                              </span>
+                              <span>{t.assignee_name}</span>
+                            </span>
+                          ) : (
+                            <span className="text-rose-600 font-semibold bg-rose-50 px-2 py-0.5 rounded border border-rose-200 text-[11px]">
+                              Unassigned
+                            </span>
+                          )}
+
+                          {isAdminOrManager && queues.length > 0 && (
+                            <select
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => handleQuickAssignQueue(t.id, e.target.value, e as any)}
+                              value={t.queue_id || ''}
+                              className="mt-1 text-[10px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 block text-slate-600 cursor-pointer"
+                            >
+                              <option value="">Move Queue...</option>
+                              {queues.map((q) => (
+                                <option key={q.id} value={q.id}>
+                                  {q.name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
+
+                        {/* Action */}
+                        <td className="py-3 px-4 text-right text-xs">
+                          <span className="text-blue-600 font-bold group-hover:underline inline-flex items-center gap-1">
+                            Open <ExternalLink size={12} />
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>

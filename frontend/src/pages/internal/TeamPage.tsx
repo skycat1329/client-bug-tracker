@@ -321,7 +321,7 @@ export const TeamPage: React.FC = () => {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="py-6 px-4 sm:p-8 max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -358,7 +358,7 @@ export const TeamPage: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-200 text-sm font-medium">
+      <div className="flex border-b border-slate-200 text-sm font-medium overflow-x-auto scrollbar-none whitespace-nowrap">
         <button
           onClick={() => setActiveTab('members')}
           className={`pb-3 px-4 flex items-center gap-2 border-b-2 font-semibold transition-colors ${

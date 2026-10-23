@@ -6,7 +6,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password?: string) => Promise<User>;
+  login: (email: string, password?: string, portal?: 'brand' | 'admin', agencyKey?: string) => Promise<User>;
   register: (data: any) => Promise<void>;
   forceResetPassword: (newPassword: string) => Promise<void>;
   logout: () => void;
@@ -35,15 +35,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    // Load available demo users for quick role testing
-    api.get<{ users: any[] }>('/auth/demo-users')
-      .then((res) => setDemoUsers(res.users || []))
-      .catch((err) => console.warn('Could not load demo users:', err));
-
     // Restore session if token exists
     if (token) {
       api.get<{ user: User }>('/auth/me')
-        .then((res) => setUser(res.user))
+        .then((res) => {
+          setUser(res.user);
+          // Only fetch demo users if authenticated user is super_admin or support_manager
+          if (['super_admin', 'support_manager'].includes(res.user.role)) {
+            api.get<{ users: any[] }>('/auth/demo-users')
+              .then((demoRes) => setDemoUsers(demoRes.users || []))
+              .catch(() => {});
+          }
+        })
         .catch(() => {
           localStorage.removeItem('token');
           setToken(null);
@@ -55,12 +58,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [token]);
 
-  const login = async (email: string, password = 'password123'): Promise<User> => {
+  const login = async (
+    email: string,
+    password = 'password123',
+    portal?: 'brand' | 'admin',
+    agencyKey?: string
+  ): Promise<User> => {
     setLoading(true);
     try {
       const res = await api.post<{ token: string; user: User }>('/auth/login', {
         email,
         password,
+        portal,
+        agency_key: agencyKey,
       });
       localStorage.setItem('token', res.token);
       setToken(res.token);
