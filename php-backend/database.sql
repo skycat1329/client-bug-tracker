@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS `users` (
     `custom_role` VARCHAR(64) NULL,
     `organization_id` VARCHAR(64) NULL,
     `avatar_url` VARCHAR(500) NULL,
+    `totp_secret` VARCHAR(64) NULL,
+    `totp_enabled` TINYINT(1) DEFAULT 0,
     `must_reset_password` TINYINT(1) DEFAULT 0,
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -234,6 +236,17 @@ CREATE TABLE IF NOT EXISTS `queue_members` (
     FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 17. Login Attempts (Rate Limiting & Account Lockout)
+CREATE TABLE IF NOT EXISTS `login_attempts` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `ip_address` VARCHAR(45) NOT NULL,
+    `email` VARCHAR(191) NOT NULL,
+    `attempted_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `is_success` TINYINT(1) DEFAULT 0,
+    INDEX `idx_ip_attempt` (`ip_address`, `attempted_at`),
+    INDEX `idx_email_attempt` (`email`, `attempted_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==============================================================================
@@ -269,13 +282,3 @@ INSERT INTO `queues` (`id`, `name`, `slug`, `description`, `color`, `is_active`)
 ('q-urgent', 'Critical Escalations', 'critical-escalations', 'High priority blockers, checkout errors, server timeouts', 'rose', 1),
 ('q-general', 'General QA & Triage', 'general-qa', 'Initial bug reviews, reproduction tests, and customer QA', 'purple', 1)
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
-
--- Primary Agency Super Admin (admin@agency.com / admin123)
-INSERT INTO `users` (`id`, `email`, `password_hash`, `name`, `role`, `custom_role`, `organization_id`) VALUES
-('usr-admin-primary', 'admin@agency.com', '$2a$10$eEWJg2OgWM22CA2JdMbMyuLcn.lTHjMOQKWJ0VwKjvJjXhrRTnn1a', 'Agency Administrator', 'super_admin', NULL, NULL)
-ON DUPLICATE KEY UPDATE `email` = VALUES(`email`);
-
--- Primary Developer (dev@agency.com / dev123)
-INSERT INTO `users` (`id`, `email`, `password_hash`, `name`, `role`, `custom_role`, `organization_id`) VALUES
-('usr-dev-primary', 'dev@agency.com', '$2a$10$eEWJg2OgWM22CA2JdMbMyuLcn.lTHjMOQKWJ0VwKjvJjXhrRTnn1a', 'Alex Developer', 'developer', NULL, NULL)
-ON DUPLICATE KEY UPDATE `email` = VALUES(`email`);

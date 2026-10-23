@@ -36,9 +36,7 @@ console.log('   ✅ Copied PHP API router & database helpers into /api');
 fs.copyFileSync(path.join(phpBackend, '.htaccess'), path.join(targetDir, '.htaccess'));
 console.log('   ✅ Copied .htaccess Apache router');
 
-// 5. Copy database.sql
-fs.copyFileSync(path.join(phpBackend, 'database.sql'), path.join(targetDir, 'database.sql'));
-console.log('   ✅ Copied database.sql (MySQL Schema)');
+// 5. Database schema is kept outside web root for security
 
 // 6. Create uploads directory
 const uploadsDir = path.join(targetDir, 'uploads');

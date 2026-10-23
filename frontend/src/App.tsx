@@ -23,29 +23,12 @@ import { SlackHealthPage } from './pages/internal/SlackHealthPage.js';
 import { AuditLogsPage } from './pages/internal/AuditLogsPage.js';
 import { GoogleSheetsPage } from './pages/internal/GoogleSheetsPage.js';
 import { QueuesPage } from './pages/internal/QueuesPage.js';
-import { AdminSecurityGate } from './components/AdminSecurityGate.js';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
   const [currentView, setCurrentView] = useState('tickets');
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-
-  // Agency Security Passcode detection from URL query parameters (e.g. ?agency_key=assurance2026 or ?key=assurance2026)
-  const [agencyUnlocked, setAgencyUnlocked] = useState<boolean>(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const keyParam = params.get('agency_key') || params.get('key');
-      if (keyParam === 'assurance2026') {
-        sessionStorage.setItem('agency_portal_unlocked', 'true');
-        sessionStorage.setItem('agency_access_key', keyParam);
-        return true;
-      }
-      return sessionStorage.getItem('agency_portal_unlocked') === 'true';
-    } catch {
-      return false;
-    }
-  });
 
   const isAdminRoute = () => {
     const path = window.location.pathname.toLowerCase();
@@ -54,8 +37,7 @@ export const App: React.FC = () => {
       path.includes('/admin') ||
       path.includes('/agency') ||
       path.includes('/staff') ||
-      search.includes('portal=admin') ||
-      search.includes('agency_key=')
+      search.includes('portal=admin')
     );
   };
 
@@ -68,8 +50,7 @@ export const App: React.FC = () => {
         path.includes('/admin') ||
         path.includes('/agency') ||
         path.includes('/staff') ||
-        search.includes('portal=admin') ||
-        search.includes('agency_key=')
+        search.includes('portal=admin')
       ) {
         window.history.replaceState(null, '', '/');
       }
@@ -108,27 +89,12 @@ export const App: React.FC = () => {
 
   // Unauthenticated user routing:
   // Brand Login is the STRICT DEFAULT for all visitors.
-  // The Admin Command Center is protected by the Agency Security Gate.
+  // Staff Command Center is rendered on /admin, /staff, or ?portal=admin.
   if (!user) {
     if (isAdminRoute()) {
-      if (!agencyUnlocked) {
-        return (
-          <AdminSecurityGate
-            onUnlock={() => setAgencyUnlocked(true)}
-            onReturnToBrand={() => {
-              window.history.replaceState(null, '', '/');
-              setAgencyUnlocked(false);
-              window.location.href = '/';
-            }}
-          />
-        );
-      }
       return (
         <LoginPage
           onLockTerminal={() => {
-            setAgencyUnlocked(false);
-            sessionStorage.removeItem('agency_portal_unlocked');
-            sessionStorage.removeItem('agency_access_key');
             window.history.replaceState(null, '', '/');
             window.location.href = '/';
           }}

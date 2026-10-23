@@ -2,16 +2,25 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../api/client.js';
 import { User } from '../types/index.js';
 
+export interface LoginResult {
+  user?: User;
+  require_2fa?: boolean;
+  setup_2fa?: boolean;
+  temp_token?: string;
+  totp_secret?: string;
+  totp_uri?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password?: string, portal?: 'brand' | 'admin', agencyKey?: string) => Promise<User>;
+  login: (email: string, password?: string, portal?: 'brand' | 'admin', totpCode?: string) => Promise<LoginResult>;
+  verify2FA: (tempToken: string, totpCode: string) => Promise<User>;
+  setup2FA: (tempToken: string, totpCode: string) => Promise<User>;
   register: (data: any) => Promise<void>;
   forceResetPassword: (newPassword: string) => Promise<void>;
   logout: () => void;
-  switchDemoUser: (email: string) => Promise<void>;
-  demoUsers: (User & { organization_name?: string })[];
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -20,7 +29,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
-  const [demoUsers, setDemoUsers] = useState<any[]>([]);
 
   useEffect(() => {
     // Listen for global auth:expired event from client interceptor
@@ -40,12 +48,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       api.get<{ user: User }>('/auth/me')
         .then((res) => {
           setUser(res.user);
-          // Only fetch demo users if authenticated user is super_admin or support_manager
-          if (['super_admin', 'support_manager'].includes(res.user.role)) {
-            api.get<{ users: any[] }>('/auth/demo-users')
-              .then((demoRes) => setDemoUsers(demoRes.users || []))
-              .catch(() => {});
-          }
         })
         .catch(() => {
           localStorage.removeItem('token');
@@ -60,17 +62,64 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (
     email: string,
-    password = 'password123',
+    password = '',
     portal?: 'brand' | 'admin',
-    agencyKey?: string
-  ): Promise<User> => {
+    totpCode?: string
+  ): Promise<LoginResult> => {
     setLoading(true);
     try {
-      const res = await api.post<{ token: string; user: User }>('/auth/login', {
+      const res = await api.post<{
+        token?: string;
+        user?: User;
+        require_2fa?: boolean;
+        setup_2fa?: boolean;
+        temp_token?: string;
+        totp_secret?: string;
+        totp_uri?: string;
+      }>('/auth/login', {
         email,
         password,
         portal,
-        agency_key: agencyKey,
+        totp_code: totpCode,
+      });
+
+      if (res.require_2fa || res.setup_2fa) {
+        return res;
+      }
+
+      if (res.token && res.user) {
+        localStorage.setItem('token', res.token);
+        setToken(res.token);
+        setUser(res.user);
+      }
+      return res;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verify2FA = async (tempToken: string, totpCode: string): Promise<User> => {
+    setLoading(true);
+    try {
+      const res = await api.post<{ token: string; user: User }>('/auth/2fa/verify', {
+        temp_token: tempToken,
+        totp_code: totpCode,
+      });
+      localStorage.setItem('token', res.token);
+      setToken(res.token);
+      setUser(res.user);
+      return res.user;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setup2FA = async (tempToken: string, totpCode: string): Promise<User> => {
+    setLoading(true);
+    try {
+      const res = await api.post<{ token: string; user: User }>('/auth/2fa/setup', {
+        temp_token: tempToken,
+        totp_code: totpCode,
       });
       localStorage.setItem('token', res.token);
       setToken(res.token);
@@ -115,13 +164,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
-  const switchDemoUser = async (email: string) => {
-    let pwd = 'password123';
-    if (email === 'admin@agency.com') pwd = 'admin123';
-    if (email === 'dev@agency.com') pwd = 'dev123';
-    await login(email, pwd);
-  };
-
   return (
     <AuthContext.Provider
       value={{
@@ -129,11 +171,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         loading,
         login,
+        verify2FA,
+        setup2FA,
         register,
         forceResetPassword,
         logout,
-        switchDemoUser,
-        demoUsers,
       }}
     >
       {children}

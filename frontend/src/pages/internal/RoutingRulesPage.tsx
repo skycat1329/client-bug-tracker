@@ -5,7 +5,6 @@ import { RoutingRule, Website } from '../../types/index.js';
 import { GitBranch, Plus, Trash2, ArrowRight } from 'lucide-react';
 
 export const RoutingRulesPage: React.FC = () => {
-  const { demoUsers } = useAuth();
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [websites, setWebsites] = useState<Website[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,10 +74,9 @@ export const RoutingRulesPage: React.FC = () => {
     }
   };
 
-  const availableStaff =
-    staffUsers.length > 0
-      ? staffUsers
-      : demoUsers.filter((u) => ['developer', 'support_manager', 'super_admin'].includes(u.role));
+  const availableStaff = staffUsers.filter((u: any) =>
+    ['developer', 'support_manager', 'super_admin'].includes(u.role)
+  );
 
   return (
     <div className="py-6 px-4 sm:px-6 max-w-7xl mx-auto space-y-6">
@@ -260,7 +258,7 @@ export const RoutingRulesPage: React.FC = () => {
                 className="w-full px-3 py-2 border rounded-lg text-xs font-semibold"
               >
                 <option value="">Select Developer / Manager</option>
-                {availableStaff.map((u) => (
+                {availableStaff.map((u: any) => (
                   <option key={u.id} value={u.id}>
                     {u.name} ({u.role})
                   </option>

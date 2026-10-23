@@ -26,11 +26,6 @@ async function request<T>(
     headers['X-Auth-Token'] = token;
   }
 
-  const agencyKey = sessionStorage.getItem('agency_access_key');
-  if (agencyKey) {
-    headers['X-Agency-Key'] = agencyKey;
-  }
-
   if (!(options.body instanceof FormData) && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }

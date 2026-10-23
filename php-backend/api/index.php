@@ -7,11 +7,12 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/jwt.php';
 require_once __DIR__ . '/smtp.php';
+require_once __DIR__ . '/totp.php';
 
 // 1. CORS Headers
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PATCH, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Agency-Key");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Authorization, X-Auth-Token");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -39,6 +40,90 @@ function json_response($data, int $status = 200) {
 
 function json_error(string $message, int $status = 400, $details = null) {
     json_response(['success' => false, 'error' => $message, 'details' => $details], $status);
+}
+
+// Auto-migrate totp columns and login_attempts table if not yet present in MySQL
+function ensure_security_schema() {
+    static $ensured = false;
+    if ($ensured) return;
+    $ensured = true;
+    try {
+        db_execute("CREATE TABLE IF NOT EXISTS `login_attempts` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `ip_address` VARCHAR(45) NOT NULL,
+            `email` VARCHAR(191) NOT NULL,
+            `attempted_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `is_success` TINYINT(1) DEFAULT 0,
+            INDEX `idx_ip_attempt` (`ip_address`, `attempted_at`),
+            INDEX `idx_email_attempt` (`email`, `attempted_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        $cols = db_query("SHOW COLUMNS FROM `users` LIKE 'totp_secret'");
+        if (empty($cols)) {
+            db_execute("ALTER TABLE `users` ADD COLUMN `totp_secret` VARCHAR(64) NULL AFTER `avatar_url`");
+            db_execute("ALTER TABLE `users` ADD COLUMN `totp_enabled` TINYINT(1) DEFAULT 0 AFTER `totp_secret`");
+        }
+
+        // Permanently purge demo accounts from production database
+        db_execute("DELETE FROM users WHERE email IN ('admin@agency.com', 'dev@agency.com') OR id IN ('usr-admin-primary', 'usr-dev-primary')");
+    } catch (Exception $e) {}
+}
+
+function check_rate_limit(string $email = ''): bool {
+    ensure_security_schema();
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $email = strtolower(trim($email));
+    $window = date('Y-m-d H:i:s', time() - 900); // 15-minute sliding window
+
+    // Check failed attempts for this IP address (max 5)
+    $ipFailures = db_query_one(
+        "SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address = ? AND attempted_at >= ? AND is_success = 0",
+        [$ip, $window]
+    );
+    if (($ipFailures['cnt'] ?? 0) >= 5) {
+        return false;
+    }
+
+    // Check failed attempts for this specific account email (max 5)
+    if (!empty($email)) {
+        $emailFailures = db_query_one(
+            "SELECT COUNT(*) as cnt FROM login_attempts WHERE email = ? AND attempted_at >= ? AND is_success = 0",
+            [$email, $window]
+        );
+        if (($emailFailures['cnt'] ?? 0) >= 5) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function record_login_attempt(string $email, bool $success) {
+    ensure_security_schema();
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $email = strtolower(trim($email));
+    try {
+        db_execute(
+            "INSERT INTO login_attempts (ip_address, email, is_success) VALUES (?, ?, ?)",
+            [$ip, $email, $success ? 1 : 0]
+        );
+        if ($success) {
+            db_execute(
+                "DELETE FROM login_attempts WHERE (email = ? OR ip_address = ?) AND is_success = 0",
+                [$email, $ip]
+            );
+        }
+    } catch (Exception $e) {}
+}
+
+function auth_generic_failure(?string $email = null) {
+    if (!empty($email)) {
+        record_login_attempt($email, false);
+    }
+    json_response([
+        'success' => false,
+        'error' => 'Invalid email, password, or authentication code'
+    ], 401);
 }
 
 function get_json_input(): array {
@@ -1257,54 +1342,167 @@ if ($method === 'POST' && $path === '/api/auth/login') {
     $input = get_json_input();
     $email = strtolower(trim($input['email'] ?? ''));
     $password = $input['password'] ?? '';
+    $totpCode = trim($input['totp_code'] ?? '');
+    $portal = strtolower(trim($input['portal'] ?? ''));
 
     if (empty($email) || empty($password)) {
         json_error('Email and password are required', 400);
     }
 
+    // Rate Limiting & Account Lockout Check (Max 5 failed attempts per IP or Email in 15 mins)
+    if (!check_rate_limit($email)) {
+        json_response([
+            'success' => false,
+            'error' => 'Too many failed login attempts. Please try again in 15 minutes.'
+        ], 429);
+    }
+
     $user = db_query_one('SELECT * FROM users WHERE LOWER(TRIM(email)) = ?', [$email]);
     if (!$user || !password_verify($password, $user['password_hash'])) {
-        json_error('Invalid email or password', 401);
+        auth_generic_failure($email);
     }
 
-    $portal = strtolower(trim($input['portal'] ?? ''));
-    $headerAgencyKey = $_SERVER['HTTP_X_AGENCY_KEY'] ?? ($_SERVER['HTTP_X_AGENCY_ACCESS_KEY'] ?? '');
-    $providedAgencyKey = trim($input['agency_key'] ?? $headerAgencyKey);
-    $expectedAgencyKey = defined('AGENCY_ACCESS_KEY') ? AGENCY_ACCESS_KEY : 'assurance2026';
-
-    // Strict Security Barrier: Prohibit brand clients from accessing Admin Command Center
-    if ($portal === 'admin') {
-        if ($user['role'] === 'client') {
-            json_error('Access Denied: Brand client accounts are strictly prohibited from logging into the Agency Command Center. Please sign in via the Brand Portal.', 403);
-        }
-        if ($providedAgencyKey !== $expectedAgencyKey) {
-            json_error('Access Denied: Invalid or missing Agency Master Security Passcode.', 403);
-        }
+    // Strict Security Barrier: Prohibit brand clients from staff command center
+    if ($portal === 'admin' && $user['role'] === 'client') {
+        auth_generic_failure($email);
     }
 
-    // Auto-resolve organization_id if missing for client users
-    if (empty($user['organization_id'])) {
-        $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
-        if ($mem && !empty($mem['organization_id'])) {
-            $user['organization_id'] = $mem['organization_id'];
-            db_execute('UPDATE users SET organization_id = ? WHERE id = ?', [$mem['organization_id'], $user['id']]);
-        } elseif ($user['role'] === 'client') {
-            $orgByContact = db_query_one('SELECT id, name FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
-            if (!$orgByContact) {
-                $prefix = explode('@', $user['email'])[0];
-                $orgByContact = db_query_one('SELECT id, name FROM organizations WHERE LOWER(name) = ? OR LOWER(slug) = ? LIMIT 1', [strtolower($prefix), strtolower($prefix)]);
-            }
-            if ($orgByContact) {
-                $user['organization_id'] = $orgByContact['id'];
-                $user['organization_name'] = $orgByContact['name'];
-                db_execute('UPDATE users SET organization_id = ? WHERE id = ?', [$orgByContact['id'], $user['id']]);
-                db_execute(
-                    'INSERT INTO organization_members (id, organization_id, user_id, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE organization_id = VALUES(organization_id)',
-                    ['mem-' . time() . '-' . bin2hex(random_bytes(4)), $orgByContact['id'], $user['id'], 'owner']
-                );
+    // Brand Client Login
+    if ($user['role'] === 'client') {
+        record_login_attempt($email, true);
+
+        // Auto-resolve organization_id if missing for client users
+        if (empty($user['organization_id'])) {
+            $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
+            if ($mem && !empty($mem['organization_id'])) {
+                $user['organization_id'] = $mem['organization_id'];
+                db_execute('UPDATE users SET organization_id = ? WHERE id = ?', [$mem['organization_id'], $user['id']]);
+            } else {
+                $orgByContact = db_query_one('SELECT id, name FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
+                if (!$orgByContact) {
+                    $prefix = explode('@', $user['email'])[0];
+                    $orgByContact = db_query_one('SELECT id, name FROM organizations WHERE LOWER(name) = ? OR LOWER(slug) = ? LIMIT 1', [strtolower($prefix), strtolower($prefix)]);
+                }
+                if ($orgByContact) {
+                    $user['organization_id'] = $orgByContact['id'];
+                    $user['organization_name'] = $orgByContact['name'];
+                    db_execute('UPDATE users SET organization_id = ? WHERE id = ?', [$orgByContact['id'], $user['id']]);
+                }
             }
         }
+
+        $token = jwt_encode([
+            'userId' => $user['id'],
+            'email' => $user['email'],
+            'name' => $user['name'],
+            'role' => $user['role'],
+            'organizationId' => $user['organization_id']
+        ], JWT_SECRET);
+
+        if (!empty($user['organization_id']) && empty($user['organization_name'])) {
+            $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
+            $user['organization_name'] = $org ? $org['name'] : null;
+        }
+        $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
+        unset($user['password_hash'], $user['totp_secret']);
+
+        setcookie('auth_token', $token, time() + 2592000, '/', '', false, true);
+        json_response([
+            'success' => true,
+            'token' => $token,
+            'user' => $user
+        ]);
     }
+
+    // Staff Login (Two-Factor Authentication RFC 6238)
+    $totpEnabled = !empty($user['totp_enabled']) && ((int)$user['totp_enabled'] === 1);
+
+    if ($totpEnabled) {
+        if (!empty($totpCode)) {
+            if (empty($user['totp_secret']) || !totp_verify($user['totp_secret'], $totpCode)) {
+                auth_generic_failure($email);
+            }
+
+            record_login_attempt($email, true);
+            $token = jwt_encode([
+                'userId' => $user['id'],
+                'email' => $user['email'],
+                'name' => $user['name'],
+                'role' => $user['role'],
+                'organizationId' => $user['organization_id']
+            ], JWT_SECRET);
+
+            $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
+            unset($user['password_hash'], $user['totp_secret']);
+            setcookie('auth_token', $token, time() + 2592000, '/', '', false, true);
+
+            json_response([
+                'success' => true,
+                'token' => $token,
+                'user' => $user
+            ]);
+        }
+
+        // Return challenge requesting 2FA code
+        $tempToken = jwt_encode([
+            'userId' => $user['id'],
+            'stage' => '2fa_pending',
+            'exp' => time() + 300
+        ], JWT_SECRET);
+
+        json_response([
+            'success' => true,
+            'require_2fa' => true,
+            'temp_token' => $tempToken
+        ]);
+    }
+
+    // Staff First-Time 2FA Setup
+    $secret = !empty($user['totp_secret']) ? $user['totp_secret'] : totp_generate_secret(16);
+    if (empty($user['totp_secret'])) {
+        db_execute('UPDATE users SET totp_secret = ? WHERE id = ?', [$secret, $user['id']]);
+    }
+
+    $uri = totp_get_provisioning_uri($secret, $user['email'], 'Assurance Media');
+    $tempToken = jwt_encode([
+        'userId' => $user['id'],
+        'stage' => '2fa_setup',
+        'exp' => time() + 600
+    ], JWT_SECRET);
+
+    json_response([
+        'success' => true,
+        'setup_2fa' => true,
+        'temp_token' => $tempToken,
+        'totp_secret' => $secret,
+        'totp_uri' => $uri
+    ]);
+}
+
+// POST /api/auth/2fa/verify (Verify TOTP code during staff login)
+if ($method === 'POST' && $path === '/api/auth/2fa/verify') {
+    $input = get_json_input();
+    $tempToken = $input['temp_token'] ?? '';
+    $code = trim($input['totp_code'] ?? '');
+
+    $decoded = jwt_decode($tempToken, JWT_SECRET);
+    if (!$decoded || empty($decoded['userId']) || ($decoded['stage'] ?? '') !== '2fa_pending') {
+        auth_generic_failure();
+    }
+
+    $user = db_query_one('SELECT * FROM users WHERE id = ?', [$decoded['userId']]);
+    if (!$user || !check_rate_limit($user['email'])) {
+        json_response([
+            'success' => false,
+            'error' => 'Too many failed login attempts. Please try again in 15 minutes.'
+        ], 429);
+    }
+
+    if (empty($user['totp_secret']) || !totp_verify($user['totp_secret'], $code)) {
+        auth_generic_failure($user['email']);
+    }
+
+    record_login_attempt($user['email'], true);
 
     $token = jwt_encode([
         'userId' => $user['id'],
@@ -1314,15 +1512,53 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         'organizationId' => $user['organization_id']
     ], JWT_SECRET);
 
-    // If organization_id is set, fetch organization name
-    if (!empty($user['organization_id']) && empty($user['organization_name'])) {
-        $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
-        $user['organization_name'] = $org ? $org['name'] : null;
-    }
     $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
-
-    unset($user['password_hash']);
+    unset($user['password_hash'], $user['totp_secret']);
     setcookie('auth_token', $token, time() + 2592000, '/', '', false, true);
+
+    json_response([
+        'success' => true,
+        'token' => $token,
+        'user' => $user
+    ]);
+}
+
+// POST /api/auth/2fa/setup (Verify and enable TOTP for staff first-time setup)
+if ($method === 'POST' && $path === '/api/auth/2fa/setup') {
+    $input = get_json_input();
+    $tempToken = $input['temp_token'] ?? '';
+    $code = trim($input['totp_code'] ?? '');
+
+    $decoded = jwt_decode($tempToken, JWT_SECRET);
+    if (!$decoded || empty($decoded['userId']) || ($decoded['stage'] ?? '') !== '2fa_setup') {
+        json_error('Invalid or expired setup token', 401);
+    }
+
+    $user = db_query_one('SELECT * FROM users WHERE id = ?', [$decoded['userId']]);
+    if (!$user || empty($user['totp_secret'])) {
+        json_error('Two-factor setup session expired or invalid', 400);
+    }
+
+    if (!totp_verify($user['totp_secret'], $code)) {
+        json_error('Invalid authentication code. Please check your authenticator app and try again.', 400);
+    }
+
+    db_execute('UPDATE users SET totp_enabled = 1 WHERE id = ?', [$user['id']]);
+    record_login_attempt($user['email'], true);
+
+    $token = jwt_encode([
+        'userId' => $user['id'],
+        'email' => $user['email'],
+        'name' => $user['name'],
+        'role' => $user['role'],
+        'organizationId' => $user['organization_id']
+    ], JWT_SECRET);
+
+    $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
+    $user['totp_enabled'] = true;
+    unset($user['password_hash'], $user['totp_secret']);
+    setcookie('auth_token', $token, time() + 2592000, '/', '', false, true);
+
     json_response([
         'success' => true,
         'token' => $token,
@@ -1390,21 +1626,6 @@ if ($method === 'GET' && $path === '/api/auth/me') {
     json_response(['user' => $user]);
 }
 
-// GET /api/auth/demo-users (Restricted to authenticated administrators only)
-if ($method === 'GET' && $path === '/api/auth/demo-users') {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
-    $users = db_query(
-        'SELECT u.id, u.email, u.name, u.role, u.custom_role, u.organization_id, o.name as organization_name
-         FROM users u
-         LEFT JOIN organizations o ON u.organization_id = o.id
-         ORDER BY u.role, u.name'
-    );
-    json_response([
-        'success' => true,
-        'users' => $users
-    ]);
-}
 
 // GET /api/auth/staff (List team members)
 if ($method === 'GET' && $path === '/api/auth/staff') {
@@ -1964,8 +2185,11 @@ if (($method === 'DELETE' || ($method === 'POST' && strpos($path, '/delete') !==
 
 // GET /api/organizations/{id}/websites
 if ($method === 'GET' && preg_match('#^/api/organizations/([^/]+)/websites$#', $path, $m)) {
-    require_auth();
+    $user = require_auth();
     $orgId = $m[1];
+    if ($user['role'] === 'client' && $user['organization_id'] !== $orgId) {
+        json_error('Forbidden: You can only view websites for your organization', 403);
+    }
     $websites = db_query('SELECT * FROM websites WHERE organization_id = ? ORDER BY name ASC', [$orgId]);
     json_response(['success' => true, 'websites' => $websites]);
 }
@@ -2307,6 +2531,10 @@ if ($method === 'POST' && $path === '/api/tickets') {
     $website = db_query_one('SELECT organization_id, name FROM websites WHERE id = ?', [$website_id]);
     if (!$website) json_error('Selected website not found', 404);
 
+    if ($user['role'] === 'client' && $website['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: Selected website does not belong to your organization', 403);
+    }
+
     $organization_id = ($user['role'] === 'client') ? $user['organization_id'] : ($input['organization_id'] ?? $website['organization_id']);
 
     // Sequence increment
@@ -2442,6 +2670,9 @@ if ($method === 'PATCH' && preg_match('#^/api/tickets/([^/]+)(?:/(?:status|assig
     if (!$ticket) json_error('Ticket not found', 404);
 
     if ($user['role'] === 'client') {
+        if ($ticket['organization_id'] !== $user['organization_id']) {
+            json_error('Forbidden: You can only update tickets belonging to your organization', 403);
+        }
         // Client can only confirm resolution or reopen
         if (isset($input['status']) && in_array($input['status'], ['RESOLVED', 'CLOSED', 'NEW', 'IN PROGRESS'])) {
             $newStatus = $input['status'];
@@ -2671,6 +2902,12 @@ if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)/comments$#', $path, 
     $user = require_auth();
     $ticketId = $m[1];
 
+    $ticket = db_query_one('SELECT organization_id FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: You can only view comments for tickets belonging to your organization', 403);
+    }
+
     $sql = "SELECT c.*, u.name as user_name, u.role as user_role, u.custom_role as user_custom_role,
                    o.name as user_organization_name, u.email as user_email
             FROM ticket_comments c
@@ -2693,6 +2930,12 @@ if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/comments$#', $path,
     $user = require_auth();
     $ticketId = $m[1];
     $input = get_json_input();
+
+    $ticket = db_query_one('SELECT organization_id FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: You can only comment on tickets belonging to your organization', 403);
+    }
 
     $content = trim($input['content'] ?? '');
     $is_internal = !empty($input['is_internal']) && $user['role'] !== 'client' ? 1 : 0;
@@ -2741,6 +2984,12 @@ if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $pat
     $user = require_auth();
     $ticketId = $m[1];
 
+    $ticket = db_query_one('SELECT organization_id FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: You can only view attachments for tickets belonging to your organization', 403);
+    }
+
     $sql = 'SELECT a.*, u.name AS uploader_name FROM ticket_attachments a LEFT JOIN users u ON a.uploader_id = u.id WHERE a.ticket_id = ?';
     $params = [$ticketId];
 
@@ -2764,6 +3013,12 @@ if ($method === 'GET' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $pat
 if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $path, $m)) {
     $user = require_auth();
     $ticketId = $m[1];
+
+    $ticket = db_query_one('SELECT organization_id FROM tickets WHERE id = ?', [$ticketId]);
+    if (!$ticket) json_error('Ticket not found', 404);
+    if ($user['role'] === 'client' && $ticket['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden: You can only upload attachments to tickets belonging to your organization', 403);
+    }
 
     if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         json_error('No valid file uploaded or upload error occurred', 400);
@@ -2798,11 +3053,20 @@ if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $pa
 
 // GET /api/attachments/{id}/download
 if ($method === 'GET' && preg_match('#^/api/attachments/([^/]+)/download$#', $path, $m)) {
-    require_auth();
+    $user = require_auth();
     $attId = $m[1];
-    $att = db_query_one('SELECT * FROM ticket_attachments WHERE id = ?', [$attId]);
+    $att = db_query_one('SELECT a.*, t.organization_id FROM ticket_attachments a JOIN tickets t ON a.ticket_id = t.id WHERE a.id = ?', [$attId]);
     if (!$att || !file_exists($att['file_path'])) {
         json_error('Attachment file not found', 404);
+    }
+
+    if ($user['role'] === 'client') {
+        if ($att['organization_id'] !== $user['organization_id']) {
+            json_error('Forbidden: You can only download attachments belonging to your organization', 403);
+        }
+        if (!empty($att['is_internal'])) {
+            json_error('Forbidden: Internal attachments are not accessible to clients', 403);
+        }
     }
 
     header('Content-Type: ' . $att['mime_type']);

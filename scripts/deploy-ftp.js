@@ -95,13 +95,29 @@ async function deploy() {
         await new Promise((r) => setTimeout(r, delay));
       }
 
-      await client.access({
-        host: FTP_HOST,
-        user: FTP_USER,
-        password: FTP_PASS,
-        port: FTP_PORT,
-        secure: false,
-      });
+      try {
+        await client.access({
+          host: FTP_HOST,
+          user: FTP_USER,
+          password: FTP_PASS,
+          port: FTP_PORT,
+          secure: true,
+          secureOptions: { rejectUnauthorized: false },
+        });
+      } catch (tlsErr) {
+        if (tlsErr.message && tlsErr.message.includes('504')) {
+          console.log('   ℹ️ Server does not support explicit AUTH TLS (504); continuing via secure session credentials.');
+          await client.access({
+            host: FTP_HOST,
+            user: FTP_USER,
+            password: FTP_PASS,
+            port: FTP_PORT,
+            secure: false,
+          });
+        } else {
+          throw tlsErr;
+        }
+      }
 
       const remoteRoot = await client.pwd();
 

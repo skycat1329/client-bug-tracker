@@ -7,6 +7,10 @@
     RewriteCond %{HTTP:Authorization} ^(.*)
     RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
 
+    # Block access to hidden/sensitive files before any rewrite
+    RewriteCond %{REQUEST_URI} (^\.|\.(env|sql|git|bak|config|log|md|sh|yml|yaml|json|lock))$ [NC]
+    RewriteRule ^ - [F,L]
+
     # Route all API calls to /api/index.php
     RewriteRule ^api/(.*)$ /api/index.php [QSA,L]
 
@@ -21,6 +25,26 @@
 
 # Security: prevent direct directory listing
 Options -Indexes
+
+# Security Headers (OWASP & PCI-DSS compliance)
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:;"
+</IfModule>
+
+# Block direct access to sensitive files and dotfiles
+<FilesMatch "(^\.|\.(env|sql|git|bak|config|log|md|sh|yml|yaml|json|lock))$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
 
 # Upload limit adjustment (Hostinger Apache)
 <IfModule mod_php.c>
