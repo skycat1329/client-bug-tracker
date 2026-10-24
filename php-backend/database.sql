@@ -247,15 +247,43 @@ CREATE TABLE IF NOT EXISTS `login_attempts` (
     INDEX `idx_email_attempt` (`email`, `attempted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 18. Engineering Tasks & Deadlines
+CREATE TABLE IF NOT EXISTS `tasks` (
+    `id` VARCHAR(64) PRIMARY KEY,
+    `task_number` VARCHAR(30) NOT NULL UNIQUE,
+    `title` VARCHAR(255) NOT NULL,
+    `description` LONGTEXT NOT NULL,
+    `creator_id` VARCHAR(64) NOT NULL,
+    `assignee_id` VARCHAR(64) NOT NULL,
+    `deadline` DATETIME NOT NULL,
+    `priority` ENUM('low', 'medium', 'high', 'urgent') NOT NULL DEFAULT 'medium',
+    `status` ENUM('PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'REJECTED') NOT NULL DEFAULT 'ASSIGNED',
+    `approval_status` ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'APPROVED',
+    `approved_by` VARCHAR(64) NULL,
+    `approved_at` DATETIME NULL,
+    `rejection_reason` TEXT NULL,
+    `completed_at` DATETIME NULL,
+    `completion_notes` TEXT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_task_assignee` (`assignee_id`),
+    INDEX `idx_task_creator` (`creator_id`),
+    INDEX `idx_task_status` (`status`),
+    INDEX `idx_task_deadline` (`deadline`),
+    FOREIGN KEY (`creator_id`) REFERENCES `users`(`id`),
+    FOREIGN KEY (`assignee_id`) REFERENCES `users`(`id`),
+    FOREIGN KEY (`approved_by`) REFERENCES `users`(`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==============================================================================
 -- Seed Initial Data
 -- ==============================================================================
 
--- Initial Ticket Counter (Starts at 1000 so next is WEB-1001)
+-- Initial Ticket & Task Counters
 INSERT INTO `ticket_counters` (`prefix`, `current_val`) 
-VALUES ('WEB', 1000)
+VALUES ('WEB', 1000), ('TSK', 1000)
 ON DUPLICATE KEY UPDATE `prefix` = `prefix`;
 
 -- Initial System Roles

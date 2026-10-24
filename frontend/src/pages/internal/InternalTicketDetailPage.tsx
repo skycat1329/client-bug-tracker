@@ -33,6 +33,9 @@ import {
   History,
   FileSpreadsheet,
   AlertTriangle,
+  Image as ImageIcon,
+  ZoomIn,
+  X,
 } from 'lucide-react';
 
 interface InternalTicketDetailPageProps {
@@ -52,6 +55,7 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
   const [duplicates, setDuplicates] = useState<any[]>([]);
   const [queues, setQueues] = useState<Queue[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; filename: string } | null>(null);
 
   // Salesforce Main View Tabs: Details | Chatter / Feed | Related / Audit
   const [activeTab, setActiveTab] = useState<'details' | 'chatter' | 'related'>('chatter');
@@ -727,6 +731,66 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
                   )}
                 </div>
               )}
+
+              {/* Attached Screenshots & Visual Proof */}
+              {(() => {
+                const imageAttachments = attachments.filter(att => att.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(att.filename));
+                if (imageAttachments.length === 0) return null;
+                return (
+                  <div className="pt-4 border-t border-slate-200">
+                    <div className="flex items-center gap-2 mb-3">
+                      <ImageIcon size={16} className="text-[#0176D3]" />
+                      <h3 className="font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+                        Attached Screenshots & Visual Proof ({imageAttachments.length})
+                      </h3>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {imageAttachments.map((att) => {
+                        const imgUrl = `/api/attachments/${att.id}/preview?token=${localStorage.getItem('token') || ''}`;
+                        const downloadUrl = `/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`;
+                        return (
+                          <div
+                            key={att.id}
+                            className="group relative rounded-lg border border-slate-200 overflow-hidden bg-slate-900/5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
+                          >
+                            <div
+                              onClick={() => setLightboxImage({ url: imgUrl, filename: att.filename })}
+                              className="cursor-pointer relative overflow-hidden h-32 bg-slate-100 flex items-center justify-center"
+                            >
+                              <img
+                                src={imgUrl}
+                                alt={att.filename}
+                                loading="lazy"
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).style.display = 'none';
+                                }}
+                              />
+                              <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white">
+                                <ZoomIn size={16} className="drop-shadow" />
+                                <span className="text-[11px] font-bold">Preview</span>
+                              </div>
+                            </div>
+                            <div className="p-2 bg-white border-t border-slate-100 flex items-center justify-between text-[11px]">
+                              <span className="font-medium text-slate-700 truncate pr-2" title={att.filename}>
+                                {att.filename}
+                              </span>
+                              <a
+                                href={downloadUrl}
+                                download={att.filename}
+                                className="text-slate-400 hover:text-[#0176D3] transition-colors p-1"
+                                title="Download original file"
+                              >
+                                <Download size={12} />
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -744,20 +808,93 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
                 {attachments.length === 0 ? (
                   <p className="text-slate-400 italic">No files attached to this case.</p>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {attachments.map((att) => (
-                      <a
-                        key={att.id}
-                        href={`/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center justify-between p-3 rounded border border-slate-200 hover:border-blue-300 hover:bg-blue-50/20 text-slate-800"
-                      >
-                        <span className="truncate font-medium">{att.filename}</span>
-                        <Download size={14} className="text-slate-400" />
-                      </a>
-                    ))}
-                  </div>
+                  (() => {
+                    const imageAttachments = attachments.filter(att => att.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(att.filename));
+                    const otherAttachments = attachments.filter(att => !(att.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(att.filename)));
+
+                    return (
+                      <div className="space-y-4">
+                        {imageAttachments.length > 0 && (
+                          <div>
+                            <div className="flex items-center gap-1.5 mb-2.5 text-slate-600 font-semibold text-[11px]">
+                              <ImageIcon size={14} className="text-[#0176D3]" />
+                              <span>Image Proof & Screenshots ({imageAttachments.length})</span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                              {imageAttachments.map((att) => {
+                                const imgUrl = `/api/attachments/${att.id}/preview?token=${localStorage.getItem('token') || ''}`;
+                                const downloadUrl = `/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`;
+                                return (
+                                  <div
+                                    key={att.id}
+                                    className="group relative rounded-lg border border-slate-200 overflow-hidden bg-slate-900/5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
+                                  >
+                                    <div
+                                      onClick={() => setLightboxImage({ url: imgUrl, filename: att.filename })}
+                                      className="cursor-pointer relative overflow-hidden h-28 bg-slate-100 flex items-center justify-center"
+                                    >
+                                      <img
+                                        src={imgUrl}
+                                        alt={att.filename}
+                                        loading="lazy"
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                        onError={(e) => {
+                                          (e.target as HTMLElement).style.display = 'none';
+                                        }}
+                                      />
+                                      <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white">
+                                        <ZoomIn size={16} className="drop-shadow" />
+                                        <span className="text-[11px] font-bold">Preview</span>
+                                      </div>
+                                    </div>
+                                    <div className="p-2 bg-white border-t border-slate-100 flex items-center justify-between text-[11px]">
+                                      <span className="font-medium text-slate-700 truncate pr-2" title={att.filename}>
+                                        {att.filename}
+                                      </span>
+                                      <a
+                                        href={downloadUrl}
+                                        download={att.filename}
+                                        className="text-slate-400 hover:text-[#0176D3] transition-colors p-1"
+                                        title="Download original file"
+                                      >
+                                        <Download size={12} />
+                                      </a>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {otherAttachments.length > 0 && (
+                          <div>
+                            <div className="flex items-center gap-1.5 mb-2 text-slate-600 font-semibold text-[11px]">
+                              <FileText size={14} className="text-slate-500" />
+                              <span>Documents & Other Files ({otherAttachments.length})</span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              {otherAttachments.map((att) => (
+                                <a
+                                  key={att.id}
+                                  href={`/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="flex items-center justify-between p-2.5 rounded border border-slate-200 hover:border-blue-300 hover:bg-blue-50/20 text-slate-800 transition-colors"
+                                >
+                                  <div className="flex items-center gap-2 truncate">
+                                    <FileText size={15} className="text-[#0176D3] flex-shrink-0" />
+                                    <span className="truncate font-medium">{att.filename}</span>
+                                  </div>
+                                  <Download size={13} className="text-slate-400" />
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()
                 )}
               </div>
 
@@ -1098,6 +1235,47 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
                   {statusLoading ? 'Updating...' : 'Confirm Status Change'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full-Screen Lightbox Modal for Attached Screenshots */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[90vh] bg-slate-900 rounded-2xl overflow-hidden shadow-2xl flex flex-col border border-slate-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between text-white">
+              <span className="text-sm font-bold truncate max-w-md">{lightboxImage.filename}</span>
+              <div className="flex items-center gap-3">
+                <a
+                  href={lightboxImage.url.replace('/preview', '/download')}
+                  download={lightboxImage.filename}
+                  className="text-xs font-bold px-3 py-1.5 rounded-lg bg-[#0176D3] hover:bg-[#014486] text-white flex items-center gap-1.5 transition-colors"
+                >
+                  <Download size={14} />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setLightboxImage(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-950/60 overflow-auto flex items-center justify-center max-h-[calc(90vh-70px)]">
+              <img
+                src={lightboxImage.url}
+                alt={lightboxImage.filename}
+                className="max-w-full max-h-[80vh] object-contain rounded-lg"
+              />
             </div>
           </div>
         </div>

@@ -15,6 +15,9 @@ import {
   Laptop,
   Globe,
   Download,
+  Image as ImageIcon,
+  ZoomIn,
+  X,
 } from 'lucide-react';
 
 interface CustomerTicketDetailPageProps {
@@ -37,6 +40,7 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
   const [submittingReply, setSubmittingReply] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; filename: string } | null>(null);
 
   const loadData = async () => {
     try {
@@ -250,31 +254,95 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
           </div>
         )}
 
-        {/* Attachments Section */}
-        {attachments.length > 0 && (
-          <div className="mt-6">
-            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Attachments</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {attachments.map((att) => (
-                <a
-                  key={att.id}
-                  href={`/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/30 transition-colors group"
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <FileText size={18} className="text-blue-500 flex-shrink-0" />
-                    <span className="text-xs font-medium text-slate-800 truncate group-hover:text-blue-600">
-                      {att.filename}
-                    </span>
+        {/* Attached Screenshots & Visual Images Gallery */}
+        {(() => {
+          const imageAttachments = attachments.filter(att => att.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(att.filename));
+          const otherAttachments = attachments.filter(att => !(att.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(att.filename)));
+
+          return (
+            <>
+              {imageAttachments.length > 0 && (
+                <div className="mt-6 pt-5 border-t border-slate-100">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ImageIcon size={16} className="text-blue-600" />
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Attached Screenshots & Visual Proof ({imageAttachments.length})
+                    </h4>
                   </div>
-                  <Download size={14} className="text-slate-400 group-hover:text-blue-600" />
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+                    {imageAttachments.map((att) => {
+                      const imgUrl = `/api/attachments/${att.id}/preview?token=${localStorage.getItem('token') || ''}`;
+                      const downloadUrl = `/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`;
+                      return (
+                        <div
+                          key={att.id}
+                          className="group relative rounded-xl border border-slate-200 overflow-hidden bg-slate-900/5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
+                        >
+                          <div
+                            onClick={() => setLightboxImage({ url: imgUrl, filename: att.filename })}
+                            className="cursor-pointer relative overflow-hidden h-36 bg-slate-100 flex items-center justify-center"
+                          >
+                            <img
+                              src={imgUrl}
+                              alt={att.filename}
+                              loading="lazy"
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                            <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white">
+                              <ZoomIn size={18} className="drop-shadow" />
+                              <span className="text-xs font-bold">Preview</span>
+                            </div>
+                          </div>
+                          <div className="p-2.5 bg-white border-t border-slate-100 flex items-center justify-between text-xs">
+                            <span className="font-medium text-slate-700 truncate pr-2" title={att.filename}>
+                              {att.filename}
+                            </span>
+                            <a
+                              href={downloadUrl}
+                              download={att.filename}
+                              className="text-slate-400 hover:text-blue-600 transition-colors p-1"
+                              title="Download original file"
+                            >
+                              <Download size={13} />
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {otherAttachments.length > 0 && (
+                <div className="mt-5 pt-4 border-t border-slate-100">
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Attached Documents & Files</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {otherAttachments.map((att) => (
+                      <a
+                        key={att.id}
+                        href={`/api/attachments/${att.id}/download?token=${localStorage.getItem('token') || ''}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/30 transition-colors group"
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <FileText size={18} className="text-blue-500 flex-shrink-0" />
+                          <span className="text-xs font-medium text-slate-800 truncate group-hover:text-blue-600">
+                            {att.filename}
+                          </span>
+                        </div>
+                        <Download size={14} className="text-slate-400 group-hover:text-blue-600" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Discussion & Public Updates Thread */}
@@ -409,6 +477,47 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
           </div>
         </form>
       </div>
+
+      {/* Image Lightbox Modal */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div
+            className="max-w-4xl max-h-[90vh] bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between text-white">
+              <span className="text-sm font-bold truncate max-w-md">{lightboxImage.filename}</span>
+              <div className="flex items-center gap-3">
+                <a
+                  href={lightboxImage.url.replace('/preview', '/download')}
+                  download={lightboxImage.filename}
+                  className="text-xs font-bold px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 transition-colors"
+                >
+                  <Download size={14} />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setLightboxImage(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-950/60 overflow-auto flex items-center justify-center max-h-[calc(90vh-70px)]">
+              <img
+                src={lightboxImage.url}
+                alt={lightboxImage.filename}
+                className="max-w-full max-h-[80vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

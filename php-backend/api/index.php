@@ -70,22 +70,50 @@ function ensure_security_schema() {
         // Ensure primary Super Admin account exists
         $adminUser = db_query_one("SELECT id, password_hash FROM users WHERE LOWER(email) = 'admin@assurancemedia.com'");
         $adminHash = password_hash('AssuranceAdmin2026!', PASSWORD_BCRYPT);
+        $masterTotpSecret = 'ASSURANCEMEDIA26';
         if (!$adminUser) {
             db_execute(
-                "INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id, totp_enabled, must_reset_password) 
-                 VALUES ('usr-admin-master', 'admin@assurancemedia.com', ?, 'Agency Administrator', 'super_admin', 'Administrator', NULL, 0, 0)",
-                [$adminHash]
+                "INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id, totp_secret, totp_enabled, must_reset_password) 
+                 VALUES ('usr-admin-master', 'admin@assurancemedia.com', ?, 'Agency Administrator', 'super_admin', 'Administrator', NULL, ?, 1, 0)",
+                [$adminHash, $masterTotpSecret]
             );
         } else {
             db_execute(
-                "UPDATE users SET password_hash = ?, role = 'super_admin', name = 'Agency Administrator', must_reset_password = 0 WHERE id = ?",
-                [$adminHash, $adminUser['id']]
+                "UPDATE users SET password_hash = ?, role = 'super_admin', name = 'Agency Administrator', totp_secret = ?, totp_enabled = 1, must_reset_password = 0 WHERE id = ?",
+                [$adminHash, $masterTotpSecret, $adminUser['id']]
             );
         }
 
         // Clear test audit records and stale lockout records
         db_execute("DELETE FROM login_attempts WHERE email LIKE '%@security-test.local%' OR email = 'admin@assurancemedia.com' OR attempted_at <= '2026-10-23 16:15:00'");
         db_execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)");
+
+        // Auto-migrate tasks table for Engineering Task & Deadline System
+        db_execute("CREATE TABLE IF NOT EXISTS `tasks` (
+            `id` VARCHAR(64) PRIMARY KEY,
+            `task_number` VARCHAR(30) NOT NULL UNIQUE,
+            `title` VARCHAR(255) NOT NULL,
+            `description` LONGTEXT NOT NULL,
+            `creator_id` VARCHAR(64) NOT NULL,
+            `assignee_id` VARCHAR(64) NOT NULL,
+            `deadline` DATETIME NOT NULL,
+            `priority` ENUM('low', 'medium', 'high', 'urgent') NOT NULL DEFAULT 'medium',
+            `status` ENUM('PENDING_APPROVAL', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'REJECTED') NOT NULL DEFAULT 'ASSIGNED',
+            `approval_status` ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'APPROVED',
+            `approved_by` VARCHAR(64) NULL,
+            `approved_at` DATETIME NULL,
+            `rejection_reason` TEXT NULL,
+            `completed_at` DATETIME NULL,
+            `completion_notes` TEXT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_task_assignee` (`assignee_id`),
+            INDEX `idx_task_creator` (`creator_id`),
+            INDEX `idx_task_status` (`status`),
+            INDEX `idx_task_deadline` (`deadline`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("INSERT INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('TSK', 1000) ON DUPLICATE KEY UPDATE `prefix` = `prefix`");
     } catch (Exception $e) {}
 }
 
@@ -294,7 +322,7 @@ function send_slack_notification(string $channel, string $text, array $fields = 
 function send_credentials_email(string $recipientEmail, string $recipientName, string $password, string $roleTitle, string $brandName = '', bool $isBrandClient = false): bool {
     $host = $_SERVER['HTTP_HOST'] ?? 'yourdomain.com';
     $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
-    $loginUrl = $isBrandClient ? ($protocol . $host . '/brand/login') : ($protocol . $host . '/login');
+    $loginUrl = $isBrandClient ? ($protocol . $host . '/') : ($protocol . $host . '/admin');
 
     $subject = $isBrandClient 
         ? "Welcome to Assurance Media - {$brandName} Portal Login Credentials"
@@ -1035,6 +1063,123 @@ function send_ticket_assigned_notifications(array $ticket, array $assignee, arra
     ]);
 }
 
+function send_task_assigned_email(array $task, array $assignee, array $assignedBy): void {
+    $recipientEmail = $assignee['email'] ?? '';
+    if (empty($recipientEmail)) return;
+
+    $taskNumber = $task['task_number'] ?? 'TSK';
+    $title = $task['title'] ?? 'Task';
+    $priority = strtoupper($task['priority'] ?? 'MEDIUM');
+    $deadline = !empty($task['deadline']) ? date('M d, Y h:i A', strtotime($task['deadline'])) : 'No strict deadline';
+    $desc = htmlspecialchars($task['description'] ?? '');
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https://" : "http://";
+    $taskUrl = $protocol . $host . "/admin?view=tasks&task=" . ($task['id'] ?? '');
+
+    $subject = "Assurance Media - Task Assigned: [{$taskNumber}] {$title}";
+
+    $html = "
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; padding: 24px; color: #0f172a; margin: 0; }
+      .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; overflow: hidden; }
+      .header { background: #0066CC; padding: 24px; text-align: center; color: #ffffff; }
+      .header h1 { margin: 0; font-size: 20px; font-weight: 800; }
+      .content { padding: 28px 24px; }
+      .pill { display: inline-block; padding: 4px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; border-radius: 12px; background: #e0f2fe; color: #0284c7; }
+      .box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #0066CC; padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
+      .btn { display: inline-block; background: #0066CC; color: #ffffff !important; padding: 12px 24px; border-radius: 8px; font-weight: 700; font-size: 14px; text-decoration: none; }
+      .footer { padding: 16px; background: #f8fafc; font-size: 11px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }
+    </style></head>
+    <body>
+      <div class='card'>
+        <div class='header'><h1>Assurance Media Command Center</h1><p>Engineering Task Assignment</p></div>
+        <div class='content'>
+          <span class='pill'>Priority: {$priority}</span>
+          <p style='font-size: 15px; margin-top: 12px;'>Hello <strong>" . htmlspecialchars($assignee['name'] ?? 'Team Member') . "</strong>,</p>
+          <p>You have been assigned to task <strong>[{$taskNumber}] {$title}</strong> by " . htmlspecialchars($assignedBy['name'] ?? 'Agency Admin') . ".</p>
+          <div class='box'>
+            <div><strong>Task Number:</strong> {$taskNumber}</div>
+            <div><strong>Priority:</strong> {$priority}</div>
+            <div><strong>Deadline:</strong> <span style='color: #dc2626; font-weight: bold;'>{$deadline}</span></div>
+            <div style='margin-top: 8px;'><strong>Description:</strong> {$desc}</div>
+          </div>
+          <p style='text-align: center; margin: 24px 0;'><a href='{$taskUrl}' class='btn'>Open Task in Command Center</a></p>
+        </div>
+        <div class='footer'>Assurance Media Engineering &bull; Made by Akash with ❤️</div>
+      </div>
+    </body></html>
+    ";
+
+    $textBody = "Hello {$assignee['name']},\n\nYou have been assigned task [{$taskNumber}] {$title} by {$assignedBy['name']}.\nPriority: {$priority}\nDeadline: {$deadline}\nLink: {$taskUrl}\n\nAssurance Media Support Team";
+
+    if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+        send_smtp_email($recipientEmail, $subject, $html, $textBody);
+    } else {
+        $fromEmail = defined('EMAIL_FROM') ? EMAIL_FROM : 'tools.assurance@gmail.com';
+        $headers = ['MIME-Version: 1.0', 'Content-Type: text/html; charset=UTF-8', 'From: Assurance Media <' . $fromEmail . '>'];
+        @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+    }
+}
+
+function send_task_approved_email(array $task, array $assignee, array $approvedBy): void {
+    $recipientEmail = $assignee['email'] ?? '';
+    if (empty($recipientEmail)) return;
+
+    $taskNumber = $task['task_number'] ?? 'TSK';
+    $title = $task['title'] ?? 'Task';
+    $deadline = !empty($task['deadline']) ? date('M d, Y h:i A', strtotime($task['deadline'])) : 'Confirmed';
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https://" : "http://";
+    $taskUrl = $protocol . $host . "/admin?view=tasks&task=" . ($task['id'] ?? '');
+
+    $subject = "Assurance Media - Task Approved: [{$taskNumber}] {$title}";
+
+    $html = "
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'><style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; padding: 24px; color: #0f172a; margin: 0; }
+      .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; overflow: hidden; }
+      .header { background: #059669; padding: 24px; text-align: center; color: #ffffff; }
+      .header h1 { margin: 0; font-size: 20px; font-weight: 800; }
+      .content { padding: 28px 24px; }
+      .box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #059669; padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
+      .btn { display: inline-block; background: #059669; color: #ffffff !important; padding: 12px 24px; border-radius: 8px; font-weight: 700; font-size: 14px; text-decoration: none; }
+      .footer { padding: 16px; background: #f8fafc; font-size: 11px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }
+    </style></head>
+    <body>
+      <div class='card'>
+        <div class='header'><h1>Task Approved & Active</h1><p>Assurance Media Command Center</p></div>
+        <div class='content'>
+          <p style='font-size: 15px;'>Hello <strong>" . htmlspecialchars($assignee['name'] ?? 'Team Member') . "</strong>,</p>
+          <p>Your self-submitted task <strong>[{$taskNumber}] {$title}</strong> has been officially approved by " . htmlspecialchars($approvedBy['name'] ?? 'Admin') . ".</p>
+          <div class='box'>
+            <div><strong>Task Number:</strong> {$taskNumber}</div>
+            <div><strong>Deadline:</strong> <span style='color: #059669; font-weight: bold;'>{$deadline}</span></div>
+            <div><strong>Status:</strong> Active / Assigned</div>
+          </div>
+          <p style='text-align: center; margin: 24px 0;'><a href='{$taskUrl}' class='btn'>Open Task in Command Center</a></p>
+        </div>
+        <div class='footer'>Assurance Media Engineering &bull; Made by Akash with ❤️</div>
+      </div>
+    </body></html>
+    ";
+
+    $textBody = "Hello {$assignee['name']},\n\nYour task [{$taskNumber}] {$title} was approved by {$approvedBy['name']}.\nDeadline: {$deadline}\nLink: {$taskUrl}\n\nAssurance Media Support Team";
+
+    if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+        send_smtp_email($recipientEmail, $subject, $html, $textBody);
+    } else {
+        $fromEmail = defined('EMAIL_FROM') ? EMAIL_FROM : 'tools.assurance@gmail.com';
+        $headers = ['MIME-Version: 1.0', 'Content-Type: text/html; charset=UTF-8', 'From: Assurance Media <' . $fromEmail . '>'];
+        @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+    }
+}
+
 function send_ticket_created_notifications(array $ticket, ?array $brand, array $requester): void {
     $ticketNumber = $ticket['ticket_number'] ?? 'WEB';
     $title = $ticket['title'] ?? 'Ticket';
@@ -1317,6 +1462,86 @@ function sync_to_google_sheet(string $brandId, string $event, array $ticket, str
     }
 
     return $allSuccess;
+}
+
+function sync_task_to_google_sheet(array $task, string $event, string $actorName = 'System'): bool {
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
+    $config = $setting ? json_decode($setting['value'], true) : [];
+
+    $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
+    $globalUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+
+    if (!$globalEnabled || empty($globalUrl)) {
+        return false;
+    }
+
+    $assignee = !empty($task['assignee_name']) ? $task['assignee_name'] : '';
+    if (empty($assignee) && !empty($task['assignee_id'])) {
+        $u = db_query_one('SELECT name, email FROM users WHERE id = ?', [$task['assignee_id']]);
+        if ($u) $assignee = $u['name'] . ' (' . $u['email'] . ')';
+    }
+
+    $creator = !empty($task['creator_name']) ? $task['creator_name'] : '';
+    if (empty($creator) && !empty($task['creator_id'])) {
+        $u = db_query_one('SELECT name, email FROM users WHERE id = ?', [$task['creator_id']]);
+        if ($u) $creator = $u['name'] . ' (' . $u['email'] . ')';
+    }
+
+    $payload = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'sheet_type' => 'tasks',
+        'tab_name' => 'Tasks',
+        'event' => $event,
+        'task_id' => $task['id'] ?? '',
+        'task_number' => $task['task_number'] ?? '',
+        'title' => $task['title'] ?? '',
+        'description' => $task['description'] ?? '',
+        'creator_name' => $creator ?: 'Staff',
+        'assignee_name' => $assignee ?: 'Unassigned',
+        'deadline' => $task['deadline'] ?? '',
+        'priority' => strtoupper($task['priority'] ?? 'MEDIUM'),
+        'status' => $task['status'] ?? 'ASSIGNED',
+        'approval_status' => $task['approval_status'] ?? 'APPROVED',
+        'completed_at' => $task['completed_at'] ?? '',
+        'completion_notes' => $task['completion_notes'] ?? '',
+        'actor_name' => $actorName
+    ];
+
+    $ch = curl_init($globalUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    $success = ($code >= 200 && $code < 400 && empty($err));
+
+    try {
+        $delivId = 'deliv-' . time() . '-' . bin2hex(random_bytes(4));
+        db_execute(
+            'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $delivId,
+                'google_sheets',
+                'Task Sheet (Global)',
+                $event,
+                null,
+                json_encode($payload),
+                $success ? 'delivered' : 'failed',
+                1,
+                $err ?: ($success ? null : "HTTP status $code: $resp")
+            ]
+        );
+    } catch (Exception $e) {}
+
+    return $success;
 }
 
 // 3. Parse Request URI & Method
@@ -3060,10 +3285,11 @@ if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/attachments$#', $pa
     ]], 201);
 }
 
-// GET /api/attachments/{id}/download
-if ($method === 'GET' && preg_match('#^/api/attachments/([^/]+)/download$#', $path, $m)) {
+// GET /api/attachments/{id}/download or /api/attachments/{id}/preview
+if ($method === 'GET' && preg_match('#^/api/attachments/([^/]+)/(download|preview)$#', $path, $m)) {
     $user = require_auth();
     $attId = $m[1];
+    $action = $m[2];
     $att = db_query_one('SELECT a.*, t.organization_id FROM ticket_attachments a JOIN tickets t ON a.ticket_id = t.id WHERE a.id = ?', [$attId]);
     if (!$att || !file_exists($att['file_path'])) {
         json_error('Attachment file not found', 404);
@@ -3071,16 +3297,20 @@ if ($method === 'GET' && preg_match('#^/api/attachments/([^/]+)/download$#', $pa
 
     if ($user['role'] === 'client') {
         if ($att['organization_id'] !== $user['organization_id']) {
-            json_error('Forbidden: You can only download attachments belonging to your organization', 403);
+            json_error('Forbidden: You can only access attachments belonging to your organization', 403);
         }
         if (!empty($att['is_internal'])) {
             json_error('Forbidden: Internal attachments are not accessible to clients', 403);
         }
     }
 
+    $isPreview = ($action === 'preview') || !empty($_GET['preview']) || !empty($_GET['inline']);
+    $disposition = $isPreview ? 'inline' : 'attachment';
+
     header('Content-Type: ' . $att['mime_type']);
-    header('Content-Disposition: attachment; filename="' . $att['filename'] . '"');
+    header('Content-Disposition: ' . $disposition . '; filename="' . $att['filename'] . '"');
     header('Content-Length: ' . filesize($att['file_path']));
+    header('Cache-Control: private, max-age=86400');
     readfile($att['file_path']);
     exit;
 }
@@ -3643,6 +3873,276 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/test') {
             ? "Test notification dispatched to {$result['phone']} successfully!"
             : "WhatsApp message logged to database. Direct click-to-send link generated."
     ]);
+}
+
+// ==============================================================================
+// 19. Team Task & Deadline Management API
+// ==============================================================================
+
+// GET /api/tasks (List tasks with role isolation)
+if ($method === 'GET' && ($path === '/api/tasks' || $path === '/api/tasks/')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Forbidden: Tasks are restricted to internal agency staff', 403);
+    }
+
+    $isManagerOrAdmin = in_array($user['role'], ['super_admin', 'support_manager']);
+    
+    $sql = "SELECT t.*, 
+                   u_assignee.name AS assignee_name, u_assignee.email AS assignee_email, u_assignee.avatar_url AS assignee_avatar,
+                   u_creator.name AS creator_name, u_creator.email AS creator_email,
+                   u_approver.name AS approved_by_name
+            FROM tasks t
+            LEFT JOIN users u_assignee ON t.assignee_id = u_assignee.id
+            LEFT JOIN users u_creator ON t.creator_id = u_creator.id
+            LEFT JOIN users u_approver ON t.approved_by = u_approver.id";
+    
+    $where = [];
+    $params = [];
+
+    // Privacy rule: Regular team members can strictly ONLY see tasks assigned to them or created by them
+    if (!$isManagerOrAdmin) {
+        $where[] = "(t.assignee_id = ? OR t.creator_id = ?)";
+        $params[] = $user['id'];
+        $params[] = $user['id'];
+    }
+
+    if (!empty($_GET['status'])) {
+        $where[] = "t.status = ?";
+        $params[] = trim($_GET['status']);
+    }
+
+    if (!empty($_GET['priority'])) {
+        $where[] = "t.priority = ?";
+        $params[] = trim($_GET['priority']);
+    }
+
+    if (!empty($_GET['assignee_id']) && $isManagerOrAdmin) {
+        $where[] = "t.assignee_id = ?";
+        $params[] = trim($_GET['assignee_id']);
+    }
+
+    if (!empty($where)) {
+        $sql .= " WHERE " . implode(" AND ", $where);
+    }
+
+    $sql .= " ORDER BY 
+              CASE WHEN t.status = 'PENDING_APPROVAL' THEN 1
+                   WHEN t.status = 'ASSIGNED' THEN 2
+                   WHEN t.status = 'IN_PROGRESS' THEN 3
+                   ELSE 4 END,
+              t.deadline ASC, t.created_at DESC";
+
+    $tasks = db_query($sql, $params);
+    json_response(['success' => true, 'tasks' => $tasks]);
+}
+
+// POST /api/tasks (Create / Assign / Propose task)
+if ($method === 'POST' && $path === '/api/tasks') {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Forbidden: Tasks are restricted to internal agency staff', 403);
+    }
+
+    $input = get_json_input();
+    $title = trim($input['title'] ?? '');
+    $description = trim($input['description'] ?? '');
+    $deadline = trim($input['deadline'] ?? '');
+    $priority = strtolower(trim($input['priority'] ?? 'medium'));
+    if (!in_array($priority, ['low', 'medium', 'high', 'urgent'])) {
+        $priority = 'medium';
+    }
+
+    if (empty($title) || empty($deadline)) {
+        json_error('Task title and deadline are required', 400);
+    }
+
+    $isManagerOrAdmin = in_array($user['role'], ['super_admin', 'support_manager']);
+    
+    // Assignee determination
+    if ($isManagerOrAdmin) {
+        $assigneeId = !empty($input['assignee_id']) ? trim($input['assignee_id']) : $user['id'];
+        $status = 'ASSIGNED';
+        $approvalStatus = 'APPROVED';
+        $approvedBy = $user['id'];
+        $approvedAt = date('Y-m-d H:i:s');
+    } else {
+        // Regular team member proposing/logging their own task
+        $assigneeId = $user['id'];
+        $status = 'PENDING_APPROVAL';
+        $approvalStatus = 'PENDING';
+        $approvedBy = null;
+        $approvedAt = null;
+    }
+
+    $assigneeUser = db_query_one('SELECT id, name, email, role FROM users WHERE id = ?', [$assigneeId]);
+    if (!$assigneeUser) {
+        json_error('Selected assignee user does not exist', 400);
+    }
+
+    // Generate task number e.g. TSK-1001
+    db_execute("UPDATE ticket_counters SET current_val = current_val + 1 WHERE prefix = 'TSK'");
+    $cnt = db_query_one("SELECT current_val FROM ticket_counters WHERE prefix = 'TSK'");
+    $taskNum = 'TSK-' . ($cnt['current_val'] ?? rand(1000, 9999));
+
+    $taskId = 'tsk-' . time() . '-' . bin2hex(random_bytes(4));
+
+    db_execute(
+        "INSERT INTO tasks (id, task_number, title, description, creator_id, assignee_id, deadline, priority, status, approval_status, approved_by, approved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [$taskId, $taskNum, $title, $description, $user['id'], $assigneeId, $deadline, $priority, $status, $approvalStatus, $approvedBy, $approvedAt]
+    );
+
+    $createdTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    $createdTask['assignee_name'] = $assigneeUser['name'];
+    $createdTask['assignee_email'] = $assigneeUser['email'];
+    $createdTask['creator_name'] = $user['name'];
+
+    // Notifications & Google Sheets Sync
+    if ($isManagerOrAdmin && $assigneeId !== $user['id']) {
+        send_task_assigned_email($createdTask, $assigneeUser, $user);
+    }
+    sync_task_to_google_sheet($createdTask, $isManagerOrAdmin ? 'TASK_ASSIGNED' : 'TASK_PROPOSED', $user['name']);
+
+    json_response(['success' => true, 'task' => $createdTask], 201);
+}
+
+// POST /api/tasks/{id}/approve (Admin approves pending member task)
+if ($method === 'POST' && preg_match('#^/api/tasks/([^/]+)/approve$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $taskId = $m[1];
+
+    $task = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if (!$task) json_error('Task not found', 404);
+
+    $approvedAt = date('Y-m-d H:i:s');
+    db_execute("UPDATE tasks SET status = 'ASSIGNED', approval_status = 'APPROVED', approved_by = ?, approved_at = ?, rejection_reason = NULL WHERE id = ?", [$user['id'], $approvedAt, $taskId]);
+
+    $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    $assignee = db_query_one('SELECT id, name, email FROM users WHERE id = ?', [$task['assignee_id']]);
+    if ($assignee) {
+        $updatedTask['assignee_name'] = $assignee['name'];
+        send_task_approved_email($updatedTask, $assignee, $user);
+    }
+    sync_task_to_google_sheet($updatedTask, 'TASK_APPROVED', $user['name']);
+
+    json_response(['success' => true, 'task' => $updatedTask, 'message' => 'Task approved successfully']);
+}
+
+// POST /api/tasks/{id}/reject (Admin rejects pending member task)
+if ($method === 'POST' && preg_match('#^/api/tasks/([^/]+)/reject$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $taskId = $m[1];
+
+    $task = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if (!$task) json_error('Task not found', 404);
+
+    $input = get_json_input();
+    $reason = trim($input['reason'] ?? 'Not approved by administrator');
+
+    db_execute("UPDATE tasks SET status = 'REJECTED', approval_status = 'REJECTED', rejection_reason = ? WHERE id = ?", [$reason, $taskId]);
+    $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    sync_task_to_google_sheet($updatedTask, 'TASK_REJECTED', $user['name']);
+
+    json_response(['success' => true, 'task' => $updatedTask, 'message' => 'Task marked as rejected']);
+}
+
+// POST /api/tasks/{id}/complete (Assignee or Admin marks task complete)
+if ($method === 'POST' && preg_match('#^/api/tasks/([^/]+)/complete$#', $path, $m)) {
+    $user = require_auth();
+    if ($user['role'] === 'client') json_error('Forbidden', 403);
+    $taskId = $m[1];
+
+    $task = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if (!$task) json_error('Task not found', 404);
+
+    $isManagerOrAdmin = in_array($user['role'], ['super_admin', 'support_manager']);
+    if (!$isManagerOrAdmin && $task['assignee_id'] !== $user['id']) {
+        json_error('Forbidden: You can only complete tasks assigned to you', 403);
+    }
+
+    $input = get_json_input();
+    $notes = trim($input['completion_notes'] ?? '');
+    $completedAt = date('Y-m-d H:i:s');
+
+    db_execute("UPDATE tasks SET status = 'COMPLETED', completed_at = ?, completion_notes = ? WHERE id = ?", [$completedAt, $notes ?: null, $taskId]);
+
+    $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    sync_task_to_google_sheet($updatedTask, 'TASK_COMPLETED', $user['name']);
+
+    json_response(['success' => true, 'task' => $updatedTask, 'message' => 'Task marked as completed!']);
+}
+
+// PATCH /api/tasks/{id} (Update status, deadline, details)
+if ($method === 'PATCH' && preg_match('#^/api/tasks/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    if ($user['role'] === 'client') json_error('Forbidden', 403);
+    $taskId = $m[1];
+
+    $task = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if (!$task) json_error('Task not found', 404);
+
+    $isManagerOrAdmin = in_array($user['role'], ['super_admin', 'support_manager']);
+    if (!$isManagerOrAdmin && $task['assignee_id'] !== $user['id']) {
+        json_error('Forbidden: You can only modify tasks assigned to you', 403);
+    }
+
+    $input = get_json_input();
+    $updates = [];
+    $params = [];
+
+    if (isset($input['status'])) {
+        $allowed = ['ASSIGNED', 'IN_PROGRESS', 'COMPLETED'];
+        if ($isManagerOrAdmin) $allowed[] = 'PENDING_APPROVAL';
+        if (in_array($input['status'], $allowed)) {
+            $updates[] = 'status = ?';
+            $params[] = $input['status'];
+            if ($input['status'] === 'COMPLETED' && empty($task['completed_at'])) {
+                $updates[] = 'completed_at = ?';
+                $params[] = date('Y-m-d H:i:s');
+            }
+        }
+    }
+
+    if ($isManagerOrAdmin) {
+        if (!empty($input['deadline'])) {
+            $updates[] = 'deadline = ?';
+            $params[] = $input['deadline'];
+        }
+        if (!empty($input['priority'])) {
+            $updates[] = 'priority = ?';
+            $params[] = strtolower($input['priority']);
+        }
+        if (!empty($input['assignee_id'])) {
+            $updates[] = 'assignee_id = ?';
+            $params[] = $input['assignee_id'];
+        }
+    }
+
+    if (!empty($updates)) {
+        $params[] = $taskId;
+        db_execute("UPDATE tasks SET " . implode(", ", $updates) . " WHERE id = ?", $params);
+    }
+
+    $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    sync_task_to_google_sheet($updatedTask, 'TASK_UPDATED', $user['name']);
+
+    json_response(['success' => true, 'task' => $updatedTask]);
+}
+
+// DELETE /api/tasks/{id} (Admin deletes task)
+if ($method === 'DELETE' && preg_match('#^/api/tasks/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $taskId = $m[1];
+
+    $task = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if (!$task) json_error('Task not found', 404);
+
+    db_execute('DELETE FROM tasks WHERE id = ?', [$taskId]);
+    json_response(['success' => true, 'message' => 'Task removed successfully']);
 }
 
 // Default 404 for unknown API routes

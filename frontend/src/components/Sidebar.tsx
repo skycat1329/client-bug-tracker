@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   Layers,
   X,
+  CheckSquare,
 } from 'lucide-react';
 
 interface NavItem {
@@ -52,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'overview', label: 'Agency Overview', icon: LayoutDashboard },
     { id: 'tickets', label: 'All Tickets', icon: Ticket },
     ...(isDev || isManagerOrAdmin ? [{ id: 'my-tickets', label: 'My Assigned Tickets', icon: UserCheck }] : []),
+    { id: 'tasks', label: 'Team Tasks & Deadlines', icon: CheckSquare },
     ...(isManagerOrAdmin
       ? [
           { id: 'queues', label: 'Ticket Queues', icon: Layers },

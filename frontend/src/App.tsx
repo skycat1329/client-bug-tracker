@@ -23,6 +23,7 @@ import { SlackHealthPage } from './pages/internal/SlackHealthPage.js';
 import { AuditLogsPage } from './pages/internal/AuditLogsPage.js';
 import { GoogleSheetsPage } from './pages/internal/GoogleSheetsPage.js';
 import { QueuesPage } from './pages/internal/QueuesPage.js';
+import { TasksPage } from './pages/internal/TasksPage.js';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
@@ -71,6 +72,7 @@ export const App: React.FC = () => {
         'sheets',
         'slack',
         'audit',
+        'tasks',
       ].includes(currentView)
     ) {
       setCurrentView('overview');
@@ -198,6 +200,7 @@ export const App: React.FC = () => {
               {currentView === 'organizations' && <OrganizationsPage />}
               {currentView === 'queues' && <QueuesPage />}
               {currentView === 'team' && <TeamPage />}
+              {currentView === 'tasks' && <TasksPage />}
               {currentView === 'routing' && <RoutingRulesPage />}
               {currentView === 'sheets' && <GoogleSheetsPage />}
               {currentView === 'slack' && <SlackHealthPage />}

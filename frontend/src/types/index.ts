@@ -170,3 +170,28 @@ export interface Queue {
   members_count?: number;
   members?: QueueMember[];
 }
+
+export type TaskStatus = 'PENDING_APPROVAL' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED';
+
+export interface Task {
+  id: string;
+  task_number: string;
+  title: string;
+  description: string | null;
+  priority: TicketPriority;
+  status: TaskStatus;
+  assignee_id: string;
+  assignee_name?: string;
+  assignee_email?: string;
+  creator_id: string;
+  creator_name?: string;
+  creator_email?: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  rejection_reason?: string | null;
+  deadline: string;
+  completed_at?: string | null;
+  completion_notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
