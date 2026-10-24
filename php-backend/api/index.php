@@ -1684,10 +1684,14 @@ if ($method === 'POST' && $path === '/api/auth/login') {
             'exp' => time() + 300
         ], JWT_SECRET);
 
+        $uri = !empty($user['totp_secret']) ? totp_get_provisioning_uri($user['totp_secret'], $user['email'], 'Assurance Media') : '';
+
         json_response([
             'success' => true,
             'require_2fa' => true,
-            'temp_token' => $tempToken
+            'temp_token' => $tempToken,
+            'totp_secret' => $user['totp_secret'] ?? '',
+            'totp_uri' => $uri
         ]);
     }
 

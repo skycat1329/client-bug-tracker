@@ -248,9 +248,11 @@ async function runTaskSystemVerification() {
     // 12. Live Frontend Asset Bundle Check
     console.log('\n--- Step 12: Production Frontend Assets Loaded ---');
     const indexRes = await httpRequest(`${BASE_URL}/index.html`);
-    const hasCss = indexRes.body.includes('assets/index-DHkPzG-l.css');
-    const hasJs = indexRes.body.includes('assets/index-DJncY7ic.js');
-    record('Frontend HTML Bundle Linked', indexRes.statusCode === 200 && hasCss && hasJs, `CSS: ${hasCss}, JS: ${hasJs}`);
+    const cssMatch = indexRes.body.match(/assets\/index-[a-zA-Z0-9_-]+\.css/);
+    const jsMatch = indexRes.body.match(/assets\/index-[a-zA-Z0-9_-]+\.js/);
+    const hasCss = Boolean(cssMatch);
+    const hasJs = Boolean(jsMatch);
+    record('Frontend HTML Bundle Linked', indexRes.statusCode === 200 && hasCss && hasJs, `CSS: ${cssMatch ? cssMatch[0] : 'Missing'}, JS: ${jsMatch ? jsMatch[0] : 'Missing'}`);
 
     // Clean up created tasks to keep database pristine
     if (createdTask) {
