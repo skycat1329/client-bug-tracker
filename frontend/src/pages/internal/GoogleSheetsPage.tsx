@@ -361,6 +361,17 @@ function appendRowToSheet(sheet, data) {
                   onChange={(e) => setConfig({ ...config, global_webhook_url: e.target.value })}
                   className="w-full text-xs font-mono px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
                 />
+                {config.global_webhook_url.includes('docs.google.com/spreadsheets') && (
+                  <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-start gap-2 animate-fadeIn">
+                    <AlertTriangle size={15} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <strong>Spreadsheet Viewer URL Detected!</strong>
+                      <p className="mt-0.5 text-[11.5px] text-amber-800">
+                        You pasted the Google Spreadsheet edit/view URL. A spreadsheet cannot accept POST data directly and will return an HTTP 401 error. Please deploy the Apps Script code on the right as a <strong>Web App</strong> (Access: Anyone) and paste the Web App URL (starts with <code>https://script.google.com/.../exec</code>).
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <p className="text-[11px] text-slate-500 mt-1">
                   The Google Apps Script deployed from your master Google Sheet (see instructions on the right).
                 </p>

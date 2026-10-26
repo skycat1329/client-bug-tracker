@@ -15,6 +15,7 @@ import {
   Layers,
   X,
   CheckSquare,
+  FileSignature,
 } from 'lucide-react';
 
 interface NavItem {
@@ -43,6 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const isClient = user.role === 'client';
   const isDev = user.role === 'developer';
   const isManagerOrAdmin = ['support_manager', 'super_admin'].includes(user.role);
+  const canManagePayroll = isManagerOrAdmin || !(!user.can_manage_payroll);
 
   const clientNav: NavItem[] = [
     { id: 'tickets', label: 'My Brand Tickets', icon: Ticket },
@@ -54,6 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'tickets', label: 'All Tickets', icon: Ticket },
     ...(isDev || isManagerOrAdmin ? [{ id: 'my-tickets', label: 'My Assigned Tickets', icon: UserCheck }] : []),
     { id: 'tasks', label: 'Team Tasks & Deadlines', icon: CheckSquare },
+    ...(canManagePayroll ? [{ id: 'payroll', label: 'Payroll & Offer Letters', icon: FileSignature }] : []),
     ...(isManagerOrAdmin
       ? [
           { id: 'queues', label: 'Ticket Queues', icon: Layers },

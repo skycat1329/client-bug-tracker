@@ -24,7 +24,21 @@ Welcome to the **Assurance Media Client Bug Tracker & Engineering Command Center
    - [How an Engineer Proposes a Task for Admin Approval](#6-how-an-engineer-proposes-a-task-for-admin-approval)
    - [How to Mark Tasks Complete & Synchronize with Google Sheets](#7-how-to-mark-tasks-complete--synchronize-with-google-sheets)
    - [Strict Team Privacy: Why Developers Only See Their Own Tasks](#8-strict-team-privacy-why-developers-only-see-their-own-tasks)
-4. [Frequently Asked Questions (FAQ) & Troubleshooting](#frequently-asked-questions-faq--troubleshooting)
+4. [Part 3: Guide for Offer Letters & Salary Slips (Payroll Studio)](#part-3-guide-for-offer-letters--salary-slips-payroll-studio)
+   - [Who Can Access Payroll & Documents?](#1-who-can-access-payroll--documents)
+   - [How Admins Grant or Revoke Access to Specific Team Members](#2-how-admins-grant-or-revoke-access-to-specific-team-members)
+   - [How to Generate an Offer Letter (Full Time, Part Time, Internship)](#3-how-to-generate-an-offer-letter-full-time-part-time-internship)
+   - [Customizing Candidate Info, Salary Breakup & Legal Clauses](#4-customizing-candidate-info-salary-breakup--legal-clauses)
+   - [Printing & Emailing Offer Letters Directly to Candidates](#5-printing--emailing-offer-letters-directly-to-candidates)
+   - [How to Generate a Monthly Pay Slip (Salary Slip)](#6-how-to-generate-a-monthly-pay-slip-salary-slip)
+   - [Customizing Attendance, Earnings, Deductions & Net Pay In Words](#7-customizing-attendance-earnings-deductions--net-pay-in-words)
+   - [Printing & Emailing Pay Slips Directly to Employees](#8-printing--emailing-pay-slips-directly-to-employees)
+   - [Strict Privacy & Zero Mass-Email Guardrail](#9-strict-privacy--zero-mass-email-guardrail)
+5. [Part 4: Google Sheets Real-Time Sync & Fixing the HTTP 401 Error](#part-4-google-sheets-real-time-sync--fixing-the-http-401-error)
+   - [Why did the HTTP 401 Error happen?](#1-why-did-the-http-401-error-happen)
+   - [Step-by-Step: Setting Up the Google Apps Script Web App](#2-step-by-step-setting-up-the-google-apps-script-web-app)
+   - [Testing and Verifying Connection in 30 Seconds](#3-testing-and-verifying-connection-in-30-seconds)
+6. [Frequently Asked Questions (FAQ) & Troubleshooting](#frequently-asked-questions-faq--troubleshooting)
 
 ---
 
@@ -211,6 +225,212 @@ Team members often discover tasks during their workday that need to be done.
 
 ---
 
+## Part 3: Guide for Offer Letters & Salary Slips (Payroll Studio)
+
+### 1. Who Can Access Payroll & Documents?
+- **By Default**: Only **Super Admins** (`super_admin`) and **Support Managers** (`support_manager`) have access to view, create, edit, or email Offer Letters and Pay Slips.
+- **Client Brands**: Strictly blocked. Clients cannot access these endpoints or view the payroll menu.
+- **Delegated Staff**: Regular staff or developers cannot see this menu unless an Admin explicitly turns on their payroll access switch.
+
+---
+
+### 2. How Admins Grant or Revoke Access to Specific Team Members
+If an Admin wants an HR manager, team lead, or specific developer to generate offer letters or salary slips:
+1. In the left navigation menu, click **"Team Members"**.
+2. Look at the team roster table. You will see a column named **"Payroll & Documents Access"**.
+3. Next to the team member's name, you will see a badge and toggle button:
+   - If they do NOT have access: Click **"Grant Access"** (turns green: **"Payroll Access Active"**).
+   - If they already have access: Click **"Revoke"** (turns gray: **"No Access"**).
+4. **Instant Effect**: The moment you click the button, that team member's permissions are updated in real-time. The next time they refresh, **"Payroll & Offer Letters"** appears in their sidebar.
+
+---
+
+### 3. How to Generate an Offer Letter (Full Time, Part Time, Internship)
+1. In the sidebar, click **"Payroll & Offer Letters"** (or icon 📝).
+2. Ensure the top tab is set to **"Offer Letters"**.
+3. Click the blue button **"+ Generate New Offer Letter"**.
+4. A clean studio popup will open. Select the **Employment Type**:
+   - 🔵 **Full Time**
+   - 🟣 **Part Time**
+   - 🟢 **Internship**
+
+---
+
+### 4. Customizing Candidate Info, Salary Breakup & Legal Clauses
+
+#### Step A: Fill Candidate Details
+- **Candidate Full Name**: e.g. *"Rohan Sharma"*
+- **Email Address**: e.g. *"rohan@example.com"*
+- **Phone Number**: e.g. *"+91 98765 43210"*
+- **Job Title / Designation**: e.g. *"Full Stack Engineer"*
+- **Department**: e.g. *"Technology"*
+- **Date of Joining**: Choose the calendar start date.
+- **Reporting Manager / Supervisor**: e.g. *"Faizan Siddiqui"*
+- **Work Location**: e.g. *"Mumbai Head Office / Remote"*
+- **Signatory Name & Title**: e.g. *"Faizan Siddiqui, Business Head / Partner"*
+
+#### Step B: Customize Salary & Compensation Breakup
+- You will see a clean table with salary components (e.g. Basic Salary, HRA, Special Allowance, PF).
+- **Add Component**: Click **"+ Add Component"** to create a new row (e.g. Performance Bonus, Travel Allowance).
+- **Edit Any Field**: Type directly into the Component Name, Monthly Amount (₹), or Annual Amount (₹).
+- **Delete Any Row**: Click the red trash icon 🗑️ next to any row you want to remove.
+- **Total Compensation**: The Monthly Total and Annual Total (CTC) calculate automatically.
+
+#### Step C: Customize Contract Terms & Clauses
+The system comes pre-loaded with the **8 official Assurance Media LLP legal clauses**:
+1. *Probationary Period* (15 days evaluation)
+2. *Working Hours & Professional Conduct*
+3. *Confidentiality, Intellectual Property & Non-Disclosure*
+4. *Termination & Resignation Notice Period* (60 days)
+5. *Offer Acceptance Deadline*
+6. *Leave Policy* (15 days paid leave per calendar year)
+7. *Medical Leave Policy* (Applicable after 180 continuous days)
+8. *Corporate Group Health Insurance* (₹20,00,000 top-tier and ₹5,00,000 baseline)
+
+- **Edit Any Clause**: Simply click inside any clause box and rewrite or tweak the wording to match your requirements.
+- **Delete Any Clause**: Click **"Remove Clause"** if a clause does not apply (for instance, removing insurance for part-time/interns).
+- **Add Custom Clause**: Click **"+ Add Custom Clause"** at the bottom to insert your own custom requirement (e.g. Non-compete, Equipment return).
+
+---
+
+### 5. Printing & Emailing Offer Letters Directly to Candidates
+Once you click **"Save & Generate Offer Letter"**:
+- The offer letter is saved with an official reference code (e.g. **`OFF-1001`**).
+- **Live Preview / Print**: Click the **Print (🖨️)** or **View Document** button:
+  - Opens the official 2-page Assurance Media letterhead document.
+  - Formatted with the company address (*302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West, Mumbai - 400086*).
+  - Print dialog opens automatically. Choose **"Save as PDF"** to produce an official high-resolution PDF with your company branding.
+- **Send via Email**: Click the blue **"Send via Email"** button:
+  - An email is sent **ONLY** to the candidate's email address.
+  - It contains a congratulatory note, summary of position, and their private secure link to review and download their offer letter.
+
+---
+
+### 6. How to Generate a Monthly Pay Slip (Salary Slip)
+1. Go to **"Payroll & Offer Letters"** and switch to the **"Salary Slips"** tab.
+2. Click **"+ Generate Salary Slip"**.
+3. **Select Employee**: Pick an existing staff member from the dropdown. Their Employee ID, Designation, Department, and Date of Joining will auto-fill instantly!
+4. Or type custom details for any new employee.
+
+---
+
+### 7. Customizing Attendance, Earnings, Deductions & Net Pay In Words
+
+#### Attendance & Bank Metrics:
+- **Pay Period**: Select Month (e.g. September) and Year (e.g. 2026).
+- **Total Working Days**: e.g. `30`
+- **LOP (Loss of Pay) Days**: e.g. `4`
+- **Paid Days**: Auto-calculates (`30 - 4 = 26`).
+- **Bank Name & Account Number**: e.g. `HDFC Bank` & `XXXX-XXXX-8921`.
+
+#### Dynamic Earnings & Deductions:
+- **Earnings Table**:
+  - Add or edit rows: Basic Pay, House Rent Allowance (HRA), Conveyance, Special Allowance, Performance Incentive.
+  - Click **"+ Add Earning Row"** or the red trash can to delete.
+  - Total Earnings recalculates in real-time.
+- **Deductions Table**:
+  - Add or edit rows: Provident Fund (PF), Professional Tax (PT), Loss of Pay (LOP), TDS / Tax.
+  - Click **"+ Add Deduction Row"** or the red trash can to delete.
+  - Total Deductions recalculates in real-time.
+
+#### Auto-Calculated Net Pay & Indian Rupees In Words:
+- **Net Salary**: Calculated instantly (`Total Earnings - Total Deductions`, e.g. ₹21,667).
+- **In Words**: Converted automatically into formal Indian English:
+  *"Twenty-One Thousand Six Hundred Sixty-Seven Rupees Only"*.
+
+---
+
+### 8. Printing & Emailing Pay Slips Directly to Employees
+- **Print / PDF**: Click **Print (🖨️)** to view the exact 1-page structured salary slip layout. It matches the standard corporate payroll format with company header, employee details grid, earnings/deductions columns, Net Pay highlight, and authorized signatory line.
+- **Send via Email**: Click **"Send via Email"**. The employee receives a private email with their salary slip reference (e.g. **`PAY-1001`**) and a secure link to view and print their payslip.
+
+---
+
+### 9. Strict Privacy & Zero Mass-Email Guardrail
+- 🛡️ **Zero Unwanted Emails**: The system strictly obeys the rule that **no mass emails or unsolicited notifications are ever sent to existing staff or clients during platform updates or database migrations**.
+- 🔒 **Individual Delivery Only**: When you click "Send via Email", an email is dispatched **exclusively to that single individual** (the candidate or the employee). No one else receives an email.
+
+---
+
+## Part 4: Google Sheets Real-Time Sync & Fixing the HTTP 401 Error
+
+### 1. Why did the HTTP 401 Error happen?
+If you paste a regular browser link like:
+`https://docs.google.com/spreadsheets/d/1XYZ.../edit?usp=sharing`
+
+Google's servers will respond with:
+`HTTP 401 Unauthorized / Access Denied`
+
+**Why?** Because a spreadsheet viewer URL is meant for human web browsers logged into Google Accounts. When our server tries to send automated task data via an API request, Google blocks it unless it is connected to a **Google Apps Script Web App**.
+
+---
+
+### 2. Step-by-Step: Setting Up the Google Apps Script Web App
+You can create a free Google Webhook receiver in less than 2 minutes:
+
+1. Open your Google Spreadsheet in your web browser.
+2. In the top Google Sheets menu, click **Extensions** &rarr; **Apps Script**.
+3. Delete any default code in the editor, and paste the following snippet:
+
+```javascript
+function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var data = JSON.parse(e.postData.contents);
+    
+    // Append task details as a new row
+    sheet.appendRow([
+      new Date(),
+      data.task_id || '',
+      data.title || '',
+      data.assigned_to_name || '',
+      data.priority || '',
+      data.deadline || '',
+      data.status || '',
+      data.completion_notes || ''
+    ]);
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Row added to Google Sheet"
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "ok",
+    message: "Google Apps Script Webhook is active and ready"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+```
+
+4. Click the blue **Deploy** button (top right) &rarr; **New deployment**.
+5. Click the gear icon ⚙️ next to "Select type" and choose **Web app**.
+6. Set the options:
+   - **Description**: `Assurance Media Task Sync`
+   - **Execute as**: `Me (your Google email)`
+   - **Who has access**: `Anyone` *(Crucial: allows the server to send task updates)*
+7. Click **Deploy** and grant Google permissions if asked.
+8. Copy the **Web app URL**. It will look like:
+   `https://script.google.com/macros/s/AKfycb.../exec`
+
+---
+
+### 3. Testing and Verifying Connection in 30 Seconds
+1. In the Command Center, go to **"Google Sheets Sync"** in the sidebar.
+2. Paste the URL ending in **`/exec`** into the **Webhook URL** field.
+3. Click **"Test Connection"**.
+4. You will see a green badge: **"✅ Connected Successfully"**.
+5. All future tasks, SLA deadlines, and completion records will automatically stream into your Google Sheet!
+
+---
+
 ## Frequently Asked Questions (FAQ) & Troubleshooting
 
 ### Q1: I am a Brand Client. Why can't I log into `/admin`?
@@ -228,6 +448,12 @@ Team members often discover tasks during their workday that need to be done.
 
 ### Q5: Can brand clients see internal developer notes?
 **A**: No. When an engineer posts an **"Internal Dev Note"** (marked with a lock 🔒 icon), it is strictly hidden from clients at the database level. Clients only see **"Public Customer Replies"**.
+
+### Q6: Will existing users or team members receive emails when the website or database is updated?
+**A**: **Never.** We enforce a strict zero-mass-email guardrail. Database updates and system migrations are 100% silent and never trigger email notifications. Emails are only ever sent when you intentionally click a button (such as assigning a task, or clicking "Send via Email" on an offer letter or payslip to send it directly to that one specific person).
+
+### Q7: Why did Google Sheets say "HTTP 401 Unauthorized" when I tested my sheet link?
+**A**: That happens when a browser viewer link (`https://docs.google.com/spreadsheets/d/...`) is pasted instead of a Google Apps Script Web App link. To fix it, follow [Part 4: Google Sheets Real-Time Sync](#part-4-google-sheets-real-time-sync--fixing-the-http-401-error) to deploy an Apps Script Web App and paste the URL ending in `/exec`.
 
 ---
 *Assurance Media Client Services & Engineering Platform • Made by Akash with ❤️*

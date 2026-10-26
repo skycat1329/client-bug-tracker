@@ -23,6 +23,7 @@ export interface User {
   organization_name?: string;
   avatar_url?: string | null;
   must_reset_password?: boolean | number;
+  can_manage_payroll?: boolean;
 }
 
 export interface Role {
@@ -195,3 +196,94 @@ export interface Task {
   created_at: string;
   updated_at: string;
 }
+
+export type EmploymentType = 'full_time' | 'part_time' | 'internship';
+export type OfferStatus = 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+
+export interface SalaryBreakupItem {
+  item: string;
+  monthly: number;
+  annual: number;
+}
+
+export interface OfferClause {
+  id: string;
+  title: string;
+  content: string;
+  is_default?: boolean;
+}
+
+export interface OfferLetter {
+  id: string;
+  offer_number: string;
+  candidate_name: string;
+  candidate_email: string;
+  candidate_phone?: string | null;
+  candidate_address?: string | null;
+  employment_type: EmploymentType;
+  position: string;
+  department: string;
+  reporting_to: string;
+  joining_date: string;
+  work_location: string;
+  laptop_required: boolean | number;
+  work_mode: string;
+  working_days: string;
+  working_hours: string;
+  monthly_salary: number;
+  annual_ctc: number;
+  payment_cycle: string;
+  salary_breakup: SalaryBreakupItem[];
+  clauses: OfferClause[];
+  signatory_name: string;
+  signatory_title: string;
+  status: OfferStatus;
+  sent_at?: string | null;
+  sent_to_email?: string | null;
+  view_token: string;
+  created_by?: string;
+  creator_name?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type PaySlipStatus = 'DRAFT' | 'GENERATED' | 'SENT';
+
+export interface SalaryComponent {
+  label: string;
+  amount: number;
+}
+
+export interface PaySlip {
+  id: string;
+  slip_number: string;
+  employee_id: string;
+  employee_name: string;
+  employee_email: string;
+  designation: string;
+  department: string;
+  date_of_joining?: string | null;
+  month: string;
+  year: number;
+  total_working_days: number;
+  lop_days: number;
+  paid_days: number;
+  bank_name: string;
+  bank_account_no?: string | null;
+  earnings: SalaryComponent[];
+  deductions: SalaryComponent[];
+  total_earnings: number;
+  total_deductions: number;
+  net_pay: number;
+  net_pay_words: string;
+  signatory_label: string;
+  status: PaySlipStatus;
+  sent_at?: string | null;
+  sent_to_email?: string | null;
+  view_token: string;
+  created_by?: string;
+  creator_name?: string;
+  created_at: string;
+  updated_at?: string;
+}
+

@@ -114,6 +114,88 @@ function ensure_security_schema() {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         db_execute("INSERT INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('TSK', 1000) ON DUPLICATE KEY UPDATE `prefix` = `prefix`");
+
+        // Payroll & Document Generation Access Migration
+        $colsPayroll = db_query("SHOW COLUMNS FROM `users` LIKE 'can_manage_payroll'");
+        if (empty($colsPayroll)) {
+            db_execute("ALTER TABLE `users` ADD COLUMN `can_manage_payroll` TINYINT(1) DEFAULT 0 AFTER `totp_enabled`");
+        }
+
+        // Auto-migrate offer_letters table for Customizable Employment Contracts
+        db_execute("CREATE TABLE IF NOT EXISTS `offer_letters` (
+            `id` VARCHAR(64) PRIMARY KEY,
+            `offer_number` VARCHAR(30) NOT NULL UNIQUE,
+            `candidate_name` VARCHAR(255) NOT NULL,
+            `candidate_email` VARCHAR(191) NOT NULL,
+            `candidate_phone` VARCHAR(50) NULL,
+            `candidate_address` TEXT NULL,
+            `employment_type` ENUM('full_time', 'part_time', 'internship') NOT NULL DEFAULT 'full_time',
+            `position` VARCHAR(255) NOT NULL,
+            `department` VARCHAR(100) NOT NULL DEFAULT 'Tech',
+            `reporting_to` VARCHAR(255) NOT NULL DEFAULT 'Management Team / Director',
+            `joining_date` DATE NOT NULL,
+            `work_location` TEXT NOT NULL,
+            `laptop_required` TINYINT(1) DEFAULT 1,
+            `work_mode` VARCHAR(50) DEFAULT 'On Site',
+            `working_days` VARCHAR(100) DEFAULT 'Monday to Saturday (Office)',
+            `working_hours` VARCHAR(100) DEFAULT '10 AM – 6:30 PM',
+            `monthly_salary` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+            `annual_ctc` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+            `payment_cycle` VARCHAR(100) DEFAULT 'Monthly (13th of Every Month)',
+            `salary_breakup` LONGTEXT NULL,
+            `clauses` LONGTEXT NULL,
+            `signatory_name` VARCHAR(150) DEFAULT 'Mr. Faizan Siddiqui',
+            `signatory_title` VARCHAR(150) DEFAULT 'Business Head',
+            `status` ENUM('DRAFT', 'SENT', 'ACCEPTED', 'EXPIRED', 'REVOKED') DEFAULT 'DRAFT',
+            `sent_at` DATETIME NULL,
+            `sent_to_email` VARCHAR(191) NULL,
+            `view_token` VARCHAR(64) NULL UNIQUE,
+            `created_by` VARCHAR(64) NOT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_offer_email` (`candidate_email`),
+            INDEX `idx_offer_status` (`status`),
+            INDEX `idx_offer_token` (`view_token`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Auto-migrate pay_slips table for Customizable Salary Slips
+        db_execute("CREATE TABLE IF NOT EXISTS `pay_slips` (
+            `id` VARCHAR(64) PRIMARY KEY,
+            `slip_number` VARCHAR(30) NOT NULL UNIQUE,
+            `employee_id` VARCHAR(50) NOT NULL,
+            `employee_name` VARCHAR(255) NOT NULL,
+            `employee_email` VARCHAR(191) NOT NULL,
+            `designation` VARCHAR(255) NOT NULL,
+            `department` VARCHAR(100) NOT NULL DEFAULT 'Tech',
+            `date_of_joining` DATE NULL,
+            `month` VARCHAR(20) NOT NULL,
+            `year` INT NOT NULL,
+            `total_working_days` INT NOT NULL DEFAULT 30,
+            `lop_days` INT NOT NULL DEFAULT 0,
+            `paid_days` INT NOT NULL DEFAULT 30,
+            `bank_name` VARCHAR(100) DEFAULT 'HDFC BANK',
+            `bank_account_no` VARCHAR(100) NULL,
+            `earnings` LONGTEXT NULL,
+            `deductions` LONGTEXT NULL,
+            `total_earnings` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+            `total_deductions` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+            `net_pay` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+            `net_pay_words` VARCHAR(255) NULL,
+            `signatory_label` VARCHAR(150) DEFAULT 'Employer Signature',
+            `status` ENUM('DRAFT', 'GENERATED', 'SENT') DEFAULT 'GENERATED',
+            `sent_at` DATETIME NULL,
+            `sent_to_email` VARCHAR(191) NULL,
+            `view_token` VARCHAR(64) NULL UNIQUE,
+            `created_by` VARCHAR(64) NOT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_payslip_emp_id` (`employee_id`),
+            INDEX `idx_payslip_month_year` (`month`, `year`),
+            INDEX `idx_payslip_token` (`view_token`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("INSERT INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('OFF', 1000) ON DUPLICATE KEY UPDATE `prefix` = `prefix`");
+        db_execute("INSERT INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('PAY', 1000) ON DUPLICATE KEY UPDATE `prefix` = `prefix`");
     } catch (Exception $e) {}
 }
 
@@ -246,9 +328,10 @@ function get_auth_user(): ?array {
         return null;
     }
 
-    $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [$decoded['userId']]);
+    $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password, can_manage_payroll FROM users WHERE id = ?', [$decoded['userId']]);
     if ($user) {
         $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
+        $user['can_manage_payroll'] = !empty($user['can_manage_payroll']) && ((int)$user['can_manage_payroll'] === 1);
         if (empty($user['organization_id'])) {
             $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
             if ($mem && !empty($mem['organization_id'])) {
@@ -280,6 +363,19 @@ function require_auth(): array {
         json_error('You must reset your initial temporary password before accessing portal features.', 403, 'PASSWORD_RESET_REQUIRED');
     }
 
+    return $user;
+}
+
+function require_payroll_access(): array {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Forbidden: Client brand users cannot access document generation features.', 403);
+    }
+    $isAdmin = in_array($user['role'], ['super_admin', 'support_manager'], true);
+    $canManage = !empty($user['can_manage_payroll']);
+    if (!$isAdmin && !$canManage) {
+        json_error('Forbidden: You do not have permission to access Offer Letter and Pay Slip Generation.', 403);
+    }
     return $user;
 }
 
@@ -1869,11 +1965,15 @@ if ($method === 'GET' && $path === '/api/auth/me') {
 if ($method === 'GET' && $path === '/api/auth/staff') {
     $user = require_auth();
     $staff = db_query(
-        "SELECT id, email, phone, name, role, custom_role, avatar_url, created_at 
+        "SELECT id, email, phone, name, role, custom_role, avatar_url, can_manage_payroll, created_at 
          FROM users 
          WHERE role != 'client' 
          ORDER BY created_at ASC"
     );
+    foreach ($staff as &$s) {
+        $s['can_manage_payroll'] = !empty($s['can_manage_payroll']) && ((int)$s['can_manage_payroll'] === 1);
+    }
+    unset($s);
     json_response(['success' => true, 'staff' => $staff]);
 }
 
@@ -2019,8 +2119,39 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
         db_execute($updateSql, $params);
     }
 
-    $updated = db_query_one('SELECT id, email, phone, name, role, custom_role, organization_id, must_reset_password, created_at, updated_at FROM users WHERE id = ?', [$targetUserId]);
+    $updated = db_query_one('SELECT id, email, phone, name, role, custom_role, organization_id, must_reset_password, can_manage_payroll, created_at, updated_at FROM users WHERE id = ?', [$targetUserId]);
+    if ($updated) {
+        $updated['can_manage_payroll'] = !empty($updated['can_manage_payroll']) && ((int)$updated['can_manage_payroll'] === 1);
+    }
     json_response(['success' => true, 'user' => $updated, 'message' => 'Team member updated successfully']);
+}
+
+// PATCH /api/auth/staff/{id}/payroll-access (Admin grants or revokes payroll access)
+if ($method === 'PATCH' && preg_match('#^/api/auth/staff/([^/]+)/payroll-access$#', $path, $m)) {
+    $currentUser = require_auth();
+    require_roles($currentUser, ['super_admin', 'support_manager']);
+    $targetId = $m[1];
+
+    $targetUser = db_query_one('SELECT id, name, email, role FROM users WHERE id = ?', [$targetId]);
+    if (!$targetUser) {
+        json_error('User not found', 404);
+    }
+    if ($targetUser['role'] === 'client') {
+        json_error('Cannot grant payroll access to client brand users', 400);
+    }
+
+    $input = get_json_input();
+    $canManage = !empty($input['can_manage_payroll']) ? 1 : 0;
+
+    db_execute('UPDATE users SET can_manage_payroll = ? WHERE id = ?', [$canManage, $targetId]);
+    $updatedUser = db_query_one('SELECT id, email, name, role, custom_role, can_manage_payroll FROM users WHERE id = ?', [$targetId]);
+    $updatedUser['can_manage_payroll'] = ((int)($updatedUser['can_manage_payroll'] ?? 0) === 1);
+
+    json_response([
+        'success' => true,
+        'user' => $updatedUser,
+        'message' => $canManage ? "Payroll and document generation access granted to {$targetUser['name']}." : "Payroll access revoked for {$targetUser['name']}."
+    ]);
 }
 
 // GET /api/auth/roles (List roles)
@@ -4147,6 +4278,1163 @@ if ($method === 'DELETE' && preg_match('#^/api/tasks/([^/]+)$#', $path, $m)) {
 
     db_execute('DELETE FROM tasks WHERE id = ?', [$taskId]);
     json_response(['success' => true, 'message' => 'Task removed successfully']);
+}
+
+// ==============================================================================
+// 15. PAYROLL & DOCUMENT GENERATION ENGINE (Assurance Media LLP)
+// ==============================================================================
+
+function convert_number_to_indian_rupees(float $number): string {
+    $number = round($number, 2);
+    $integerPart = (int)floor($number);
+    $decimalPart = (int)round(($number - $integerPart) * 100);
+
+    if ($integerPart === 0) {
+        $words = 'Zero';
+    } else {
+        $units = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 
+                  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+        $tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+        $numToWordsBelowThousand = function($n) use ($units, $tens) {
+            $str = '';
+            if ($n >= 100) {
+                $str .= $units[(int)floor($n / 100)] . ' Hundred';
+                $n %= 100;
+                if ($n > 0) $str .= ' ';
+            }
+            if ($n >= 20) {
+                $str .= $tens[(int)floor($n / 10)];
+                $rem = $n % 10;
+                if ($rem > 0) $str .= '-' . $units[$rem];
+            } else if ($n > 0) {
+                $str .= $units[$n];
+            }
+            return $str;
+        };
+
+        $crores = (int)floor($integerPart / 10000000);
+        $remCrores = $integerPart % 10000000;
+        $lakhs = (int)floor($remCrores / 100000);
+        $remLakhs = $remCrores % 100000;
+        $thousands = (int)floor($remLakhs / 1000);
+        $remainder = $remLakhs % 1000;
+
+        $parts = [];
+        if ($crores > 0) {
+            $parts[] = $numToWordsBelowThousand($crores) . ' Crore';
+        }
+        if ($lakhs > 0) {
+            $parts[] = $numToWordsBelowThousand($lakhs) . ' Lakh';
+        }
+        if ($thousands > 0) {
+            $parts[] = $numToWordsBelowThousand($thousands) . ' Thousand';
+        }
+        if ($remainder > 0) {
+            if ($remainder >= 100) {
+                $parts[] = $numToWordsBelowThousand($remainder);
+            } else {
+                $parts[] = ($parts ? '& ' : '') . $numToWordsBelowThousand($remainder);
+            }
+        }
+        $words = implode(' ', $parts);
+    }
+
+    if ($decimalPart > 0) {
+        $words .= ' and ' . $decimalPart . '/100 Paise';
+    }
+    return trim($words);
+}
+
+function get_default_offer_clauses(): array {
+    return [
+        [
+            'id' => 'probation',
+            'title' => 'Probation Period',
+            'content' => "The first 15 days of the Job will be considered a probation period.\nDuring this period, the Company reserves the right to evaluate performance, conduct, and suitability for the role.\nDuring the probation period:\n• The Company may terminate the Job immediately, without notice and without any obligation to continue the Job.\n• Upon successful completion of the probation period, the Job will continue for the remaining agreed duration.",
+            'is_default' => true
+        ],
+        [
+            'id' => 'working_hours',
+            'title' => 'Working Hours & Mode',
+            'content' => "Work Mode: On Site\nWorking Days: Monday to Saturday (Office)\nWorking Hours: 10 AM – 6:30 PM",
+            'is_default' => true
+        ],
+        [
+            'id' => 'confidentiality',
+            'title' => 'Confidentiality',
+            'content' => "During and after your employment, you shall maintain strict confidentiality regarding all company information, client data, business strategies, pricing, and proprietary information.",
+            'is_default' => true
+        ],
+        [
+            'id' => 'termination',
+            'title' => 'Termination',
+            'content' => "In order to resign the notice should be given prior to 60 days. If not FNF (Full & Final) will not realise by the company.",
+            'is_default' => true
+        ],
+        [
+            'id' => 'acceptance',
+            'title' => 'Acceptance of Offer',
+            'content' => "Please confirm your acceptance of this offer by replying with \"I accept\" to this email or by signing and returning a copy of this letter.\nWe look forward to working with you and wish you a valuable learning experience with Assurance Media LLP.",
+            'is_default' => true
+        ],
+        [
+            'id' => 'leave_policy',
+            'title' => 'Leave Policy',
+            'content' => "You are required to submit your leave application to the authorities at least 15 days prior. And your leave will be granted only on the consent of the higher authority.",
+            'is_default' => true
+        ],
+        [
+            'id' => 'medical',
+            'title' => 'Medical',
+            'content' => "During first 180 days of employment, company will not be liable for any type of medical expenses.",
+            'is_default' => true
+        ],
+        [
+            'id' => 'insurance',
+            'title' => 'Insurance Benefits',
+            'content' => "• After completion of one (1) year of service:\nYou will be covered under a Personal Accidental Insurance Policy of ₹20,00,000 (Twenty Lakh) and a Health Insurance Policy of ₹5,00,000 (Five Lakh).",
+            'is_default' => true
+        ]
+    ];
+}
+
+function generate_payroll_seq(string $prefix): string {
+    ensure_security_schema();
+    db_execute("INSERT INTO ticket_counters (prefix, current_val) VALUES (?, 1000) ON DUPLICATE KEY UPDATE current_val = current_val + 1", [$prefix]);
+    $counter = db_query_one("SELECT current_val FROM ticket_counters WHERE prefix = ?", [$prefix]);
+    $num = $counter['current_val'] ?? rand(1000, 9999);
+    return sprintf("%s-%04d", $prefix, $num);
+}
+
+// ------------------------------------------------------------------------------
+// Offer Letter Endpoints
+// ------------------------------------------------------------------------------
+
+// GET /api/payroll/offer-letters (List all offer letters)
+if ($method === 'GET' && ($path === '/api/payroll/offer-letters' || $path === '/api/payroll/offer-letters/')) {
+    $user = require_payroll_access();
+    $offers = db_query(
+        "SELECT o.*, u.name as creator_name 
+         FROM offer_letters o 
+         LEFT JOIN users u ON o.created_by = u.id 
+         ORDER BY o.created_at DESC"
+    );
+    foreach ($offers as &$off) {
+        $off['salary_breakup'] = !empty($off['salary_breakup']) ? json_decode($off['salary_breakup'], true) : [];
+        $off['clauses'] = !empty($off['clauses']) ? json_decode($off['clauses'], true) : [];
+        $off['laptop_required'] = (bool)$off['laptop_required'];
+    }
+    unset($off);
+    json_response(['success' => true, 'offer_letters' => $offers]);
+}
+
+// POST /api/payroll/offer-letters (Create new offer letter)
+if ($method === 'POST' && ($path === '/api/payroll/offer-letters' || $path === '/api/payroll/offer-letters/')) {
+    $user = require_payroll_access();
+    $input = get_json_input();
+
+    $candidateName = trim($input['candidate_name'] ?? '');
+    $candidateEmail = strtolower(trim($input['candidate_email'] ?? ''));
+    $position = trim($input['position'] ?? '');
+    $joiningDate = trim($input['joining_date'] ?? date('Y-m-d'));
+
+    if (empty($candidateName) || empty($candidateEmail) || empty($position)) {
+        json_error('Candidate Name, Email, and Position are required.', 400);
+    }
+
+    $id = 'off-' . time() . '-' . bin2hex(random_bytes(4));
+    $offerNumber = generate_payroll_seq('OFF');
+    $viewToken = bin2hex(random_bytes(16));
+
+    $candidatePhone = trim($input['candidate_phone'] ?? '');
+    $candidateAddress = trim($input['candidate_address'] ?? '');
+    $employmentType = in_array($input['employment_type'] ?? '', ['full_time', 'part_time', 'internship']) ? $input['employment_type'] : 'full_time';
+    $department = trim($input['department'] ?? 'Tech');
+    $reportingTo = trim($input['reporting_to'] ?? 'Management Team / Director');
+    $workLocation = trim($input['work_location'] ?? '3rd Floor, 302, SHIV KRUPA CHS LTD, near Railway Station, Kirol Village, Vidyavihar West, Mumbai, M.H 400086');
+    $laptopRequired = !empty($input['laptop_required']) ? 1 : 0;
+    $workMode = trim($input['work_mode'] ?? 'On Site');
+    $workingDays = trim($input['working_days'] ?? 'Monday to Saturday (Office)');
+    $workingHours = trim($input['working_hours'] ?? '10 AM – 6:30 PM');
+    $monthlySalary = floatval($input['monthly_salary'] ?? 0.00);
+    $annualCtc = floatval($input['annual_ctc'] ?? ($monthlySalary * 12));
+    $paymentCycle = trim($input['payment_cycle'] ?? 'Monthly (13th of Every Month)');
+
+    // Salary Breakup
+    $salaryBreakup = isset($input['salary_breakup']) && is_array($input['salary_breakup']) 
+        ? $input['salary_breakup'] 
+        : [
+            ['item' => 'Basic Salary', 'monthly' => $monthlySalary, 'annual' => $monthlySalary * 12]
+        ];
+
+    // Clauses
+    $clauses = isset($input['clauses']) && is_array($input['clauses']) && count($input['clauses']) > 0
+        ? $input['clauses']
+        : get_default_offer_clauses();
+
+    $signatoryName = trim($input['signatory_name'] ?? 'Mr. Faizan Siddiqui');
+    $signatoryTitle = trim($input['signatory_title'] ?? 'Business Head');
+
+    db_execute(
+        "INSERT INTO offer_letters (
+            id, offer_number, candidate_name, candidate_email, candidate_phone, candidate_address,
+            employment_type, position, department, reporting_to, joining_date, work_location,
+            laptop_required, work_mode, working_days, working_hours, monthly_salary, annual_ctc,
+            payment_cycle, salary_breakup, clauses, signatory_name, signatory_title, status,
+            view_token, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)",
+        [
+            $id, $offerNumber, $candidateName, $candidateEmail, $candidatePhone, $candidateAddress,
+            $employmentType, $position, $department, $reportingTo, $joiningDate, $workLocation,
+            $laptopRequired, $workMode, $workingDays, $workingHours, $monthlySalary, $annualCtc,
+            $paymentCycle, json_encode($salaryBreakup), json_encode($clauses), $signatoryName, $signatoryTitle,
+            $viewToken, $user['id']
+        ]
+    );
+
+    $created = db_query_one("SELECT * FROM offer_letters WHERE id = ?", [$id]);
+    $created['salary_breakup'] = json_decode($created['salary_breakup'], true);
+    $created['clauses'] = json_decode($created['clauses'], true);
+
+    json_response(['success' => true, 'offer_letter' => $created, 'message' => "Offer Letter {$offerNumber} generated successfully."], 201);
+}
+
+// GET /api/payroll/offer-letters/{id}
+if ($method === 'GET' && preg_match('#^/api/payroll/offer-letters/([^/]+)$#', $path, $m)) {
+    $user = require_payroll_access();
+    $offerId = $m[1];
+    $offer = db_query_one("SELECT * FROM offer_letters WHERE id = ?", [$offerId]);
+    if (!$offer) json_error('Offer Letter not found', 404);
+
+    $offer['salary_breakup'] = !empty($offer['salary_breakup']) ? json_decode($offer['salary_breakup'], true) : [];
+    $offer['clauses'] = !empty($offer['clauses']) ? json_decode($offer['clauses'], true) : [];
+    $offer['laptop_required'] = (bool)$offer['laptop_required'];
+
+    json_response(['success' => true, 'offer_letter' => $offer]);
+}
+
+// PUT /api/payroll/offer-letters/{id} (Update existing offer letter)
+if (($method === 'PUT' || $method === 'PATCH') && preg_match('#^/api/payroll/offer-letters/([^/]+)$#', $path, $m)) {
+    $user = require_payroll_access();
+    $offerId = $m[1];
+    $existing = db_query_one("SELECT * FROM offer_letters WHERE id = ?", [$offerId]);
+    if (!$existing) json_error('Offer Letter not found', 404);
+
+    $input = get_json_input();
+    $candidateName = trim($input['candidate_name'] ?? $existing['candidate_name']);
+    $candidateEmail = strtolower(trim($input['candidate_email'] ?? $existing['candidate_email']));
+    $candidatePhone = trim($input['candidate_phone'] ?? $existing['candidate_phone']);
+    $candidateAddress = trim($input['candidate_address'] ?? $existing['candidate_address']);
+    $employmentType = in_array($input['employment_type'] ?? '', ['full_time', 'part_time', 'internship']) ? $input['employment_type'] : $existing['employment_type'];
+    $position = trim($input['position'] ?? $existing['position']);
+    $department = trim($input['department'] ?? $existing['department']);
+    $reportingTo = trim($input['reporting_to'] ?? $existing['reporting_to']);
+    $joiningDate = trim($input['joining_date'] ?? $existing['joining_date']);
+    $workLocation = trim($input['work_location'] ?? $existing['work_location']);
+    $laptopRequired = isset($input['laptop_required']) ? ($input['laptop_required'] ? 1 : 0) : $existing['laptop_required'];
+    $workMode = trim($input['work_mode'] ?? $existing['work_mode']);
+    $workingDays = trim($input['working_days'] ?? $existing['working_days']);
+    $workingHours = trim($input['working_hours'] ?? $existing['working_hours']);
+    $monthlySalary = isset($input['monthly_salary']) ? floatval($input['monthly_salary']) : floatval($existing['monthly_salary']);
+    $annualCtc = isset($input['annual_ctc']) ? floatval($input['annual_ctc']) : floatval($existing['annual_ctc']);
+    $paymentCycle = trim($input['payment_cycle'] ?? $existing['payment_cycle']);
+    $signatoryName = trim($input['signatory_name'] ?? $existing['signatory_name']);
+    $signatoryTitle = trim($input['signatory_title'] ?? $existing['signatory_title']);
+
+    $salaryBreakup = isset($input['salary_breakup']) && is_array($input['salary_breakup']) 
+        ? json_encode($input['salary_breakup']) 
+        : $existing['salary_breakup'];
+
+    $clauses = isset($input['clauses']) && is_array($input['clauses']) 
+        ? json_encode($input['clauses']) 
+        : $existing['clauses'];
+
+    db_execute(
+        "UPDATE offer_letters SET 
+            candidate_name = ?, candidate_email = ?, candidate_phone = ?, candidate_address = ?,
+            employment_type = ?, position = ?, department = ?, reporting_to = ?, joining_date = ?,
+            work_location = ?, laptop_required = ?, work_mode = ?, working_days = ?, working_hours = ?,
+            monthly_salary = ?, annual_ctc = ?, payment_cycle = ?, salary_breakup = ?, clauses = ?,
+            signatory_name = ?, signatory_title = ?
+         WHERE id = ?",
+        [
+            $candidateName, $candidateEmail, $candidatePhone, $candidateAddress,
+            $employmentType, $position, $department, $reportingTo, $joiningDate,
+            $workLocation, $laptopRequired, $workMode, $workingDays, $workingHours,
+            $monthlySalary, $annualCtc, $paymentCycle, $salaryBreakup, $clauses,
+            $signatoryName, $signatoryTitle, $offerId
+        ]
+    );
+
+    $updated = db_query_one("SELECT * FROM offer_letters WHERE id = ?", [$offerId]);
+    $updated['salary_breakup'] = json_decode($updated['salary_breakup'], true);
+    $updated['clauses'] = json_decode($updated['clauses'], true);
+
+    json_response(['success' => true, 'offer_letter' => $updated, 'message' => "Offer Letter updated successfully."]);
+}
+
+// DELETE /api/payroll/offer-letters/{id}
+if ($method === 'DELETE' && preg_match('#^/api/payroll/offer-letters/([^/]+)$#', $path, $m)) {
+    $user = require_payroll_access();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $offerId = $m[1];
+    $existing = db_query_one("SELECT id FROM offer_letters WHERE id = ?", [$offerId]);
+    if (!$existing) json_error('Offer Letter not found', 404);
+
+    db_execute("DELETE FROM offer_letters WHERE id = ?", [$offerId]);
+    json_response(['success' => true, 'message' => 'Offer Letter deleted successfully.']);
+}
+
+// POST /api/payroll/offer-letters/{id}/send-email (Dispatch official offer letter to candidate ONLY)
+if ($method === 'POST' && preg_match('#^/api/payroll/offer-letters/([^/]+)/send-email$#', $path, $m)) {
+    $user = require_payroll_access();
+    $offerId = $m[1];
+    $offer = db_query_one("SELECT * FROM offer_letters WHERE id = ?", [$offerId]);
+    if (!$offer) json_error('Offer Letter not found', 404);
+
+    $recipientEmail = trim($offer['candidate_email']);
+    if (empty($recipientEmail) || !filter_var($recipientEmail, FILTER_VALIDATE_EMAIL)) {
+        json_error('Candidate email is missing or invalid.', 400);
+    }
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $viewUrl = $protocol . $host . '/api/payroll/view/offer/' . $offer['view_token'];
+
+    $subject = "Assurance Media LLP - Offer of Employment: " . $offer['position'] . " - " . $offer['candidate_name'];
+    $empTypeLabel = ($offer['employment_type'] === 'internship') ? 'Internship' : (($offer['employment_type'] === 'part_time') ? 'Part Time' : 'Full Time');
+
+    $html = "
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset='utf-8'>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #0f172a; }
+        .card { max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.07); }
+        .header { background: #0176D3; padding: 28px 24px; text-align: center; color: #ffffff; }
+        .header h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+        .header p { margin: 6px 0 0 0; font-size: 13px; opacity: 0.95; }
+        .content { padding: 30px 26px; }
+        .box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 5px solid #0176D3; padding: 16px 18px; border-radius: 8px; margin: 18px 0; }
+        .row { margin: 6px 0; font-size: 13.5px; }
+        .btn { display: inline-block; background: #0176D3; color: #ffffff !important; padding: 14px 30px; border-radius: 10px; font-weight: 700; font-size: 14px; text-decoration: none; box-shadow: 0 4px 6px -1px rgba(1, 118, 211, 0.3); text-align: center; }
+        .footer { padding: 18px 24px; background: #f8fafc; font-size: 11.5px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; line-height: 1.6; }
+      </style>
+    </head>
+    <body>
+      <div class='card'>
+        <div class='header'>
+          <h1>Assurance Media LLP</h1>
+          <p>Official Offer of Employment &bull; " . htmlspecialchars($offer['offer_number']) . "</p>
+        </div>
+        <div class='content'>
+          <p style='font-size: 15px;'>Dear <strong>" . htmlspecialchars($offer['candidate_name']) . "</strong>,</p>
+          <p style='color: #475569; font-size: 14px; line-height: 1.6;'>
+            We are pleased to extend an offer of employment with <strong>Assurance Media LLP</strong> for the position of <strong>" . htmlspecialchars($offer['position']) . "</strong>.
+            Your skills, experience, and professional capabilities have impressed us, and we believe you will be a valuable addition to our team.
+          </p>
+
+          <div class='box'>
+            <div class='row'><strong>Position:</strong> " . htmlspecialchars($offer['position']) . "</div>
+            <div class='row'><strong>Employment Type:</strong> " . htmlspecialchars($empTypeLabel) . "</div>
+            <div class='row'><strong>Department:</strong> " . htmlspecialchars($offer['department']) . "</div>
+            <div class='row'><strong>Joining Date:</strong> " . htmlspecialchars(date('d/m/Y', strtotime($offer['joining_date']))) . "</div>
+            <div class='row'><strong>Fixed Monthly Salary:</strong> ₹" . number_format($offer['monthly_salary'], 2) . "/-</div>
+            <div class='row'><strong>Annual CTC:</strong> ₹" . number_format($offer['annual_ctc'], 2) . "/-</div>
+            <div class='row'><strong>Work Mode:</strong> " . htmlspecialchars($offer['work_mode']) . " (" . htmlspecialchars($offer['working_hours']) . ")</div>
+          </div>
+
+          <p style='color: #475569; font-size: 13.5px; line-height: 1.6;'>
+            Please review the full official employment contract by clicking the secure link below. You can view, verify all clauses, and print/save the document as an official PDF.
+          </p>
+
+          <div style='text-align: center; margin: 26px 0;'>
+            <a href='" . htmlspecialchars($viewUrl) . "' class='btn'>View &amp; Print Official Offer Letter &rarr;</a>
+          </div>
+
+          <p style='color: #64748b; font-size: 12.5px;'>
+            <strong>Acceptance Instructions:</strong> Please confirm your acceptance of this offer by replying with <em>\"I accept\"</em> to this email or by signing and returning a copy of the letter.
+          </p>
+        </div>
+        <div class='footer'>
+          <strong>Assurance Media LLP</strong><br/>
+          302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.<br/>
+          Phone: +91 96965 84985 | Email: hello@assurancemedia.in | Web: www.assurancemedia.in
+        </div>
+      </div>
+    </body>
+    </html>";
+
+    $fromEmail = defined('EMAIL_FROM') && !empty(EMAIL_FROM) ? EMAIL_FROM : 'hello@assurancemedia.in';
+    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Assurance Media LLP';
+
+    $delivered = false;
+    $errorMessage = null;
+
+    if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+        $smtpResult = send_smtp_email($recipientEmail, $subject, $html);
+        $delivered = $smtpResult['success'];
+        $errorMessage = $smtpResult['error'] ?? null;
+    } else {
+        $headers = [
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=UTF-8',
+            'From: ' . $fromName . ' <' . $fromEmail . '>',
+            'Reply-To: ' . $fromEmail,
+            'Return-Path: ' . $fromEmail,
+            'X-Mailer: AssuranceMedia/PHP'
+        ];
+        $delivered = @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+        if (!$delivered) {
+            $errorMessage = 'PHP mail() returned false. SMTP is recommended.';
+        }
+    }
+
+    $now = date('Y-m-d H:i:s');
+    db_execute(
+        "UPDATE offer_letters SET status = 'SENT', sent_at = ?, sent_to_email = ? WHERE id = ?",
+        [$now, $recipientEmail, $offerId]
+    );
+
+    json_response([
+        'success' => true,
+        'delivered' => $delivered,
+        'sent_to' => $recipientEmail,
+        'view_url' => $viewUrl,
+        'error' => $errorMessage,
+        'message' => $delivered 
+            ? "Offer Letter successfully dispatched to {$recipientEmail}." 
+            : "Offer marked as sent, but email delivery noted: " . ($errorMessage ?: 'check mail logs')
+    ]);
+}
+
+// ------------------------------------------------------------------------------
+// Pay Slip Endpoints
+// ------------------------------------------------------------------------------
+
+// GET /api/payroll/pay-slips (List all pay slips)
+if ($method === 'GET' && ($path === '/api/payroll/pay-slips' || $path === '/api/payroll/pay-slips/')) {
+    $user = require_payroll_access();
+    $slips = db_query(
+        "SELECT p.*, u.name as creator_name 
+         FROM pay_slips p 
+         LEFT JOIN users u ON p.created_by = u.id 
+         ORDER BY p.year DESC, p.created_at DESC"
+    );
+    foreach ($slips as &$sl) {
+        $sl['earnings'] = !empty($sl['earnings']) ? json_decode($sl['earnings'], true) : [];
+        $sl['deductions'] = !empty($sl['deductions']) ? json_decode($sl['deductions'], true) : [];
+    }
+    unset($sl);
+    json_response(['success' => true, 'pay_slips' => $slips]);
+}
+
+// POST /api/payroll/pay-slips (Create new pay slip)
+if ($method === 'POST' && ($path === '/api/payroll/pay-slips' || $path === '/api/payroll/pay-slips/')) {
+    $user = require_payroll_access();
+    $input = get_json_input();
+
+    $employeeName = trim($input['employee_name'] ?? '');
+    $employeeId = trim($input['employee_id'] ?? '');
+    $employeeEmail = strtolower(trim($input['employee_email'] ?? ''));
+    $designation = trim($input['designation'] ?? '');
+    $month = trim($input['month'] ?? date('F'));
+    $year = intval($input['year'] ?? date('Y'));
+
+    if (empty($employeeName) || empty($employeeId) || empty($designation)) {
+        json_error('Employee Name, Employee ID, and Designation are required.', 400);
+    }
+
+    $id = 'pay-' . time() . '-' . bin2hex(random_bytes(4));
+    $slipNumber = generate_payroll_seq('PAY');
+    $viewToken = bin2hex(random_bytes(16));
+
+    $department = trim($input['department'] ?? 'Tech');
+    $dateOfJoining = !empty($input['date_of_joining']) ? $input['date_of_joining'] : null;
+    $totalWorkingDays = intval($input['total_working_days'] ?? 30);
+    $lopDays = intval($input['lop_days'] ?? 0);
+    $paidDays = isset($input['paid_days']) ? intval($input['paid_days']) : max(0, $totalWorkingDays - $lopDays);
+    $bankName = trim($input['bank_name'] ?? 'HDFC BANK');
+    $bankAccountNo = trim($input['bank_account_no'] ?? '');
+
+    // Earnings
+    $earnings = isset($input['earnings']) && is_array($input['earnings']) 
+        ? $input['earnings'] 
+        : [
+            ['label' => 'Basic Salary', 'amount' => 25000.00],
+            ['label' => 'Travel Allowances', 'amount' => 0.00],
+            ['label' => 'Incentive', 'amount' => 0.00]
+        ];
+
+    // Deductions
+    $deductions = isset($input['deductions']) && is_array($input['deductions']) 
+        ? $input['deductions'] 
+        : [
+            ['label' => 'LOP Deduction', 'amount' => 0.00],
+            ['label' => 'Professional Tax (PT)', 'amount' => 0.00]
+        ];
+
+    // Calculate totals
+    $totalEarnings = 0.0;
+    foreach ($earnings as $e) {
+        $totalEarnings += floatval($e['amount'] ?? 0);
+    }
+
+    $totalDeductions = 0.0;
+    foreach ($deductions as $d) {
+        $totalDeductions += floatval($d['amount'] ?? 0);
+    }
+
+    $netPay = max(0.0, $totalEarnings - $totalDeductions);
+    $netPayWords = convert_number_to_indian_rupees($netPay);
+
+    db_execute(
+        "INSERT INTO pay_slips (
+            id, slip_number, employee_id, employee_name, employee_email, designation, department,
+            date_of_joining, month, year, total_working_days, lop_days, paid_days,
+            bank_name, bank_account_no, earnings, deductions, total_earnings, total_deductions,
+            net_pay, net_pay_words, signatory_label, status, view_token, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Employer Signature', 'GENERATED', ?, ?)",
+        [
+            $id, $slipNumber, $employeeId, $employeeName, $employeeEmail, $designation, $department,
+            $dateOfJoining, $month, $year, $totalWorkingDays, $lopDays, $paidDays,
+            $bankName, $bankAccountNo, json_encode($earnings), json_encode($deductions),
+            $totalEarnings, $totalDeductions, $netPay, $netPayWords, $viewToken, $user['id']
+        ]
+    );
+
+    $created = db_query_one("SELECT * FROM pay_slips WHERE id = ?", [$id]);
+    $created['earnings'] = json_decode($created['earnings'], true);
+    $created['deductions'] = json_decode($created['deductions'], true);
+
+    json_response(['success' => true, 'pay_slip' => $created, 'message' => "Salary Slip {$slipNumber} created successfully."], 201);
+}
+
+// GET /api/payroll/pay-slips/{id}
+if ($method === 'GET' && preg_match('#^/api/payroll/pay-slips/([^/]+)$#', $path, $m)) {
+    $user = require_payroll_access();
+    $slipId = $m[1];
+    $slip = db_query_one("SELECT * FROM pay_slips WHERE id = ?", [$slipId]);
+    if (!$slip) json_error('Salary Slip not found', 404);
+
+    $slip['earnings'] = !empty($slip['earnings']) ? json_decode($slip['earnings'], true) : [];
+    $slip['deductions'] = !empty($slip['deductions']) ? json_decode($slip['deductions'], true) : [];
+
+    json_response(['success' => true, 'pay_slip' => $slip]);
+}
+
+// PUT /api/payroll/pay-slips/{id} (Update pay slip)
+if (($method === 'PUT' || $method === 'PATCH') && preg_match('#^/api/payroll/pay-slips/([^/]+)$#', $path, $m)) {
+    $user = require_payroll_access();
+    $slipId = $m[1];
+    $existing = db_query_one("SELECT * FROM pay_slips WHERE id = ?", [$slipId]);
+    if (!$existing) json_error('Salary Slip not found', 404);
+
+    $input = get_json_input();
+    $employeeName = trim($input['employee_name'] ?? $existing['employee_name']);
+    $employeeId = trim($input['employee_id'] ?? $existing['employee_id']);
+    $employeeEmail = strtolower(trim($input['employee_email'] ?? $existing['employee_email']));
+    $designation = trim($input['designation'] ?? $existing['designation']);
+    $department = trim($input['department'] ?? $existing['department']);
+    $dateOfJoining = !empty($input['date_of_joining']) ? $input['date_of_joining'] : $existing['date_of_joining'];
+    $month = trim($input['month'] ?? $existing['month']);
+    $year = intval($input['year'] ?? $existing['year']);
+    $totalWorkingDays = isset($input['total_working_days']) ? intval($input['total_working_days']) : intval($existing['total_working_days']);
+    $lopDays = isset($input['lop_days']) ? intval($input['lop_days']) : intval($existing['lop_days']);
+    $paidDays = isset($input['paid_days']) ? intval($input['paid_days']) : max(0, $totalWorkingDays - $lopDays);
+    $bankName = trim($input['bank_name'] ?? $existing['bank_name']);
+    $bankAccountNo = trim($input['bank_account_no'] ?? $existing['bank_account_no']);
+
+    $earnings = isset($input['earnings']) && is_array($input['earnings']) 
+        ? $input['earnings'] 
+        : json_decode($existing['earnings'], true);
+
+    $deductions = isset($input['deductions']) && is_array($input['deductions']) 
+        ? $input['deductions'] 
+        : json_decode($existing['deductions'], true);
+
+    $totalEarnings = 0.0;
+    foreach ($earnings as $e) {
+        $totalEarnings += floatval($e['amount'] ?? 0);
+    }
+
+    $totalDeductions = 0.0;
+    foreach ($deductions as $d) {
+        $totalDeductions += floatval($d['amount'] ?? 0);
+    }
+
+    $netPay = max(0.0, $totalEarnings - $totalDeductions);
+    $netPayWords = convert_number_to_indian_rupees($netPay);
+
+    db_execute(
+        "UPDATE pay_slips SET 
+            employee_name = ?, employee_id = ?, employee_email = ?, designation = ?, department = ?,
+            date_of_joining = ?, month = ?, year = ?, total_working_days = ?, lop_days = ?, paid_days = ?,
+            bank_name = ?, bank_account_no = ?, earnings = ?, deductions = ?, total_earnings = ?, total_deductions = ?,
+            net_pay = ?, net_pay_words = ?
+         WHERE id = ?",
+        [
+            $employeeName, $employeeId, $employeeEmail, $designation, $department,
+            $dateOfJoining, $month, $year, $totalWorkingDays, $lopDays, $paidDays,
+            $bankName, $bankAccountNo, json_encode($earnings), json_encode($deductions),
+            $totalEarnings, $totalDeductions, $netPay, $netPayWords, $slipId
+        ]
+    );
+
+    $updated = db_query_one("SELECT * FROM pay_slips WHERE id = ?", [$slipId]);
+    $updated['earnings'] = json_decode($updated['earnings'], true);
+    $updated['deductions'] = json_decode($updated['deductions'], true);
+
+    json_response(['success' => true, 'pay_slip' => $updated, 'message' => 'Salary Slip updated successfully.']);
+}
+
+// DELETE /api/payroll/pay-slips/{id}
+if ($method === 'DELETE' && preg_match('#^/api/payroll/pay-slips/([^/]+)$#', $path, $m)) {
+    $user = require_payroll_access();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $slipId = $m[1];
+    $existing = db_query_one("SELECT id FROM pay_slips WHERE id = ?", [$slipId]);
+    if (!$existing) json_error('Salary Slip not found', 404);
+
+    db_execute("DELETE FROM pay_slips WHERE id = ?", [$slipId]);
+    json_response(['success' => true, 'message' => 'Salary Slip deleted successfully.']);
+}
+
+// POST /api/payroll/pay-slips/{id}/send-email (Dispatch official salary slip to employee ONLY)
+if ($method === 'POST' && preg_match('#^/api/payroll/pay-slips/([^/]+)/send-email$#', $path, $m)) {
+    $user = require_payroll_access();
+    $slipId = $m[1];
+    $slip = db_query_one("SELECT * FROM pay_slips WHERE id = ?", [$slipId]);
+    if (!$slip) json_error('Salary Slip not found', 404);
+
+    $recipientEmail = trim($slip['employee_email']);
+    if (empty($recipientEmail) || !filter_var($recipientEmail, FILTER_VALIDATE_EMAIL)) {
+        json_error('Employee email is missing or invalid.', 400);
+    }
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $viewUrl = $protocol . $host . '/api/payroll/view/payslip/' . $slip['view_token'];
+
+    $subject = "Salary Slip for the Month of " . $slip['month'] . " " . $slip['year'] . " - Assurance Media LLP";
+
+    $earningsList = !empty($slip['earnings']) ? json_decode($slip['earnings'], true) : [];
+    $deductionsList = !empty($slip['deductions']) ? json_decode($slip['deductions'], true) : [];
+
+    $earningsRows = '';
+    foreach ($earningsList as $e) {
+        $earningsRows .= "<tr><td style='padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px;'>" . htmlspecialchars($e['label']) . "</td><td style='padding: 6px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 600; font-size: 13px;'>₹" . number_format(floatval($e['amount']), 2) . "</td></tr>";
+    }
+
+    $deductionsRows = '';
+    foreach ($deductionsList as $d) {
+        $deductionsRows .= "<tr><td style='padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px;'>" . htmlspecialchars($d['label']) . "</td><td style='padding: 6px 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 600; font-size: 13px; color: #dc2626;'>₹" . number_format(floatval($d['amount']), 2) . "</td></tr>";
+    }
+
+    $html = "
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset='utf-8'>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #0f172a; }
+        .card { max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.07); }
+        .header { background: #0176D3; padding: 26px 22px; text-align: center; color: #ffffff; }
+        .header h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+        .header p { margin: 6px 0 0 0; font-size: 13px; opacity: 0.95; }
+        .content { padding: 28px 24px; }
+        .meta-grid { width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .meta-grid td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #f1f5f9; }
+        .net-pay-banner { background: #ecfdf5; border: 1px solid #a7f3d0; border-left: 5px solid #10b981; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center; }
+        .net-amount { font-size: 24px; font-weight: 800; color: #065f46; margin: 4px 0; }
+        .in-words { font-size: 12.5px; color: #047857; font-style: italic; }
+        .btn { display: inline-block; background: #0176D3; color: #ffffff !important; padding: 13px 28px; border-radius: 10px; font-weight: 700; font-size: 14px; text-decoration: none; box-shadow: 0 4px 6px -1px rgba(1, 118, 211, 0.3); text-align: center; }
+        .footer { padding: 18px 24px; background: #f8fafc; font-size: 11.5px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; line-height: 1.6; }
+      </style>
+    </head>
+    <body>
+      <div class='card'>
+        <div class='header'>
+          <h1>Assurance Media LLP</h1>
+          <p>Salary Slip for the Month of " . htmlspecialchars($slip['month']) . " " . htmlspecialchars($slip['year']) . "</p>
+        </div>
+        <div class='content'>
+          <p style='font-size: 15px;'>Hello <strong>" . htmlspecialchars($slip['employee_name']) . "</strong>,</p>
+          <p style='color: #475569; font-size: 13.5px; line-height: 1.6;'>
+            Your salary slip for <strong>" . htmlspecialchars($slip['month']) . " " . htmlspecialchars($slip['year']) . "</strong> has been generated and approved by the finance department.
+          </p>
+
+          <table class='meta-grid'>
+            <tr>
+              <td style='color: #64748b; width: 45%;'><strong>Employee ID:</strong></td>
+              <td style='font-weight: 700; color: #0176D3; font-family: monospace;'>" . htmlspecialchars($slip['employee_id']) . "</td>
+            </tr>
+            <tr>
+              <td style='color: #64748b;'><strong>Designation / Dept:</strong></td>
+              <td>" . htmlspecialchars($slip['designation']) . " &bull; " . htmlspecialchars($slip['department']) . "</td>
+            </tr>
+            <tr>
+              <td style='color: #64748b;'><strong>Total Days / Paid Days:</strong></td>
+              <td>" . htmlspecialchars($slip['total_working_days']) . " Days / <strong>" . htmlspecialchars($slip['paid_days']) . " Days</strong> (LOP: " . htmlspecialchars($slip['lop_days']) . ")</td>
+            </tr>
+            <tr>
+              <td style='color: #64748b;'><strong>Bank Details:</strong></td>
+              <td>" . htmlspecialchars($slip['bank_name']) . " (" . htmlspecialchars($slip['bank_account_no']) . ")</td>
+            </tr>
+          </table>
+
+          <div class='net-pay-banner'>
+            <div style='font-size: 12px; font-weight: 700; text-transform: uppercase; color: #047857; letter-spacing: 0.5px;'>Net Take Home Pay</div>
+            <div class='net-amount'>₹ " . number_format($slip['net_pay'], 0) . "/-</div>
+            <div class='in-words'>" . htmlspecialchars($slip['net_pay_words']) . " Rupees Only</div>
+          </div>
+
+          <table style='width: 100%; border-collapse: collapse; margin-top: 14px;'>
+            <tr>
+              <td style='width: 50%; vertical-align: top; padding-right: 8px;'>
+                <div style='font-size: 12px; font-weight: 700; text-transform: uppercase; color: #166534; margin-bottom: 6px;'>Earnings Breakdown</div>
+                <table style='width: 100%; border-collapse: collapse;'>
+                  {$earningsRows}
+                  <tr>
+                    <td style='padding: 6px 10px; font-weight: 700; font-size: 13px;'>Total Earnings:</td>
+                    <td style='padding: 6px 10px; text-align: right; font-weight: 700; font-size: 13px; color: #166534;'>₹" . number_format($slip['total_earnings'], 2) . "</td>
+                  </tr>
+                </table>
+              </td>
+              <td style='width: 50%; vertical-align: top; padding-left: 8px;'>
+                <div style='font-size: 12px; font-weight: 700; text-transform: uppercase; color: #991b1b; margin-bottom: 6px;'>Deductions Breakdown</div>
+                <table style='width: 100%; border-collapse: collapse;'>
+                  {$deductionsRows}
+                  <tr>
+                    <td style='padding: 6px 10px; font-weight: 700; font-size: 13px;'>Total Deductions:</td>
+                    <td style='padding: 6px 10px; text-align: right; font-weight: 700; font-size: 13px; color: #dc2626;'>₹" . number_format($slip['total_deductions'], 2) . "</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+
+          <div style='text-align: center; margin: 26px 0 10px 0;'>
+            <a href='" . htmlspecialchars($viewUrl) . "' class='btn'>View &amp; Print Official Salary Slip &rarr;</a>
+          </div>
+        </div>
+        <div class='footer'>
+          <strong>Assurance Media LLP</strong><br/>
+          302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.<br/>
+          Phone: +91 96965 84985 | Email: hello@assurancemedia.in | Web: www.assurancemedia.in
+        </div>
+      </div>
+    </body>
+    </html>";
+
+    $fromEmail = defined('EMAIL_FROM') && !empty(EMAIL_FROM) ? EMAIL_FROM : 'hello@assurancemedia.in';
+    $fromName = defined('EMAIL_FROM_NAME') && !empty(EMAIL_FROM_NAME) ? EMAIL_FROM_NAME : 'Assurance Media LLP';
+
+    $delivered = false;
+    $errorMessage = null;
+
+    if (defined('SMTP_ENABLED') && SMTP_ENABLED) {
+        $smtpResult = send_smtp_email($recipientEmail, $subject, $html);
+        $delivered = $smtpResult['success'];
+        $errorMessage = $smtpResult['error'] ?? null;
+    } else {
+        $headers = [
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=UTF-8',
+            'From: ' . $fromName . ' <' . $fromEmail . '>',
+            'Reply-To: ' . $fromEmail,
+            'Return-Path: ' . $fromEmail,
+            'X-Mailer: AssuranceMedia/PHP'
+        ];
+        $delivered = @mail($recipientEmail, $subject, $html, implode("\r\n", $headers), "-f" . $fromEmail);
+        if (!$delivered) {
+            $errorMessage = 'PHP mail() returned false. SMTP is recommended.';
+        }
+    }
+
+    $now = date('Y-m-d H:i:s');
+    db_execute(
+        "UPDATE pay_slips SET status = 'SENT', sent_at = ?, sent_to_email = ? WHERE id = ?",
+        [$now, $recipientEmail, $slipId]
+    );
+
+    json_response([
+        'success' => true,
+        'delivered' => $delivered,
+        'sent_to' => $recipientEmail,
+        'view_url' => $viewUrl,
+        'error' => $errorMessage,
+        'message' => $delivered 
+            ? "Salary Slip successfully dispatched to {$recipientEmail}." 
+            : "Salary Slip marked as sent, delivery noted: " . ($errorMessage ?: 'check mail logs')
+    ]);
+}
+
+// ------------------------------------------------------------------------------
+// Public Printable Web Document Views (High-Fidelity Official PDF / Print Layouts)
+// ------------------------------------------------------------------------------
+
+// GET /api/payroll/view/offer/{token}
+if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#', $path, $m)) {
+    $token = $m[1];
+    $offer = db_query_one("SELECT * FROM offer_letters WHERE view_token = ?", [$token]);
+    if (!$offer) {
+        http_response_code(404);
+        echo "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Offer Letter Not Found</h2><p>This offer link may be expired or invalid.</p></body></html>";
+        exit;
+    }
+
+    $salaryBreakup = !empty($offer['salary_breakup']) ? json_decode($offer['salary_breakup'], true) : [];
+    $clauses = !empty($offer['clauses']) ? json_decode($offer['clauses'], true) : [];
+    $empTypeLabel = ($offer['employment_type'] === 'internship') ? 'Internship' : (($offer['employment_type'] === 'part_time') ? 'Part Time' : 'Full Time');
+
+    $salaryRows = '';
+    foreach ($salaryBreakup as $s) {
+        $mVal = floatval($s['monthly'] ?? 0);
+        $aVal = floatval($s['annual'] ?? ($mVal * 12));
+        $salaryRows .= "<tr>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 13px; font-weight: 500;'>" . htmlspecialchars($s['item']) . "</td>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 13px; text-align: right;'>₹ " . number_format($mVal, 2) . "</td>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 13px; text-align: right;'>₹ " . number_format($aVal, 2) . "</td>
+        </tr>";
+    }
+
+    $clausesHtml = '';
+    foreach ($clauses as $c) {
+        $contentFormatted = nl2br(htmlspecialchars($c['content']));
+        $clausesHtml .= "
+        <div style='margin-bottom: 16px;'>
+            <h4 style='margin: 0 0 4px 0; font-size: 13.5px; font-weight: 700; color: #0f172a; text-transform: uppercase;'>&bull; " . htmlspecialchars($c['title']) . "</h4>
+            <div style='font-size: 12.5px; color: #334155; line-height: 1.55; text-align: justify;'>" . $contentFormatted . "</div>
+        </div>";
+    }
+
+    header('Content-Type: text/html; charset=utf-8');
+    echo "<!DOCTYPE html>
+    <html lang='en'>
+    <head>
+      <meta charset='utf-8'>
+      <title>Offer Letter - " . htmlspecialchars($offer['candidate_name']) . " (" . htmlspecialchars($offer['offer_number']) . ")</title>
+      <meta name='viewport' content='width=device-width, initial-scale=1'>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background: #e2e8f0; margin: 0; padding: 24px; color: #0f172a; }
+        .page { max-width: 820px; margin: 0 auto 30px auto; background: #ffffff; padding: 48px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; }
+        .top-action-bar { max-width: 820px; margin: 0 auto 16px auto; display: flex; justify-content: space-between; align-items: center; }
+        .btn-print { background: #0176D3; color: white; border: none; padding: 10px 22px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(1, 118, 211, 0.3); }
+        .company-header { border-bottom: 2px solid #0176D3; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-start; }
+        .company-header h2 { margin: 0; color: #0176D3; font-size: 24px; font-weight: 800; }
+        .company-header p { margin: 4px 0 0 0; font-size: 11.5px; color: #64748b; line-height: 1.4; max-width: 480px; }
+        .doc-badge { background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 4px; font-size: 11.5px; font-weight: 700; }
+        .info-table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+        .info-table td { padding: 6px 8px; font-size: 12.5px; vertical-align: top; }
+        .info-table tr:nth-child(even) { background: #f8fafc; }
+        .salary-table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+        .salary-table th { background: #f1f5f9; padding: 8px 12px; font-size: 12px; font-weight: 700; text-align: left; border: 1px solid #cbd5e1; color: #475569; }
+        .footer-banner { border-top: 1px solid #e2e8f0; margin-top: 36px; padding-top: 14px; font-size: 11px; color: #64748b; text-align: center; }
+        .sign-grid { display: flex; justify-content: space-between; margin-top: 40px; page-break-inside: avoid; }
+        .sign-box { width: 44%; border-top: 1px solid #0f172a; padding-top: 8px; font-size: 12.5px; }
+        @media print {
+            body { background: #ffffff; padding: 0; margin: 0; }
+            .top-action-bar { display: none !important; }
+            .page { box-shadow: none; margin: 0; border-radius: 0; padding: 36px 40px; page-break-after: always; }
+            .page:last-child { page-break-after: auto; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class='top-action-bar'>
+        <div style='font-size: 13.5px; font-weight: 600; color: #475569;'>Assurance Media LLP &bull; Employment Contract Document</div>
+        <button class='btn-print' onclick='window.print()'>🖨️ Print / Save as PDF</button>
+      </div>
+
+      <!-- PAGE 1: Employment Contract Details -->
+      <div class='page'>
+        <div class='company-header'>
+          <div>
+            <h2>Assurance Media LLP</h2>
+            <p>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.<br/>
+            Contact: +91 96965 84985 | Email: hello@assurancemedia.in | Web: www.assurancemedia.in</p>
+          </div>
+          <div style='text-align: right;'>
+            <span class='doc-badge'>" . htmlspecialchars($offer['offer_number']) . "</span>
+            <div style='font-size: 11.5px; color: #64748b; margin-top: 6px;'>Date: " . date('d F Y', strtotime($offer['created_at'])) . "</div>
+          </div>
+        </div>
+
+        <div style='margin-bottom: 18px;'>
+          <h3 style='margin: 0 0 6px 0; color: #0176D3; font-size: 16px;'>Subject: Offer of Employment for the Position of " . htmlspecialchars($offer['position']) . " (" . htmlspecialchars($empTypeLabel) . ")</h3>
+          <div style='font-size: 13px; font-weight: 700; color: #0f172a;'>Dear " . htmlspecialchars($offer['candidate_name']) . ",</div>
+          <div style='font-size: 12.5px; color: #475569; margin-top: 2px;'>" . nl2br(htmlspecialchars($offer['candidate_address'])) . "</div>
+        </div>
+
+        <p style='font-size: 12.5px; line-height: 1.55; color: #334155; text-align: justify;'>
+          We are pleased to offer you employment with <strong>Assurance Media LLP</strong> for the position of <strong>" . htmlspecialchars($offer['position']) . "</strong>.
+          Your skills, experience, and professional capabilities have impressed us, and we believe you will be a valuable addition to our team.
+        </p>
+
+        <h4 style='font-size: 13px; color: #0176D3; margin: 18px 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px;'>Employment Details</h4>
+        <table class='info-table'>
+          <tr>
+            <td style='width: 30%; color: #64748b;'><strong>Position:</strong></td>
+            <td style='width: 70%; font-weight: 600;'>" . htmlspecialchars($offer['position']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Employment Type:</strong></td>
+            <td>" . htmlspecialchars($empTypeLabel) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Department:</strong></td>
+            <td>" . htmlspecialchars($offer['department']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Reporting To:</strong></td>
+            <td>" . htmlspecialchars($offer['reporting_to']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Joining Date:</strong></td>
+            <td>" . htmlspecialchars(date('d/m/Y', strtotime($offer['joining_date']))) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Work Location:</strong></td>
+            <td>" . htmlspecialchars($offer['work_location']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Personal Laptop:</strong></td>
+            <td>" . ($offer['laptop_required'] ? 'Required' : 'Provided by Company') . "</td>
+          </tr>
+        </table>
+
+        <h4 style='font-size: 13px; color: #0176D3; margin: 18px 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px;'>Compensation Structure</h4>
+        <div style='font-size: 12.5px; line-height: 1.6; color: #334155; margin-bottom: 8px;'>
+          • <strong>Fixed Monthly Salary:</strong> ₹" . number_format($offer['monthly_salary'], 2) . "/-<br/>
+          • <strong>Annual CTC:</strong> ₹" . number_format($offer['annual_ctc'], 2) . "/-<br/>
+          • <strong>Payment Cycle:</strong> " . htmlspecialchars($offer['payment_cycle']) . "
+        </div>
+
+        <table class='salary-table'>
+          <thead>
+            <tr>
+              <th>Salary Component</th>
+              <th style='text-align: right;'>Monthly (₹)</th>
+              <th style='text-align: right;'>Annual (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {$salaryRows}
+            <tr style='background: #f8fafc; font-weight: 700;'>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1;'>Total Cost to Company (CTC)</td>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #0176D3;'>₹ " . number_format($offer['monthly_salary'], 2) . "</td>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #0176D3;'>₹ " . number_format($offer['annual_ctc'], 2) . "</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class='footer-banner'>
+          Assurance Media LLP &bull; Page 1 of 2 &bull; " . htmlspecialchars($offer['offer_number']) . "
+        </div>
+      </div>
+
+      <!-- PAGE 2: Terms, Clauses & Signatures -->
+      <div class='page'>
+        <div class='company-header'>
+          <div>
+            <h3 style='margin: 0; color: #0176D3; font-size: 18px;'>Assurance Media LLP</h3>
+            <p>Terms of Employment &amp; Statutory Undertakings</p>
+          </div>
+          <div>
+            <span class='doc-badge'>" . htmlspecialchars($offer['offer_number']) . "</span>
+          </div>
+        </div>
+
+        {$clausesHtml}
+
+        <div class='sign-grid'>
+          <div class='sign-box'>
+            <div style='font-weight: 700; color: #0176D3;'>For Assurance Media LLP</div>
+            <div style='margin-top: 32px; font-weight: 600;'>" . htmlspecialchars($offer['signatory_name']) . "</div>
+            <div style='color: #64748b; font-size: 11.5px;'>" . htmlspecialchars($offer['signatory_title']) . "</div>
+          </div>
+          <div class='sign-box'>
+            <div style='font-weight: 700; color: #0f172a;'>Candidate Acceptance</div>
+            <div style='margin-top: 32px; font-weight: 600;'>" . htmlspecialchars($offer['candidate_name']) . "</div>
+            <div style='color: #64748b; font-size: 11.5px;'>Signature &amp; Date: ____________________</div>
+          </div>
+        </div>
+
+        <div class='footer-banner' style='margin-top: 48px;'>
+          Assurance Media LLP &bull; Page 2 of 2 &bull; Registered Office: 302, 3rd Floor, Shivkrupa Bldg, Vidyavihar West Mumbai - 400086.
+        </div>
+      </div>
+    </body>
+    </html>";
+    exit;
+}
+
+// GET /api/payroll/view/payslip/{token}
+if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$#', $path, $m)) {
+    $token = $m[1];
+    $slip = db_query_one("SELECT * FROM pay_slips WHERE view_token = ?", [$token]);
+    if (!$slip) {
+        http_response_code(404);
+        echo "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Salary Slip Not Found</h2><p>This pay slip link may be expired or invalid.</p></body></html>";
+        exit;
+    }
+
+    $earnings = !empty($slip['earnings']) ? json_decode($slip['earnings'], true) : [];
+    $deductions = !empty($slip['deductions']) ? json_decode($slip['deductions'], true) : [];
+
+    $maxRows = max(count($earnings), count($deductions), 4);
+    $tableRows = '';
+    for ($i = 0; $i < $maxRows; $i++) {
+        $e = $earnings[$i] ?? null;
+        $d = $deductions[$i] ?? null;
+
+        $eLabel = $e ? htmlspecialchars($e['label']) : '';
+        $eAmt = $e ? ('₹ ' . number_format(floatval($e['amount']), 2)) : '';
+
+        $dLabel = $d ? htmlspecialchars($d['label']) : '';
+        $dAmt = $d ? ('₹ ' . number_format(floatval($d['amount']), 2)) : '';
+
+        $tableRows .= "<tr>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 35%;'>" . $eLabel . "</td>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 15%; text-align: right; font-weight: 500;'>" . $eAmt . "</td>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 35%;'>" . $dLabel . "</td>
+            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 15%; text-align: right; font-weight: 500; color: #dc2626;'>" . $dAmt . "</td>
+        </tr>";
+    }
+
+    header('Content-Type: text/html; charset=utf-8');
+    echo "<!DOCTYPE html>
+    <html lang='en'>
+    <head>
+      <meta charset='utf-8'>
+      <title>Salary Slip - " . htmlspecialchars($slip['employee_name']) . " (" . htmlspecialchars($slip['month']) . " " . htmlspecialchars($slip['year']) . ")</title>
+      <meta name='viewport' content='width=device-width, initial-scale=1'>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background: #e2e8f0; margin: 0; padding: 24px; color: #0f172a; }
+        .page { max-width: 820px; margin: 0 auto; background: #ffffff; padding: 40px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+        .top-action-bar { max-width: 820px; margin: 0 auto 16px auto; display: flex; justify-content: space-between; align-items: center; }
+        .btn-print { background: #0176D3; color: white; border: none; padding: 10px 22px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(1, 118, 211, 0.3); }
+        .comp-header { text-align: center; border-bottom: 2px solid #0176D3; padding-bottom: 14px; margin-bottom: 18px; }
+        .comp-header h2 { margin: 0; color: #0176D3; font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+        .comp-header p { margin: 4px 0 0 0; font-size: 11.5px; color: #64748b; }
+        .slip-title { text-align: center; font-size: 15px; font-weight: 700; color: #0f172a; margin: 16px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+        .emp-table { width: 100%; border-collapse: collapse; margin-bottom: 18px; border: 1px solid #cbd5e1; }
+        .emp-table td { padding: 6px 10px; font-size: 12.5px; border: 1px solid #e2e8f0; }
+        .breakup-table { width: 100%; border-collapse: collapse; border: 1px solid #cbd5e1; margin-bottom: 18px; }
+        .breakup-table th { background: #f1f5f9; padding: 8px 10px; font-size: 12px; font-weight: 700; text-align: left; border: 1px solid #cbd5e1; color: #334155; }
+        .net-pay-box { background: #ecfdf5; border: 2px solid #10b981; border-radius: 6px; padding: 14px 18px; margin: 18px 0; display: flex; justify-content: space-between; align-items: center; }
+        .in-words-box { font-size: 12.5px; color: #065f46; font-style: italic; font-weight: 600; margin-top: 4px; }
+        .sign-area { margin-top: 48px; display: flex; justify-content: flex-end; }
+        .sign-block { width: 220px; text-align: center; border-top: 1px solid #0f172a; padding-top: 6px; font-size: 12px; font-weight: 600; }
+        @media print {
+            body { background: #ffffff; padding: 0; margin: 0; }
+            .top-action-bar { display: none !important; }
+            .page { box-shadow: none; margin: 0; border-radius: 0; padding: 24px; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class='top-action-bar'>
+        <div style='font-size: 13.5px; font-weight: 600; color: #475569;'>Assurance Media LLP &bull; Official Monthly Salary Slip</div>
+        <button class='btn-print' onclick='window.print()'>🖨️ Print / Save as PDF</button>
+      </div>
+
+      <div class='page'>
+        <div class='comp-header'>
+          <h2>Assurance Media LLP</h2>
+          <p>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.<br/>
+          Email: hello@assurancemedia.in | Web: www.assurancemedia.in | Phone: +91 96965 84985</p>
+        </div>
+
+        <div class='slip-title'>Salary Slip for the Month of " . htmlspecialchars($slip['month']) . " " . htmlspecialchars($slip['year']) . "</div>
+
+        <table class='emp-table'>
+          <tr>
+            <td style='width: 25%; color: #64748b;'><strong>Employee Name</strong></td>
+            <td style='width: 30%; font-weight: 700; color: #0f172a;'>" . htmlspecialchars($slip['employee_name']) . "</td>
+            <td style='width: 25%; color: #64748b;'><strong>Total Working Days</strong></td>
+            <td style='width: 20%; font-weight: 600; text-align: right;'>" . htmlspecialchars($slip['total_working_days']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Employee ID</strong></td>
+            <td style='font-weight: 700; color: #0176D3; font-family: monospace;'>" . htmlspecialchars($slip['employee_id']) . "</td>
+            <td style='color: #64748b;'><strong>LOP Days</strong></td>
+            <td style='font-weight: 600; text-align: right; color: #dc2626;'>" . htmlspecialchars($slip['lop_days']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Designation</strong></td>
+            <td>" . htmlspecialchars($slip['designation']) . "</td>
+            <td style='color: #64748b;'><strong>Paid Days</strong></td>
+            <td style='font-weight: 700; text-align: right; color: #166534;'>" . htmlspecialchars($slip['paid_days']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Department</strong></td>
+            <td>" . htmlspecialchars($slip['department']) . "</td>
+            <td style='color: #64748b;'><strong>Bank Name</strong></td>
+            <td>" . htmlspecialchars($slip['bank_name']) . "</td>
+          </tr>
+          <tr>
+            <td style='color: #64748b;'><strong>Date of Joining</strong></td>
+            <td>" . ($slip['date_of_joining'] ? htmlspecialchars(date('d-m-Y', strtotime($slip['date_of_joining']))) : 'N/A') . "</td>
+            <td style='color: #64748b;'><strong>Bank A/c No</strong></td>
+            <td style='font-family: monospace;'>" . htmlspecialchars($slip['bank_account_no'] ?: 'N/A') . "</td>
+          </tr>
+        </table>
+
+        <table class='breakup-table'>
+          <thead>
+            <tr>
+              <th colspan='2' style='background: #f0fdf4; color: #166534;'>EARNINGS</th>
+              <th colspan='2' style='background: #fef2f2; color: #991b1b;'>DEDUCTIONS</th>
+            </tr>
+            <tr>
+              <th>Description</th>
+              <th style='text-align: right;'>Amount (₹)</th>
+              <th>Description</th>
+              <th style='text-align: right;'>Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {$tableRows}
+            <tr style='background: #f8fafc; font-weight: 700;'>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1;'>Total Earnings</td>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #166534;'>₹ " . number_format($slip['total_earnings'], 2) . "</td>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1;'>Total Deductions</td>
+              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #dc2626;'>₹ " . number_format($slip['total_deductions'], 2) . "</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class='net-pay-box'>
+          <div>
+            <div style='font-size: 13px; font-weight: 700; color: #065f46; text-transform: uppercase;'>Net Take Home Pay</div>
+            <div class='in-words-box'>" . htmlspecialchars($slip['net_pay_words']) . " Rupees Only</div>
+          </div>
+          <div style='text-align: right;'>
+            <div style='font-size: 24px; font-weight: 800; color: #065f46;'>₹ " . number_format($slip['net_pay'], 0) . "/-</div>
+            <div style='font-size: 11px; color: #047857;'>(" . htmlspecialchars($slip['slip_number']) . ")</div>
+          </div>
+        </div>
+
+        <div class='sign-area'>
+          <div class='sign-block'>
+            <div style='margin-bottom: 24px; color: #64748b;'>For Assurance Media LLP</div>
+            <div>" . htmlspecialchars($slip['signatory_label'] ?: 'Employer Signature') . "</div>
+          </div>
+        </div>
+
+        <div style='border-top: 1px solid #e2e8f0; margin-top: 36px; padding-top: 10px; font-size: 11px; color: #94a3b8; text-align: center;'>
+          This is a system generated salary slip from Assurance Media LLP. All amounts in INR (₹).
+        </div>
+      </div>
+    </body>
+    </html>";
+    exit;
 }
 
 // Default 404 for unknown API routes

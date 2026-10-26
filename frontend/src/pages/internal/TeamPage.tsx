@@ -17,6 +17,7 @@ import {
   Key,
   Edit2,
   Lock,
+  FileText,
 } from 'lucide-react';
 
 interface TeamMember {
@@ -26,6 +27,7 @@ interface TeamMember {
   phone?: string | null;
   role: 'super_admin' | 'support_manager' | 'developer';
   custom_role?: string | null;
+  can_manage_payroll?: boolean;
   created_at: string;
   active_tickets_count?: number;
 }
@@ -114,6 +116,28 @@ export const TeamPage: React.FC = () => {
       console.error('Failed to load team data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const [togglingPayrollId, setTogglingPayrollId] = useState<string | null>(null);
+
+  const handleTogglePayrollAccess = async (memberId: string, currentStatus: boolean) => {
+    setTogglingPayrollId(memberId);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await api.patch<{ success: boolean; message: string; user: any }>(
+        `/auth/staff/${memberId}/payroll-access`,
+        { can_manage_payroll: !currentStatus }
+      );
+      setTeam((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, can_manage_payroll: !currentStatus } : m))
+      );
+      setSuccess(res.message || 'Payroll access updated successfully.');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to update payroll access');
+    } finally {
+      setTogglingPayrollId(null);
     }
   };
 
@@ -453,13 +477,15 @@ export const TeamPage: React.FC = () => {
                     <th className="py-3 px-6">Name</th>
                     <th className="py-3 px-6">Email / Login</th>
                     <th className="py-3 px-6">Role / Title</th>
+                    <th className="py-3 px-6 text-center">Payroll & Documents</th>
                     <th className="py-3 px-6 text-center">Active Assigned</th>
                     <th className="py-3 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {team.map((member) => {
-                    const isRootAdmin = member.email === 'admin@agency.com';
+                    const isRootAdmin = member.email === 'admin@agency.com' || member.email === 'admin@assurancemedia.com';
+                    const isAdminRole = member.role === 'super_admin' || member.role === 'support_manager';
                     return (
                       <tr key={member.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-4 px-6 font-medium text-slate-900">
@@ -487,6 +513,28 @@ export const TeamPage: React.FC = () => {
                           )}
                         </td>
                         <td className="py-4 px-6">{getRoleBadge(member.role, member.custom_role)}</td>
+                        <td className="py-4 px-6 text-center">
+                          {isAdminRole ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                              <Shield size={12} /> Admin (Full)
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={togglingPayrollId === member.id}
+                              onClick={() => handleTogglePayrollAccess(member.id, !!member.can_manage_payroll)}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all shadow-sm ${
+                                member.can_manage_payroll
+                                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300'
+                              } disabled:opacity-50`}
+                              title={member.can_manage_payroll ? 'Click to revoke payroll generator access' : 'Click to grant payroll generator access'}
+                            >
+                              <FileText size={12} />
+                              <span>{togglingPayrollId === member.id ? 'Saving...' : (member.can_manage_payroll ? 'Granted' : 'Off')}</span>
+                            </button>
+                          )}
+                        </td>
                         <td className="py-4 px-6 text-center">
                           <span
                             className={`inline-flex px-2 py-0.5 rounded text-xs font-bold ${

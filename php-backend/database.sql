@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS `users` (
     `totp_secret` VARCHAR(64) NULL,
     `totp_enabled` TINYINT(1) DEFAULT 0,
     `must_reset_password` TINYINT(1) DEFAULT 0,
+    `can_manage_payroll` TINYINT(1) DEFAULT 0,
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX `idx_user_org` (`organization_id`),
@@ -275,15 +276,90 @@ CREATE TABLE IF NOT EXISTS `tasks` (
     FOREIGN KEY (`approved_by`) REFERENCES `users`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 15. Offer Letters (Employment Contracts Generator)
+CREATE TABLE IF NOT EXISTS `offer_letters` (
+    `id` VARCHAR(64) PRIMARY KEY,
+    `offer_number` VARCHAR(30) NOT NULL UNIQUE,
+    `candidate_name` VARCHAR(255) NOT NULL,
+    `candidate_email` VARCHAR(191) NOT NULL,
+    `candidate_phone` VARCHAR(50) NULL,
+    `candidate_address` TEXT NULL,
+    `employment_type` ENUM('full_time', 'part_time', 'internship') NOT NULL DEFAULT 'full_time',
+    `position` VARCHAR(255) NOT NULL,
+    `department` VARCHAR(100) NOT NULL DEFAULT 'Tech',
+    `reporting_to` VARCHAR(255) NOT NULL DEFAULT 'Management Team / Director',
+    `joining_date` DATE NOT NULL,
+    `work_location` TEXT NOT NULL,
+    `laptop_required` TINYINT(1) DEFAULT 1,
+    `work_mode` VARCHAR(50) DEFAULT 'On Site',
+    `working_days` VARCHAR(100) DEFAULT 'Monday to Saturday (Office)',
+    `working_hours` VARCHAR(100) DEFAULT '10 AM – 6:30 PM',
+    `monthly_salary` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    `annual_ctc` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    `payment_cycle` VARCHAR(100) DEFAULT 'Monthly (13th of Every Month)',
+    `salary_breakup` LONGTEXT NULL,
+    `clauses` LONGTEXT NULL,
+    `signatory_name` VARCHAR(150) DEFAULT 'Mr. Faizan Siddiqui',
+    `signatory_title` VARCHAR(150) DEFAULT 'Business Head',
+    `status` ENUM('DRAFT', 'SENT', 'ACCEPTED', 'EXPIRED', 'REVOKED') DEFAULT 'DRAFT',
+    `sent_at` DATETIME NULL,
+    `sent_to_email` VARCHAR(191) NULL,
+    `view_token` VARCHAR(64) NULL UNIQUE,
+    `created_by` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_offer_email` (`candidate_email`),
+    INDEX `idx_offer_status` (`status`),
+    INDEX `idx_offer_token` (`view_token`),
+    FOREIGN KEY (`created_by`) REFERENCES `users`(`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 16. Salary Slips (Payroll Engine)
+CREATE TABLE IF NOT EXISTS `pay_slips` (
+    `id` VARCHAR(64) PRIMARY KEY,
+    `slip_number` VARCHAR(30) NOT NULL UNIQUE,
+    `employee_id` VARCHAR(50) NOT NULL,
+    `employee_name` VARCHAR(255) NOT NULL,
+    `employee_email` VARCHAR(191) NOT NULL,
+    `designation` VARCHAR(255) NOT NULL,
+    `department` VARCHAR(100) NOT NULL DEFAULT 'Tech',
+    `date_of_joining` DATE NULL,
+    `month` VARCHAR(20) NOT NULL,
+    `year` INT NOT NULL,
+    `total_working_days` INT NOT NULL DEFAULT 30,
+    `lop_days` INT NOT NULL DEFAULT 0,
+    `paid_days` INT NOT NULL DEFAULT 30,
+    `bank_name` VARCHAR(100) DEFAULT 'HDFC BANK',
+    `bank_account_no` VARCHAR(100) NULL,
+    `earnings` LONGTEXT NULL,
+    `deductions` LONGTEXT NULL,
+    `total_earnings` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    `total_deductions` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    `net_pay` DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    `net_pay_words` VARCHAR(255) NULL,
+    `signatory_label` VARCHAR(150) DEFAULT 'Employer Signature',
+    `status` ENUM('DRAFT', 'GENERATED', 'SENT') DEFAULT 'GENERATED',
+    `sent_at` DATETIME NULL,
+    `sent_to_email` VARCHAR(191) NULL,
+    `view_token` VARCHAR(64) NULL UNIQUE,
+    `created_by` VARCHAR(64) NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_payslip_emp_id` (`employee_id`),
+    INDEX `idx_payslip_month_year` (`month`, `year`),
+    INDEX `idx_payslip_token` (`view_token`),
+    FOREIGN KEY (`created_by`) REFERENCES `users`(`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==============================================================================
 -- Seed Initial Data
 -- ==============================================================================
 
--- Initial Ticket & Task Counters
+-- Initial Ticket, Task & Document Counters
 INSERT INTO `ticket_counters` (`prefix`, `current_val`) 
-VALUES ('WEB', 1000), ('TSK', 1000)
+VALUES ('WEB', 1000), ('TSK', 1000), ('OFF', 1000), ('PAY', 1000)
 ON DUPLICATE KEY UPDATE `prefix` = `prefix`;
 
 -- Initial System Roles
