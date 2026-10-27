@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
-import { Building2, Lock, Mail, AlertCircle, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Building2, Lock, Mail, AlertCircle, ArrowRight, ShieldCheck, Shield } from 'lucide-react';
 
 export const BrandLoginPage: React.FC = () => {
   const { login } = useAuth();
@@ -18,8 +18,19 @@ export const BrandLoginPage: React.FC = () => {
       if (!email.trim() || !password) {
         throw new Error('Please enter both your brand email and password');
       }
-      await login(email.trim(), password, 'brand');
+      const res: any = await login(email.trim(), password, 'brand');
+      if (res?.require_2fa || res?.setup_2fa || (res?.user && res?.user?.role !== 'client')) {
+        window.location.href = '/admin';
+        return;
+      }
     } catch (err: any) {
+      if (err.message?.includes('Staff') || err.message?.includes('Command Center') || err.is_staff) {
+        setError('This is a Staff/Admin account. Redirecting you to the Staff Command Center...');
+        setTimeout(() => {
+          window.location.href = '/admin';
+        }, 1200);
+        return;
+      }
       if (err.details && Array.isArray(err.details)) {
         setError(err.details.map((d: any) => d.message).join(' • '));
       } else {
@@ -43,9 +54,18 @@ export const BrandLoginPage: React.FC = () => {
             />
           </div>
 
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-bold uppercase tracking-wider mb-2">
-            <Building2 size={13} />
-            <span>Dedicated Brand & Client Portal</span>
+          <div className="flex items-center justify-between gap-2 mb-2 max-w-sm mx-auto">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-bold uppercase tracking-wider">
+              <Building2 size={13} />
+              <span>Dedicated Brand Portal</span>
+            </div>
+            <a
+              href="/admin"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800 transition-colors"
+            >
+              <Shield size={13} />
+              <span>Staff Login &rarr;</span>
+            </a>
           </div>
 
           <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">
@@ -121,10 +141,11 @@ export const BrandLoginPage: React.FC = () => {
               </button>
             </form>
 
-            <div className="pt-3 border-t border-slate-100 text-center">
-              <span className="text-[11px] text-slate-400">
-                Assurance Media Client Services &bull; Support: tools.assurance@gmail.com
-              </span>
+            <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-400 gap-1">
+              <span>Assurance Media Client Services</span>
+              <a href="/admin" className="text-blue-600 hover:underline font-semibold flex items-center gap-1">
+                <span>Staff Command Center</span> &rarr;
+              </a>
             </div>
           </div>
         </div>

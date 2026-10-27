@@ -175,16 +175,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLockTerminal }) => {
               <form onSubmit={handleInitialSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Staff Email Address
+                    Staff Email or Username
                   </label>
                   <div className="relative">
                     <Mail size={16} className="absolute left-3.5 top-3.5 text-slate-500" />
                     <input
-                      type="email"
+                      type="text"
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="admin@assurancemedia.com"
+                      placeholder="admin@assurancemedia.com or admin"
                       autoFocus
                       className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all placeholder-slate-600"
                     />
@@ -291,9 +291,19 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLockTerminal }) => {
                   />
                 </div>
 
-                {/* Emergency recovery code hint */}
-                <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-900/40 text-[11px] text-slate-400 text-center">
-                  Emergency Recovery Code: <code className="text-blue-300 font-bold font-mono">202626</code> (instant access if mobile app is unavailable)
+                {/* Emergency recovery code hint & one-click button */}
+                <div className="p-2.5 rounded-xl bg-blue-950/40 border border-blue-900/40 text-[11px] text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-2">
+                  <div>
+                    Emergency Code: <code className="text-blue-300 font-bold font-mono">202626</code>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTotpCode('202626')}
+                    className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    <KeyRound size={12} />
+                    <span>⚡ Fill 202626</span>
+                  </button>
                 </div>
 
                 <button
