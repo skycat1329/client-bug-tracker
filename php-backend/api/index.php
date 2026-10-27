@@ -5076,6 +5076,11 @@ if ($method === 'POST' && preg_match('#^/api/payroll/pay-slips/([^/]+)/send-emai
 // Public Printable Web Document Views (High-Fidelity Official PDF / Print Layouts)
 // ------------------------------------------------------------------------------
 
+// ------------------------------------------------------------------------------
+// Public Printable Web Document Views (Exact Replica of Uploaded PDF Templates)
+// ------------------------------------------------------------------------------
+require_once __DIR__ . '/document_assets.php';
+
 // GET /api/payroll/view/offer/{token}
 if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#', $path, $m)) {
     $token = $m[1];
@@ -5086,30 +5091,30 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
         exit;
     }
 
+    $assets = get_document_assets();
     $salaryBreakup = !empty($offer['salary_breakup']) ? json_decode($offer['salary_breakup'], true) : [];
     $clauses = !empty($offer['clauses']) ? json_decode($offer['clauses'], true) : [];
     $empTypeLabel = ($offer['employment_type'] === 'internship') ? 'Internship' : (($offer['employment_type'] === 'part_time') ? 'Part Time' : 'Full Time');
 
-    $salaryRows = '';
-    foreach ($salaryBreakup as $s) {
-        $mVal = floatval($s['monthly'] ?? 0);
-        $aVal = floatval($s['annual'] ?? ($mVal * 12));
-        $salaryRows .= "<tr>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 13px; font-weight: 500;'>" . htmlspecialchars($s['item']) . "</td>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 13px; text-align: right;'>₹ " . number_format($mVal, 2) . "</td>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 13px; text-align: right;'>₹ " . number_format($aVal, 2) . "</td>
-        </tr>";
+    // Filter any custom clauses that aren't the standard 8
+    $standardIds = ['probation', 'working_hours', 'confidentiality', 'termination', 'acceptance', 'leave_policy', 'medical', 'insurance'];
+    $customClauses = [];
+    foreach ($clauses as $cl) {
+        $cid = $cl['id'] ?? '';
+        if (!in_array($cid, $standardIds) && empty($cl['is_default'])) {
+            $customClauses[] = $cl;
+        }
     }
 
-    $clausesHtml = '';
-    foreach ($clauses as $c) {
-        $contentFormatted = nl2br(htmlspecialchars($c['content']));
-        $clausesHtml .= "
-        <div style='margin-bottom: 16px;'>
-            <h4 style='margin: 0 0 4px 0; font-size: 13.5px; font-weight: 700; color: #0f172a; text-transform: uppercase;'>&bull; " . htmlspecialchars($c['title']) . "</h4>
-            <div style='font-size: 12.5px; color: #334155; line-height: 1.55; text-align: justify;'>" . $contentFormatted . "</div>
-        </div>";
-    }
+    $coverBg = $assets['cover_page_bg'] ?? '';
+    $headerImg = $assets['page_header'] ?? '';
+    $footerImg = $assets['page_footer'] ?? '';
+    $signatureImg = $assets['faizan_signature'] ?? '';
+
+    $candidateAddress = !empty($offer['candidate_address']) ? nl2br(htmlspecialchars($offer['candidate_address'])) : '';
+    $joiningFormatted = date('d/m/Y', strtotime($offer['joining_date']));
+    $monthlyFormatted = number_format($offer['monthly_salary'], 0);
+    $laptopText = !empty($offer['laptop_required']) ? 'Required' : 'Provided by Company';
 
     header('Content-Type: text/html; charset=utf-8');
     echo "<!DOCTYPE html>
@@ -5120,152 +5125,343 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
       <meta name='viewport' content='width=device-width, initial-scale=1'>
       <style>
         * { box-sizing: border-box; }
-        body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background: #e2e8f0; margin: 0; padding: 24px; color: #0f172a; }
-        .page { max-width: 820px; margin: 0 auto 30px auto; background: #ffffff; padding: 48px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); position: relative; }
-        .top-action-bar { max-width: 820px; margin: 0 auto 16px auto; display: flex; justify-content: space-between; align-items: center; }
-        .btn-print { background: #0176D3; color: white; border: none; padding: 10px 22px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(1, 118, 211, 0.3); }
-        .company-header { border-bottom: 2px solid #0176D3; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-start; }
-        .company-header h2 { margin: 0; color: #0176D3; font-size: 24px; font-weight: 800; }
-        .company-header p { margin: 4px 0 0 0; font-size: 11.5px; color: #64748b; line-height: 1.4; max-width: 480px; }
-        .doc-badge { background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 4px; font-size: 11.5px; font-weight: 700; }
-        .info-table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-        .info-table td { padding: 6px 8px; font-size: 12.5px; vertical-align: top; }
-        .info-table tr:nth-child(even) { background: #f8fafc; }
-        .salary-table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-        .salary-table th { background: #f1f5f9; padding: 8px 12px; font-size: 12px; font-weight: 700; text-align: left; border: 1px solid #cbd5e1; color: #475569; }
-        .footer-banner { border-top: 1px solid #e2e8f0; margin-top: 36px; padding-top: 14px; font-size: 11px; color: #64748b; text-align: center; }
-        .sign-grid { display: flex; justify-content: space-between; margin-top: 40px; page-break-inside: avoid; }
-        .sign-box { width: 44%; border-top: 1px solid #0f172a; padding-top: 8px; font-size: 12.5px; }
+        html, body { margin: 0; padding: 0; background: #525659; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111827; }
+        
+        .top-action-bar {
+          position: sticky;
+          top: 0;
+          z-index: 999;
+          background: #1e293b;
+          color: #ffffff;
+          padding: 12px 24px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        .btn-print {
+          background: #0066cc;
+          color: #ffffff;
+          border: none;
+          padding: 9px 20px;
+          border-radius: 8px;
+          font-weight: 700;
+          font-size: 13.5px;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          box-shadow: 0 2px 6px rgba(0, 102, 204, 0.4);
+          transition: background 0.2s;
+        }
+        .btn-print:hover { background: #0052a3; }
+        
+        /* A4 Page Layout */
+        .doc-page {
+          width: 210mm;
+          min-height: 297mm;
+          height: 297mm;
+          max-height: 297mm;
+          background: #ffffff;
+          margin: 24px auto;
+          position: relative;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+          overflow: hidden;
+        }
+        
+        /* Cover Page */
+        .cover-page {
+          padding: 0;
+          display: flex;
+        }
+        .cover-page img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        /* Letter Pages */
+        .letter-page {
+          display: flex;
+          flex-direction: column;
+        }
+        .header-banner {
+          width: 100%;
+          height: 52px;
+          flex-shrink: 0;
+          overflow: hidden;
+        }
+        .header-banner img {
+          width: 100%;
+          height: 100%;
+          object-fit: fill;
+          display: block;
+        }
+        .letter-content {
+          flex: 1;
+          padding: 24px 48px 50px 48px;
+          font-size: 12px;
+          line-height: 1.48;
+          color: #0f172a;
+          overflow: hidden;
+        }
+        .footer-banner {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          width: 100%;
+          height: 44px;
+          overflow: hidden;
+        }
+        .footer-banner img {
+          width: 100%;
+          height: 100%;
+          object-fit: fill;
+          display: block;
+        }
+        
+        /* Typography matching the PDF */
+        .subject-title {
+          font-size: 13px;
+          font-weight: 700;
+          color: #000000;
+          margin-bottom: 12px;
+        }
+        .salutation {
+          font-size: 12.5px;
+          font-weight: 700;
+          color: #000000;
+          margin-bottom: 3px;
+        }
+        .candidate-addr {
+          font-size: 11.5px;
+          color: #1e293b;
+          margin-bottom: 12px;
+          line-height: 1.4;
+        }
+        .body-p {
+          font-size: 11.8px;
+          line-height: 1.46;
+          margin-bottom: 10px;
+          color: #0f172a;
+        }
+        .section-header {
+          font-size: 12.5px;
+          font-weight: 700;
+          color: #000000;
+          margin-top: 13px;
+          margin-bottom: 4px;
+        }
+        .details-grid {
+          margin-bottom: 11px;
+          line-height: 1.6;
+          font-size: 11.8px;
+        }
+        .details-grid div strong {
+          color: #000000;
+        }
+        .bullet-list {
+          margin: 2px 0 10px 0;
+          padding-left: 20px;
+          font-size: 11.8px;
+          line-height: 1.55;
+        }
+        .bullet-list li {
+          margin-bottom: 2px;
+        }
+        
+        /* Two-Column Signatory Table */
+        .sign-table {
+          width: 100%;
+          border-collapse: collapse;
+          border: 1px solid #111111;
+          margin-top: 16px;
+        }
+        .sign-table td {
+          width: 50%;
+          vertical-align: top;
+          padding: 8px 14px 10px 14px;
+          border: 1px solid #111111;
+        }
+        
         @media print {
-            body { background: #ffffff; padding: 0; margin: 0; }
-            .top-action-bar { display: none !important; }
-            .page { box-shadow: none; margin: 0; border-radius: 0; padding: 36px 40px; page-break-after: always; }
-            .page:last-child { page-break-after: auto; }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .top-action-bar { display: none !important; }
+          .doc-page {
+            width: 210mm !important;
+            height: 297mm !important;
+            max-height: 297mm !important;
+            margin: 0 !important;
+            box-shadow: none !important;
+            page-break-after: always !important;
+            break-after: page !important;
+          }
+          .doc-page:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
         }
       </style>
     </head>
     <body>
       <div class='top-action-bar'>
-        <div style='font-size: 13.5px; font-weight: 600; color: #475569;'>Assurance Media LLP &bull; Employment Contract Document</div>
-        <button class='btn-print' onclick='window.print()'>🖨️ Print / Save as PDF</button>
+        <div style='display: flex; align-items: center; gap: 12px;'>
+          <span style='font-size: 14px; font-weight: 700; letter-spacing: 0.3px;'>Assurance Media LLP &bull; Official Offer of Employment</span>
+          <span style='background: #334155; padding: 3px 8px; border-radius: 4px; font-size: 11.5px; font-family: monospace;'>" . htmlspecialchars($offer['offer_number']) . "</span>
+        </div>
+        <button class='btn-print' onclick='window.print()'>
+          <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 6 2 18 2 18 9'></polyline><path d='M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2'></path><rect x='6' y='14' width='12' height='8'></rect></svg>
+          Print / Save as PDF
+        </button>
       </div>
 
-      <!-- PAGE 1: Employment Contract Details -->
-      <div class='page'>
-        <div class='company-header'>
-          <div>
-            <h2>Assurance Media LLP</h2>
-            <p>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.<br/>
-            Contact: +91 96965 84985 | Email: hello@assurancemedia.in | Web: www.assurancemedia.in</p>
+      <!-- PAGE 1: COVER PAGE (AUTHENTIC FULL-BLEED) -->
+      <div class='doc-page cover-page'>
+        <img src='" . $coverBg . "' alt='Assurance Media Cover Page' />
+      </div>
+
+      <!-- PAGE 2: EMPLOYMENT DETAILS & COMPENSATION -->
+      <div class='doc-page letter-page'>
+        <div class='header-banner'>
+          <img src='" . $headerImg . "' alt='Header' />
+        </div>
+
+        <div class='letter-content'>
+          <div class='subject-title'>Subject: Offer of Employment for the Position of " . htmlspecialchars($offer['position']) . "</div>
+          <div class='salutation'>Dear " . htmlspecialchars($offer['candidate_name']) . ",</div>
+          " . (!empty($candidateAddress) ? "<div class='candidate-addr'>{$candidateAddress}</div>" : "") . "
+
+          <div class='body-p'>
+            We are pleased to offer you employment with Assurance Media LLP for the position of " . htmlspecialchars($offer['position']) . "
           </div>
-          <div style='text-align: right;'>
-            <span class='doc-badge'>" . htmlspecialchars($offer['offer_number']) . "</span>
-            <div style='font-size: 11.5px; color: #64748b; margin-top: 6px;'>Date: " . date('d F Y', strtotime($offer['created_at'])) . "</div>
+          <div class='body-p'>
+            Your skills, experience, and professional capabilities have impressed us, and we believe you will be a valuable addition to our team.
           </div>
+
+          <div class='section-header'>Employment Details</div>
+          <div class='details-grid'>
+            <div><strong>Position:</strong> " . htmlspecialchars($offer['position']) . "</div>
+            <div><strong>Department:</strong> " . htmlspecialchars($offer['department']) . "</div>
+            <div><strong>Reporting To:</strong> " . htmlspecialchars($offer['reporting_to']) . "</div>
+            <div><strong>Joining Date:</strong> [" . $joiningFormatted . "]</div>
+            <div><strong>Work Location:</strong> " . htmlspecialchars($offer['work_location']) . "</div>
+            <div><strong>Personal Laptop :</strong> " . $laptopText . "</div>
+          </div>
+
+          <div class='section-header'>Compensation Structure</div>
+          <div style='font-size: 12px; font-weight: 700; margin-bottom: 2px;'>Fixed Salary</div>
+          <ul class='bullet-list'>
+            <li>Monthly Salary: ₹" . $monthlyFormatted . "/-</li>
+            <li>Salary will be paid on a monthly basis as per the company's payroll cycle.</li>
+            <li>Payment Cycle: " . htmlspecialchars($offer['payment_cycle']) . "</li>
+          </ul>
+
+          <div class='section-header'>Probation Period</div>
+          <div class='body-p' style='margin-bottom: 4px;'>
+            The first 15 days of the Job will be considered a probation period.<br/>
+            During this period, the Company reserves the right to evaluate performance, conduct, and suitability for the role.
+          </div>
+          <div style='font-size: 11.8px; margin-bottom: 2px;'>During the probation period:</div>
+          <ul class='bullet-list'>
+            <li>The Company may terminate the Job <strong>immediately, without notice</strong> and <strong>without any obligation</strong> to continue the Job.</li>
+            <li>Upon successful completion of the probation period, the Job will continue for the remaining agreed duration.</li>
+          </ul>
+
+          <div class='section-header' style='margin-bottom: 0;'>Working Hours</div>
         </div>
-
-        <div style='margin-bottom: 18px;'>
-          <h3 style='margin: 0 0 6px 0; color: #0176D3; font-size: 16px;'>Subject: Offer of Employment for the Position of " . htmlspecialchars($offer['position']) . " (" . htmlspecialchars($empTypeLabel) . ")</h3>
-          <div style='font-size: 13px; font-weight: 700; color: #0f172a;'>Dear " . htmlspecialchars($offer['candidate_name']) . ",</div>
-          <div style='font-size: 12.5px; color: #475569; margin-top: 2px;'>" . nl2br(htmlspecialchars($offer['candidate_address'])) . "</div>
-        </div>
-
-        <p style='font-size: 12.5px; line-height: 1.55; color: #334155; text-align: justify;'>
-          We are pleased to offer you employment with <strong>Assurance Media LLP</strong> for the position of <strong>" . htmlspecialchars($offer['position']) . "</strong>.
-          Your skills, experience, and professional capabilities have impressed us, and we believe you will be a valuable addition to our team.
-        </p>
-
-        <h4 style='font-size: 13px; color: #0176D3; margin: 18px 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px;'>Employment Details</h4>
-        <table class='info-table'>
-          <tr>
-            <td style='width: 30%; color: #64748b;'><strong>Position:</strong></td>
-            <td style='width: 70%; font-weight: 600;'>" . htmlspecialchars($offer['position']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Employment Type:</strong></td>
-            <td>" . htmlspecialchars($empTypeLabel) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Department:</strong></td>
-            <td>" . htmlspecialchars($offer['department']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Reporting To:</strong></td>
-            <td>" . htmlspecialchars($offer['reporting_to']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Joining Date:</strong></td>
-            <td>" . htmlspecialchars(date('d/m/Y', strtotime($offer['joining_date']))) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Work Location:</strong></td>
-            <td>" . htmlspecialchars($offer['work_location']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Personal Laptop:</strong></td>
-            <td>" . ($offer['laptop_required'] ? 'Required' : 'Provided by Company') . "</td>
-          </tr>
-        </table>
-
-        <h4 style='font-size: 13px; color: #0176D3; margin: 18px 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px;'>Compensation Structure</h4>
-        <div style='font-size: 12.5px; line-height: 1.6; color: #334155; margin-bottom: 8px;'>
-          • <strong>Fixed Monthly Salary:</strong> ₹" . number_format($offer['monthly_salary'], 2) . "/-<br/>
-          • <strong>Annual CTC:</strong> ₹" . number_format($offer['annual_ctc'], 2) . "/-<br/>
-          • <strong>Payment Cycle:</strong> " . htmlspecialchars($offer['payment_cycle']) . "
-        </div>
-
-        <table class='salary-table'>
-          <thead>
-            <tr>
-              <th>Salary Component</th>
-              <th style='text-align: right;'>Monthly (₹)</th>
-              <th style='text-align: right;'>Annual (₹)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {$salaryRows}
-            <tr style='background: #f8fafc; font-weight: 700;'>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1;'>Total Cost to Company (CTC)</td>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #0176D3;'>₹ " . number_format($offer['monthly_salary'], 2) . "</td>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #0176D3;'>₹ " . number_format($offer['annual_ctc'], 2) . "</td>
-            </tr>
-          </tbody>
-        </table>
 
         <div class='footer-banner'>
-          Assurance Media LLP &bull; Page 1 of 2 &bull; " . htmlspecialchars($offer['offer_number']) . "
+          <img src='" . $footerImg . "' alt='Footer' />
         </div>
       </div>
 
-      <!-- PAGE 2: Terms, Clauses & Signatures -->
-      <div class='page'>
-        <div class='company-header'>
-          <div>
-            <h3 style='margin: 0; color: #0176D3; font-size: 18px;'>Assurance Media LLP</h3>
-            <p>Terms of Employment &amp; Statutory Undertakings</p>
-          </div>
-          <div>
-            <span class='doc-badge'>" . htmlspecialchars($offer['offer_number']) . "</span>
-          </div>
+      <!-- PAGE 3: TERMS, POLICIES & SIGNATURES -->
+      <div class='doc-page letter-page'>
+        <div class='header-banner'>
+          <img src='" . $headerImg . "' alt='Header' />
         </div>
 
-        {$clausesHtml}
+        <div class='letter-content'>
+          <div class='details-grid' style='margin-bottom: 12px;'>
+            <div><strong>Work Mode:</strong> " . htmlspecialchars($offer['work_mode']) . "</div>
+            <div><strong>Working Days:</strong> " . htmlspecialchars($offer['working_days']) . "</div>
+            <div><strong>Working Hours:</strong> " . htmlspecialchars($offer['working_hours']) . "</div>
+          </div>
 
-        <div class='sign-grid'>
-          <div class='sign-box'>
-            <div style='font-weight: 700; color: #0176D3;'>For Assurance Media LLP</div>
-            <div style='margin-top: 32px; font-weight: 600;'>" . htmlspecialchars($offer['signatory_name']) . "</div>
-            <div style='color: #64748b; font-size: 11.5px;'>" . htmlspecialchars($offer['signatory_title']) . "</div>
+          <div class='section-header'>Confidentiality</div>
+          <div class='body-p'>
+            During and after your employment, you shall maintain strict confidentiality regarding all company information, client data, business strategies, pricing, and proprietary information.
           </div>
-          <div class='sign-box'>
-            <div style='font-weight: 700; color: #0f172a;'>Candidate Acceptance</div>
-            <div style='margin-top: 32px; font-weight: 600;'>" . htmlspecialchars($offer['candidate_name']) . "</div>
-            <div style='color: #64748b; font-size: 11.5px;'>Signature &amp; Date: ____________________</div>
+
+          <div class='section-header'>Termination</div>
+          <div class='body-p'>
+            In order to resign the notice should be given prior to 60 days. If not FNF (Full & Final) will not realise by the company
           </div>
+
+          <div class='section-header'>Acceptance of Offer</div>
+          <div class='body-p' style='margin-bottom: 4px;'>
+            Please confirm your acceptance of this offer by replying with “I accept” to this email or by signing and returning a copy of this letter.
+          </div>
+          <div class='body-p'>
+            We look forward to working with you and wish you a valuable learning experience with Assurance Media LLP.
+          </div>
+
+          <div class='section-header'>Leave Policy</div>
+          <div class='body-p'>
+            You are required to submit your leave application to the authorities at least 15 days prior.<br/>
+            And your leave will be granted only on the consent of the higher authority.
+          </div>
+
+          <div class='section-header'>Medical</div>
+          <div class='body-p'>
+            During first 180 days of employment, company will not be liable for any type of medical expenses.
+          </div>
+
+          <div class='section-header'>Insurance Benefits</div>
+          <ul class='bullet-list' style='margin-bottom: 12px;'>
+            <li>
+              <strong>After completion of one (1) year of service:</strong><br/>
+              You will be covered under a Personal Accidental Insurance Policy of <strong>₹20,00,000 (Twenty Lakh)</strong> and a Health Insurance Policy of <strong>₹5,00,000 (Five Lakh)</strong>.
+            </li>
+          </ul>";
+
+    // Any extra custom clauses added by user
+    foreach ($customClauses as $cc) {
+        echo "<div class='section-header'>" . htmlspecialchars($cc['title']) . "</div>
+              <div class='body-p'>" . nl2br(htmlspecialchars($cc['content'])) . "</div>";
+    }
+
+    echo "
+          <!-- Two-Column Signatory Table with Official Signature Stamp -->
+          <table class='sign-table'>
+            <tr>
+              <td>
+                <div style='font-size: 12.5px; font-weight: 700; color: #000; margin-bottom: 4px;'>For Assurance Media LLP</div>
+                <div style='min-height: 48px; margin: 4px 0;'>
+                  <img src='" . $signatureImg . "' style='height: 48px; display: block;' alt='Mr. Faizan Siddiqui Signature' />
+                </div>
+                <div style='font-size: 12px; font-weight: 600; color: #0f172a;'>" . htmlspecialchars($offer['signatory_name'] ?: 'Mr. Faizan Siddiqui') . "</div>
+                <div style='font-size: 11.5px; color: #475569; margin-top: 1px;'>( " . htmlspecialchars($offer['signatory_title'] ?: 'Business Head') . " )</div>
+              </td>
+              <td>
+                <div style='font-size: 12.5px; font-weight: 700; color: #000; margin-bottom: 4px;'>For " . htmlspecialchars($offer['candidate_name']) . "</div>
+                <div style='height: 48px; margin: 4px 0;'></div>
+                <div style='font-size: 12px; font-weight: 600; color: #0f172a;'>Candidate Signature</div>
+                <div style='font-size: 11.5px; color: #475569; margin-top: 1px;'>Date: ____________________</div>
+              </td>
+            </tr>
+          </table>
         </div>
 
-        <div class='footer-banner' style='margin-top: 48px;'>
-          Assurance Media LLP &bull; Page 2 of 2 &bull; Registered Office: 302, 3rd Floor, Shivkrupa Bldg, Vidyavihar West Mumbai - 400086.
+        <div class='footer-banner'>
+          <img src='" . $footerImg . "' alt='Footer' />
         </div>
       </div>
     </body>
@@ -5283,26 +5479,21 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
         exit;
     }
 
+    $assets = get_document_assets();
     $earnings = !empty($slip['earnings']) ? json_decode($slip['earnings'], true) : [];
     $deductions = !empty($slip['deductions']) ? json_decode($slip['deductions'], true) : [];
 
-    $maxRows = max(count($earnings), count($deductions), 4);
-    $tableRows = '';
-    for ($i = 0; $i < $maxRows; $i++) {
-        $e = $earnings[$i] ?? null;
-        $d = $deductions[$i] ?? null;
+    $payslipLogo = $assets['payslip_logo'] ?? '';
+    $payslipSignature = $assets['payslip_signature'] ?? '';
 
-        $eLabel = $e ? htmlspecialchars($e['label']) : '';
-        $eAmt = $e ? ('₹ ' . number_format(floatval($e['amount']), 2)) : '';
-
-        $dLabel = $d ? htmlspecialchars($d['label']) : '';
-        $dAmt = $d ? ('₹ ' . number_format(floatval($d['amount']), 2)) : '';
-
-        $tableRows .= "<tr>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 35%;'>" . $eLabel . "</td>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 15%; text-align: right; font-weight: 500;'>" . $eAmt . "</td>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 35%;'>" . $dLabel . "</td>
-            <td style='padding: 8px 12px; border: 1px solid #cbd5e1; font-size: 12.5px; width: 15%; text-align: right; font-weight: 500; color: #dc2626;'>" . $dAmt . "</td>
+    // Build earnings rows matching sample layout
+    $earningsHtml = '';
+    foreach ($earnings as $e) {
+        $amt = floatval($e['amount'] ?? 0);
+        $amtStr = $amt > 0 ? ('₹ ' . number_format($amt, 2)) : '';
+        $earningsHtml .= "<tr>
+            <td style='padding: 6px 12px; border: 1px solid #000000; font-size: 12.5px; font-weight: 700; color: #000;'>" . htmlspecialchars($e['label']) . "</td>
+            <td style='padding: 6px 12px; border: 1px solid #000000; font-size: 12.5px; font-weight: 700; color: #000;'>" . $amtStr . "</td>
         </tr>";
     }
 
@@ -5315,121 +5506,211 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
       <meta name='viewport' content='width=device-width, initial-scale=1'>
       <style>
         * { box-sizing: border-box; }
-        body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; background: #e2e8f0; margin: 0; padding: 24px; color: #0f172a; }
-        .page { max-width: 820px; margin: 0 auto; background: #ffffff; padding: 40px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
-        .top-action-bar { max-width: 820px; margin: 0 auto 16px auto; display: flex; justify-content: space-between; align-items: center; }
-        .btn-print { background: #0176D3; color: white; border: none; padding: 10px 22px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(1, 118, 211, 0.3); }
-        .comp-header { text-align: center; border-bottom: 2px solid #0176D3; padding-bottom: 14px; margin-bottom: 18px; }
-        .comp-header h2 { margin: 0; color: #0176D3; font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
-        .comp-header p { margin: 4px 0 0 0; font-size: 11.5px; color: #64748b; }
-        .slip-title { text-align: center; font-size: 15px; font-weight: 700; color: #0f172a; margin: 16px 0; text-transform: uppercase; letter-spacing: 0.5px; }
-        .emp-table { width: 100%; border-collapse: collapse; margin-bottom: 18px; border: 1px solid #cbd5e1; }
-        .emp-table td { padding: 6px 10px; font-size: 12.5px; border: 1px solid #e2e8f0; }
-        .breakup-table { width: 100%; border-collapse: collapse; border: 1px solid #cbd5e1; margin-bottom: 18px; }
-        .breakup-table th { background: #f1f5f9; padding: 8px 10px; font-size: 12px; font-weight: 700; text-align: left; border: 1px solid #cbd5e1; color: #334155; }
-        .net-pay-box { background: #ecfdf5; border: 2px solid #10b981; border-radius: 6px; padding: 14px 18px; margin: 18px 0; display: flex; justify-content: space-between; align-items: center; }
-        .in-words-box { font-size: 12.5px; color: #065f46; font-style: italic; font-weight: 600; margin-top: 4px; }
-        .sign-area { margin-top: 48px; display: flex; justify-content: flex-end; }
-        .sign-block { width: 220px; text-align: center; border-top: 1px solid #0f172a; padding-top: 6px; font-size: 12px; font-weight: 600; }
+        html, body { margin: 0; padding: 0; background: #525659; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #000000; }
+        
+        .top-action-bar {
+          position: sticky;
+          top: 0;
+          z-index: 999;
+          background: #1e293b;
+          color: #ffffff;
+          padding: 12px 24px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        .btn-print {
+          background: #0066cc;
+          color: #ffffff;
+          border: none;
+          padding: 9px 20px;
+          border-radius: 8px;
+          font-weight: 700;
+          font-size: 13.5px;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          box-shadow: 0 2px 6px rgba(0, 102, 204, 0.4);
+          transition: background 0.2s;
+        }
+        .btn-print:hover { background: #0052a3; }
+
+        .doc-page {
+          width: 210mm;
+          min-height: 297mm;
+          background: #ffffff;
+          margin: 24px auto;
+          padding: 36px 40px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+          position: relative;
+        }
+
+        .header-box {
+          position: relative;
+          text-align: center;
+          margin-bottom: 24px;
+          min-height: 70px;
+        }
+        .header-logo {
+          position: absolute;
+          left: 0;
+          top: 0;
+          height: 62px;
+        }
+        .header-title {
+          font-size: 20px;
+          font-weight: 800;
+          color: #000000;
+          letter-spacing: -0.3px;
+        }
+        .header-addr {
+          font-size: 11.5px;
+          font-weight: 600;
+          color: #111111;
+          margin-top: 4px;
+          line-height: 1.4;
+        }
+
+        .payslip-table {
+          width: 100%;
+          border-collapse: collapse;
+          border: 1.5px solid #000000;
+          font-size: 12.5px;
+        }
+        .payslip-table td {
+          border: 1px solid #000000;
+          padding: 7px 12px;
+          vertical-align: middle;
+        }
+        .payslip-title-row {
+          text-align: center;
+          font-size: 14px;
+          font-weight: 700;
+          padding: 8px 12px;
+          border: 1.5px solid #000000 !important;
+        }
+
+        .sign-section {
+          margin-top: 36px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+        .sign-stamp-img {
+          height: 64px;
+          display: block;
+          margin-bottom: 4px;
+        }
+        .sign-line {
+          width: 260px;
+          border-bottom: 2px solid #000000;
+          margin-bottom: 6px;
+        }
+        .sign-caption {
+          font-size: 13px;
+          font-weight: 800;
+          color: #000000;
+        }
+
         @media print {
-            body { background: #ffffff; padding: 0; margin: 0; }
-            .top-action-bar { display: none !important; }
-            .page { box-shadow: none; margin: 0; border-radius: 0; padding: 24px; }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .top-action-bar { display: none !important; }
+          .doc-page {
+            width: 210mm !important;
+            min-height: 297mm !important;
+            margin: 0 !important;
+            padding: 30px 36px !important;
+            box-shadow: none !important;
+          }
         }
       </style>
     </head>
     <body>
       <div class='top-action-bar'>
-        <div style='font-size: 13.5px; font-weight: 600; color: #475569;'>Assurance Media LLP &bull; Official Monthly Salary Slip</div>
-        <button class='btn-print' onclick='window.print()'>🖨️ Print / Save as PDF</button>
+        <div style='display: flex; align-items: center; gap: 12px;'>
+          <span style='font-size: 14px; font-weight: 700;'>Assurance Media LLP &bull; Salary Slip</span>
+          <span style='background: #334155; padding: 3px 8px; border-radius: 4px; font-size: 11.5px; font-family: monospace;'>" . htmlspecialchars($slip['slip_number']) . "</span>
+        </div>
+        <button class='btn-print' onclick='window.print()'>
+          <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 6 2 18 2 18 9'></polyline><path d='M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2'></path><rect x='6' y='14' width='12' height='8'></rect></svg>
+          Print / Save as PDF
+        </button>
       </div>
 
-      <div class='page'>
-        <div class='comp-header'>
-          <h2>Assurance Media LLP</h2>
-          <p>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.<br/>
-          Email: hello@assurancemedia.in | Web: www.assurancemedia.in | Phone: +91 96965 84985</p>
+      <div class='doc-page'>
+        <!-- Company Header with Logo -->
+        <div class='header-box'>
+          <img src='" . $payslipLogo . "' class='header-logo' alt='Assurance Media' />
+          <div class='header-title'>Assurance Media LLP</div>
+          <div class='header-addr'>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.</div>
         </div>
 
-        <div class='slip-title'>Salary Slip for the Month of " . htmlspecialchars($slip['month']) . " " . htmlspecialchars($slip['year']) . "</div>
+        <!-- Boxed Payslip Grid (Exact Replica of Sample) -->
+        <table class='payslip-table'>
+          <tr>
+            <td colspan='4' class='payslip-title-row'>
+              Salary Slip for the Month of " . htmlspecialchars($slip['month']) . " " . htmlspecialchars($slip['year']) . "
+            </td>
+          </tr>
+          <tr>
+            <td style='width: 25%; font-weight: 700;'>Employee Name</td>
+            <td style='width: 32%; font-weight: 700;'>" . htmlspecialchars($slip['employee_name']) . "</td>
+            <td style='width: 25%; font-weight: 700;'>Total Working Days</td>
+            <td style='width: 18%; font-weight: 700; text-align: left;'>" . htmlspecialchars($slip['total_working_days']) . "</td>
+          </tr>
+          <tr>
+            <td style='font-weight: 700;'>Employee ID</td>
+            <td style='font-weight: 700;'>" . htmlspecialchars($slip['employee_id']) . "</td>
+            <td style='font-weight: 700;'>LOP Days</td>
+            <td style='font-weight: 700; text-align: left;'>" . htmlspecialchars($slip['lop_days']) . "</td>
+          </tr>
+          <tr>
+            <td style='font-weight: 700;'>Designation</td>
+            <td style='font-weight: 700;'>" . htmlspecialchars($slip['designation']) . "</td>
+            <td style='font-weight: 700;'>Paid Days</td>
+            <td style='font-weight: 700; text-align: left;'>" . htmlspecialchars($slip['paid_days']) . "</td>
+          </tr>
+          <tr>
+            <td style='font-weight: 700;'>Department</td>
+            <td style='font-weight: 700;'>" . htmlspecialchars($slip['department']) . "</td>
+            <td style='font-weight: 700;'>Bank Name</td>
+            <td style='font-weight: 700;'>" . htmlspecialchars($slip['bank_name']) . "</td>
+          </tr>
+          <tr>
+            <td style='font-weight: 700;'>Date of Joining</td>
+            <td style='font-weight: 700;'>" . ($slip['date_of_joining'] ? htmlspecialchars(date('d-m-Y', strtotime($slip['date_of_joining']))) : 'N/A') . "</td>
+            <td style='font-weight: 700;'>Bank A/c No</td>
+            <td style='font-weight: 700; font-family: monospace;'>" . htmlspecialchars($slip['bank_account_no'] ?: 'N/A') . "</td>
+          </tr>
+          
+          {$earningsHtml}
 
-        <table class='emp-table'>
           <tr>
-            <td style='width: 25%; color: #64748b;'><strong>Employee Name</strong></td>
-            <td style='width: 30%; font-weight: 700; color: #0f172a;'>" . htmlspecialchars($slip['employee_name']) . "</td>
-            <td style='width: 25%; color: #64748b;'><strong>Total Working Days</strong></td>
-            <td style='width: 20%; font-weight: 600; text-align: right;'>" . htmlspecialchars($slip['total_working_days']) . "</td>
+            <td style='padding: 8px 12px; font-weight: 800; font-size: 13px;'>Net Pay</td>
+            <td colspan='3' style='padding: 8px 12px; font-weight: 800; font-size: 13px;'>
+              ₹ " . number_format($slip['net_pay'], 0) . "
+            </td>
           </tr>
           <tr>
-            <td style='color: #64748b;'><strong>Employee ID</strong></td>
-            <td style='font-weight: 700; color: #0176D3; font-family: monospace;'>" . htmlspecialchars($slip['employee_id']) . "</td>
-            <td style='color: #64748b;'><strong>LOP Days</strong></td>
-            <td style='font-weight: 600; text-align: right; color: #dc2626;'>" . htmlspecialchars($slip['lop_days']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Designation</strong></td>
-            <td>" . htmlspecialchars($slip['designation']) . "</td>
-            <td style='color: #64748b;'><strong>Paid Days</strong></td>
-            <td style='font-weight: 700; text-align: right; color: #166534;'>" . htmlspecialchars($slip['paid_days']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Department</strong></td>
-            <td>" . htmlspecialchars($slip['department']) . "</td>
-            <td style='color: #64748b;'><strong>Bank Name</strong></td>
-            <td>" . htmlspecialchars($slip['bank_name']) . "</td>
-          </tr>
-          <tr>
-            <td style='color: #64748b;'><strong>Date of Joining</strong></td>
-            <td>" . ($slip['date_of_joining'] ? htmlspecialchars(date('d-m-Y', strtotime($slip['date_of_joining']))) : 'N/A') . "</td>
-            <td style='color: #64748b;'><strong>Bank A/c No</strong></td>
-            <td style='font-family: monospace;'>" . htmlspecialchars($slip['bank_account_no'] ?: 'N/A') . "</td>
+            <td colspan='4' style='padding: 8px 12px; font-weight: 700; font-size: 12.5px; text-transform: capitalize;'>
+              " . htmlspecialchars($slip['net_pay_words']) . "
+            </td>
           </tr>
         </table>
 
-        <table class='breakup-table'>
-          <thead>
-            <tr>
-              <th colspan='2' style='background: #f0fdf4; color: #166534;'>EARNINGS</th>
-              <th colspan='2' style='background: #fef2f2; color: #991b1b;'>DEDUCTIONS</th>
-            </tr>
-            <tr>
-              <th>Description</th>
-              <th style='text-align: right;'>Amount (₹)</th>
-              <th>Description</th>
-              <th style='text-align: right;'>Amount (₹)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {$tableRows}
-            <tr style='background: #f8fafc; font-weight: 700;'>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1;'>Total Earnings</td>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #166534;'>₹ " . number_format($slip['total_earnings'], 2) . "</td>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1;'>Total Deductions</td>
-              <td style='padding: 8px 12px; border: 1px solid #cbd5e1; text-align: right; color: #dc2626;'>₹ " . number_format($slip['total_deductions'], 2) . "</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div class='net-pay-box'>
-          <div>
-            <div style='font-size: 13px; font-weight: 700; color: #065f46; text-transform: uppercase;'>Net Take Home Pay</div>
-            <div class='in-words-box'>" . htmlspecialchars($slip['net_pay_words']) . " Rupees Only</div>
-          </div>
-          <div style='text-align: right;'>
-            <div style='font-size: 24px; font-weight: 800; color: #065f46;'>₹ " . number_format($slip['net_pay'], 0) . "/-</div>
-            <div style='font-size: 11px; color: #047857;'>(" . htmlspecialchars($slip['slip_number']) . ")</div>
-          </div>
-        </div>
-
-        <div class='sign-area'>
-          <div class='sign-block'>
-            <div style='margin-bottom: 24px; color: #64748b;'>For Assurance Media LLP</div>
-            <div>" . htmlspecialchars($slip['signatory_label'] ?: 'Employer Signature') . "</div>
-          </div>
-        </div>
-
-        <div style='border-top: 1px solid #e2e8f0; margin-top: 36px; padding-top: 10px; font-size: 11px; color: #94a3b8; text-align: center;'>
-          This is a system generated salary slip from Assurance Media LLP. All amounts in INR (₹).
+        <!-- Signature Section -->
+        <div class='sign-section'>
+          <img src='" . $payslipSignature . "' class='sign-stamp-img' alt='Signature & Stamp' />
+          <div class='sign-line'></div>
+          <div class='sign-caption'>Employer Signature</div>
         </div>
       </div>
     </body>
