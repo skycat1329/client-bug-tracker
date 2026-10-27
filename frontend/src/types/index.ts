@@ -24,6 +24,7 @@ export interface User {
   avatar_url?: string | null;
   must_reset_password?: boolean | number;
   can_manage_payroll?: boolean;
+  can_manage_attendance?: boolean;
 }
 
 export interface Role {

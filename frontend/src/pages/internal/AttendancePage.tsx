@@ -24,6 +24,18 @@ import {
   FileSpreadsheet,
   Users,
   Search,
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Trash2,
+  Edit3,
+  UserCheck,
+  Lock,
+  Unlock,
+  CheckSquare,
+  List,
+  Grid
 } from 'lucide-react';
 
 interface OfficeGeofence {
@@ -61,6 +73,8 @@ interface AttendanceRecord {
   total_work_minutes?: number;
   final_status: string;
   is_regularized?: number;
+  is_early_exit?: number;
+  is_late?: number;
   notes?: string;
 }
 
@@ -68,6 +82,7 @@ interface MonthlyStats {
   total_punched_days: number;
   present_count: number;
   late_count: number;
+  early_exit_count?: number;
   half_day_count: number;
   wfh_count: number;
   on_duty_count: number;
@@ -76,13 +91,36 @@ interface MonthlyStats {
   avg_daily_hours: number;
 }
 
+interface CompanyHoliday {
+  id: number;
+  name: string;
+  holiday_date: string;
+  description?: string;
+  created_by?: string;
+}
+
+interface StaffMember {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  custom_role?: string;
+  avatar_url?: string;
+  can_manage_attendance?: number | boolean;
+}
+
 export const AttendancePage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user && ['super_admin', 'support_manager'].includes(user.role);
+  const canManageAttendance = Boolean(isAdmin || user?.can_manage_attendance);
+  const isSuperAdmin = user?.role === 'super_admin';
 
   // Core State
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'punch' | 'calendar' | 'admin-roster' | 'admin-regularize' | 'admin-settings'>('punch');
+  const [activeTab, setActiveTab] = useState<
+    'punch' | 'calendar' | 'admin-roster' | 'admin-regularize' | 'admin-holidays' | 'admin-permissions' | 'admin-settings'
+  >('punch');
+
   const [office, setOffice] = useState<OfficeGeofence>({
     name: 'Assurance Media HQ',
     latitude: 19.08250795,
@@ -113,9 +151,13 @@ export const AttendancePage: React.FC = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
+  const [calendarViewMode, setCalendarViewMode] = useState<'grid' | 'table'>('grid');
   const [monthRecords, setMonthRecords] = useState<AttendanceRecord[]>([]);
   const [monthStats, setMonthStats] = useState<MonthlyStats | null>(null);
+  const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
   const [selectedDayRecord, setSelectedDayRecord] = useState<AttendanceRecord | null>(null);
+  const [selectedDayHoliday, setSelectedDayHoliday] = useState<CompanyHoliday | null>(null);
+  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
 
   // Regularization Modal State
   const [showRegModal, setShowRegModal] = useState(false);
@@ -129,6 +171,20 @@ export const AttendancePage: React.FC = () => {
   const [submittingReg, setSubmittingReg] = useState(false);
   const [regSuccess, setRegSuccess] = useState(false);
 
+  // Manual Punch Assignment Modal State
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assignForm, setAssignForm] = useState({
+    user_id: '',
+    attendance_date: new Date().toISOString().split('T')[0],
+    check_in_time: '10:00:00',
+    check_out_time: '19:00:00',
+    work_mode: 'office',
+    notes: 'HR Assigned Punch',
+  });
+  const [assigningPunch, setAssigningPunch] = useState(false);
+  const [assignSuccess, setAssignSuccess] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
   // Admin Roster State
   const [adminDate, setAdminDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [adminRoster, setAdminRoster] = useState<any[]>([]);
@@ -138,15 +194,32 @@ export const AttendancePage: React.FC = () => {
   const [loadingRoster, setLoadingRoster] = useState(false);
 
   // Admin Regularizations Queue State
-  const [pendingRegs, setPendingRegs] = useState<any[]>([]);
-  const [processingRegId, setProcessingRegId] = useState<number | null>(null);
+  const [adminRegs, setAdminRegs] = useState<any[]>([]);
+  const [loadingRegs, setLoadingRegs] = useState(false);
+  const [reviewingRegId, setReviewingRegId] = useState<number | null>(null);
+  const [reviewerNotes, setReviewerNotes] = useState('');
 
-  // Admin Office Settings Form
+  // Admin Office Geofence Form State
   const [officeForm, setOfficeForm] = useState<OfficeGeofence>(office);
   const [savingOffice, setSavingOffice] = useState(false);
-  const [officeSaved, setOfficeSaved] = useState(false);
+  const [officeSaveMsg, setOfficeSaveMsg] = useState<string | null>(null);
 
-  // Live Clock
+  // Holidays Management State
+  const [newHoliday, setNewHoliday] = useState({
+    name: '',
+    holiday_date: '',
+    description: '',
+  });
+  const [savingHoliday, setSavingHoliday] = useState(false);
+  const [holidayError, setHolidayError] = useState<string | null>(null);
+  const [holidaySuccess, setHolidaySuccess] = useState<string | null>(null);
+
+  // Access Delegation State
+  const [staffList, setStaffList] = useState<StaffMember[]>([]);
+  const [loadingStaff, setLoadingStaff] = useState(false);
+  const [togglingUser, setTogglingUser] = useState<string | null>(null);
+
+  // Live Digital Clock (HH:MM:SS)
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
 
   useEffect(() => {
@@ -243,44 +316,79 @@ export const AttendancePage: React.FC = () => {
     }
   };
 
-  // Load Monthly Calendar History
+  // Load Monthly Calendar History & Holidays
   const loadMonthHistory = async (month: string) => {
     try {
       const res: any = await api.get(`/attendance/history?month=${month}`);
       if (res.success) {
         setMonthRecords(res.records || []);
         setMonthStats(res.stats || null);
+        if (res.holidays) {
+          setHolidays(res.holidays);
+        }
       }
-    } catch (err) {
-      console.error('Failed to load month attendance history:', err);
+    } catch (err: any) {
+      console.error('Failed to load history:', err);
     }
   };
 
-  // Load Admin Roster
-  const loadAdminRoster = async (date: string) => {
+  // Load All Holidays
+  const loadHolidays = async () => {
+    try {
+      const year = selectedMonth.split('-')[0];
+      const res: any = await api.get(`/attendance/holidays?year=${year}`);
+      if (res.success) {
+        setHolidays(res.holidays || []);
+      }
+    } catch (err) {
+      console.error('Failed to load holidays:', err);
+    }
+  };
+
+  // Load Staff List
+  const loadStaffList = async () => {
+    try {
+      setLoadingStaff(true);
+      const res: any = await api.get('/admin/attendance/permissions');
+      if (res.success) {
+        setStaffList(res.staff || []);
+      }
+    } catch (err) {
+      console.error('Failed to load staff list:', err);
+    } finally {
+      setLoadingStaff(false);
+    }
+  };
+
+  // Load Admin Live Roster
+  const loadAdminRoster = async (date: string, search = '') => {
     try {
       setLoadingRoster(true);
-      const res: any = await api.get(`/admin/attendance/roster?date=${date}`);
+      const query = `?date=${date}` + (search ? `&search=${encodeURIComponent(search)}` : '');
+      const res: any = await api.get(`/admin/attendance/roster${query}`);
       if (res.success) {
         setAdminRoster(res.data || []);
         setAdminSummary(res.summary || null);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load admin roster:', err);
     } finally {
       setLoadingRoster(false);
     }
   };
 
-  // Load Admin Regularizations Queue
-  const loadAdminRegs = async () => {
+  // Load Admin Regularizations
+  const loadAdminRegularizations = async () => {
     try {
+      setLoadingRegs(true);
       const res: any = await api.get('/admin/attendance/regularizations');
       if (res.success) {
-        setPendingRegs(res.data || []);
+        setAdminRegs(res.data || []);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load regularizations:', err);
+    } finally {
+      setLoadingRegs(false);
     }
   };
 
@@ -292,38 +400,37 @@ export const AttendancePage: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'calendar') {
       loadMonthHistory(selectedMonth);
-    } else if (activeTab === 'admin-roster' && isAdmin) {
-      loadAdminRoster(adminDate);
-    } else if (activeTab === 'admin-regularize' && isAdmin) {
-      loadAdminRegs();
+    } else if (activeTab === 'admin-roster' && canManageAttendance) {
+      loadAdminRoster(adminDate, adminSearch);
+    } else if (activeTab === 'admin-regularize' && canManageAttendance) {
+      loadAdminRegularizations();
+    } else if (activeTab === 'admin-holidays') {
+      loadHolidays();
+    } else if (activeTab === 'admin-permissions' && isSuperAdmin) {
+      loadStaffList();
     }
   }, [activeTab, selectedMonth, adminDate]);
 
-  // Handle Punch In
+  // Execute Punch In
   const handlePunchIn = async () => {
+    setPunching(true);
     setPunchError(null);
     setPunchSuccess(null);
 
-    if (workMode === 'office') {
-      if (!gpsLocation) {
-        setPunchError('GPS location is required for Office Check-In. Please tap "Refresh Location" below.');
-        return;
-      }
-      if (distanceToOffice !== null && distanceToOffice > office.radius_meters) {
-        setPunchError(
-          `You are ${distanceToOffice}m away from ${office.name}. Office check-in requires being within ${office.radius_meters}m. Please move closer or switch to "Work From Home" mode.`
-        );
-        return;
-      }
-    }
-
     try {
-      setPunching(true);
       const payload: any = {
         work_mode: workMode,
         notes: punchNotes,
       };
-      if (gpsLocation) {
+
+      if (workMode === 'office') {
+        if (!gpsLocation) {
+          throw new Error('GPS coordinates are required for In-Office punch. Please tap "Acquire GPS" above or select Work From Home.');
+        }
+        payload.latitude = gpsLocation.lat;
+        payload.longitude = gpsLocation.lng;
+        payload.accuracy = gpsLocation.accuracy;
+      } else if (gpsLocation) {
         payload.latitude = gpsLocation.lat;
         payload.longitude = gpsLocation.lng;
         payload.accuracy = gpsLocation.accuracy;
@@ -335,27 +442,26 @@ export const AttendancePage: React.FC = () => {
         setElapsedSeconds(0);
         setPunchSuccess(res.message || 'Punched in successfully!');
         setPunchNotes('');
+        loadInitialData();
       }
     } catch (err: any) {
-      setPunchError(err.message || 'Failed to punch in. Please retry.');
+      setPunchError(err.message || 'Failed to punch in');
     } finally {
       setPunching(false);
     }
   };
 
-  // Handle Punch Out
+  // Execute Punch Out
   const handlePunchOut = async () => {
-    if (!window.confirm('Are you sure you want to Punch Out for today?')) {
-      return;
-    }
+    setPunching(true);
     setPunchError(null);
     setPunchSuccess(null);
 
     try {
-      setPunching(true);
       const payload: any = {
         notes: punchNotes,
       };
+
       if (gpsLocation) {
         payload.latitude = gpsLocation.lat;
         payload.longitude = gpsLocation.lng;
@@ -367,24 +473,20 @@ export const AttendancePage: React.FC = () => {
         setTodayRecord(res.data);
         setPunchSuccess(res.message || 'Punched out successfully!');
         setPunchNotes('');
+        loadInitialData();
       }
     } catch (err: any) {
-      setPunchError(err.message || 'Failed to punch out. Please retry.');
+      setPunchError(err.message || 'Failed to punch out');
     } finally {
       setPunching(false);
     }
   };
 
-  // Submit Regularization
-  const handleRegularizeSubmit = async (e: React.FormEvent) => {
+  // Submit Regularization Request
+  const handleSubmitRegularization = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regForm.reason.trim()) {
-      alert('Please specify a valid reason for regularization');
-      return;
-    }
-
+    setSubmittingReg(true);
     try {
-      setSubmittingReg(true);
       const res: any = await api.post('/attendance/regularize', regForm);
       if (res.success) {
         setRegSuccess(true);
@@ -401,7 +503,7 @@ export const AttendancePage: React.FC = () => {
           if (activeTab === 'calendar') {
             loadMonthHistory(selectedMonth);
           }
-        }, 1200);
+        }, 1500);
       }
     } catch (err: any) {
       alert(err.message || 'Failed to submit regularization');
@@ -410,752 +512,1548 @@ export const AttendancePage: React.FC = () => {
     }
   };
 
-  // Admin Review Regularization
+  // Review Regularization (Approve / Reject)
   const handleReviewReg = async (id: number, action: 'approve' | 'reject') => {
     try {
-      setProcessingRegId(id);
-      const res: any = await api.post(`/admin/attendance/regularization/${id}/review`, { action });
+      const res: any = await api.post(`/admin/attendance/regularization/${id}/review`, {
+        action,
+        notes: reviewerNotes,
+      });
       if (res.success) {
-        setPendingRegs((prev) =>
-          prev.map((r) => (r.id === id ? { ...r, status: action === 'approve' ? 'APPROVED' : 'REJECTED' } : r))
-        );
+        setReviewingRegId(null);
+        setReviewerNotes('');
+        loadAdminRegularizations();
       }
     } catch (err: any) {
-      alert(err.message || 'Action failed');
-    } finally {
-      setProcessingRegId(null);
+      alert(err.message || 'Review failed');
     }
   };
 
-  // Save Office Geofence Config
+  // Save Office Geofence Settings
   const handleSaveOffice = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSavingOffice(true);
+    setOfficeSaveMsg(null);
     try {
-      setSavingOffice(true);
       const res: any = await api.post('/admin/attendance/geofence', officeForm);
       if (res.success) {
         setOffice(res.data);
-        setOfficeSaved(true);
-        setTimeout(() => setOfficeSaved(false), 2500);
+        setOfficeSaveMsg('Office geofence and shift schedules saved successfully!');
+        setTimeout(() => setOfficeSaveMsg(null), 3500);
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to update office geofence');
+      alert(err.message || 'Failed to save settings');
     } finally {
       setSavingOffice(false);
     }
   };
 
-  // Helper formatting seconds
-  const formatTimer = (totalSeconds: number) => {
-    const hrs = Math.floor(totalSeconds / 3600);
-    const mins = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-    return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  // Manual Punch Assignment
+  const handleAssignPunchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAssigningPunch(true);
+    setAssignError(null);
+    try {
+      const res: any = await api.post('/admin/attendance/assign-punch', assignForm);
+      if (res.success) {
+        setAssignSuccess(true);
+        setTimeout(() => {
+          setShowAssignModal(false);
+          setAssignSuccess(false);
+          if (activeTab === 'admin-roster') loadAdminRoster(adminDate, adminSearch);
+          if (activeTab === 'calendar') loadMonthHistory(selectedMonth);
+        }, 1200);
+      }
+    } catch (err: any) {
+      setAssignError(err.message || 'Failed to assign punch');
+    } finally {
+      setAssigningPunch(false);
+    }
   };
 
-  // Format 12-hour time
-  const format12Hour = (dateObj: Date) => {
-    return dateObj.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true,
-    });
+  // Toggle User Attendance Permission
+  const handleTogglePermission = async (userId: string, currentVal: boolean | number) => {
+    setTogglingUser(userId);
+    try {
+      const newVal = currentVal ? 0 : 1;
+      const res: any = await api.post('/admin/attendance/permissions', {
+        user_id: userId,
+        can_manage_attendance: newVal,
+      });
+      if (res.success) {
+        setStaffList((prev) =>
+          prev.map((s) => (s.id === userId ? { ...s, can_manage_attendance: newVal } : s))
+        );
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to update user permission');
+    } finally {
+      setTogglingUser(null);
+    }
   };
 
+  // Add Company Holiday
+  const handleAddHoliday = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingHoliday(true);
+    setHolidayError(null);
+    setHolidaySuccess(null);
+    try {
+      const res: any = await api.post('/admin/attendance/holidays', newHoliday);
+      if (res.success) {
+        setHolidaySuccess(`Holiday "${newHoliday.name}" added successfully!`);
+        setNewHoliday({ name: '', holiday_date: '', description: '' });
+        loadHolidays();
+        if (activeTab === 'calendar') loadMonthHistory(selectedMonth);
+        setTimeout(() => setHolidaySuccess(null), 3000);
+      }
+    } catch (err: any) {
+      setHolidayError(err.message || 'Failed to add holiday');
+    } finally {
+      setSavingHoliday(false);
+    }
+  };
+
+  // Delete Company Holiday
+  const handleDeleteHoliday = async (id: number) => {
+    if (!confirm('Are you sure you want to remove this holiday?')) return;
+    try {
+      const res: any = await api.delete(`/admin/attendance/holidays/${id}`);
+      if (res.success) {
+        setHolidays((prev) => prev.filter((h) => h.id !== id));
+        if (activeTab === 'calendar') loadMonthHistory(selectedMonth);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete holiday');
+    }
+  };
+
+  // Format Elapsed Seconds as HH:MM:SS
+  const formatStopwatch = (totalSec: number) => {
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return [h, m, s].map((v) => String(v).padStart(2, '0')).join(':');
+  };
+
+  // Check In-Fence Status
   const isInsideFence = distanceToOffice !== null && distanceToOffice <= office.radius_meters;
 
-  // Filtered roster
-  const filteredRoster = adminRoster.filter((member) => {
-    const matchesSearch =
-      member.user_name.toLowerCase().includes(adminSearch.toLowerCase()) ||
-      member.user_email.toLowerCase().includes(adminSearch.toLowerCase());
-    if (!matchesSearch) return false;
+  // Calendar Helpers
+  const [yearStr, monthStr] = selectedMonth.split('-');
+  const calYear = parseInt(yearStr, 10);
+  const calMonth = parseInt(monthStr, 10) - 1; // 0-indexed
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  const firstDayOfWeek = new Date(calYear, calMonth, 1).getDay(); // 0 = Sun, 6 = Sat
 
-    if (adminFilter === 'PRESENT') return member.status === 'PRESENT' || member.status === 'LATE';
-    if (adminFilter === 'WFH_OD') return member.work_mode === 'wfh' || member.work_mode === 'on_duty';
-    if (adminFilter === 'NOT_PUNCHED') return member.status === 'NOT_PUNCHED';
-    return true;
-  });
+  // Calendar Navigation
+  const changeMonth = (offset: number) => {
+    const d = new Date(calYear, calMonth + offset, 1);
+    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
 
   return (
-    <div className="space-y-6 pb-20 sm:pb-6 max-w-7xl mx-auto">
-      {/* Top Header Card */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-5 sm:p-7 text-white shadow-xl relative overflow-hidden border border-slate-800">
-        <div className="absolute -right-16 -top-16 w-64 h-64 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute right-1/4 -bottom-20 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 relative z-10">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      {/* ==========================================================================
+          HEADER SECTION: BRAND LOGO + CURRENT TIME + USER PROFILE
+      ========================================================================== */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden border border-slate-700/50">
+        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-400/30 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                Darwinbox-Grade Engine
-              </span>
-              <span className="text-xs font-semibold text-slate-400">
-                HQ: {office.name} ({office.radius_meters}m fence)
-              </span>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-semibold tracking-wider uppercase mb-3 border border-blue-400/30">
+              <Compass size={14} className="animate-spin" style={{ animationDuration: '8s' }} />
+              Darwinbox Attendance & Geofencing Suite
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              Attendance & Geofencing Command Center
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-3">
+              <span>Workforce Attendance Hub</span>
             </h1>
-            <p className="text-slate-300 text-xs sm:text-sm mt-1">
-              Real-time GPS proximity validation, biometric-grade shift tracking, and instant Google Sheets integration.
+            <p className="text-slate-300 text-sm mt-1 max-w-2xl font-normal">
+              Self-service punch clock, spherical GPS geofencing, multi-user Google Sheets auto-sync, 
+              and dynamic monthly audit calendar.
             </p>
           </div>
 
-          {/* Real-time Clock Badge */}
-          <div className="bg-white/10 backdrop-blur-md px-5 py-3.5 rounded-xl border border-white/15 flex items-center gap-4 self-start md:self-auto">
-            <div className="p-2.5 bg-blue-600/40 rounded-lg text-blue-200">
+          {/* Real-Time Digital Clock */}
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 sm:p-5 border border-white/15 flex items-center gap-4 self-start lg:self-auto shadow-inner">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400 border border-blue-400/30">
               <Clock size={24} className="animate-pulse" />
             </div>
             <div>
-              <div className="text-xs font-medium text-slate-300 uppercase tracking-wider">
-                {currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Standard Indian Time (IST)</div>
+              <div className="text-2xl sm:text-3xl font-mono font-black tracking-wider text-white">
+                {currentTime.toLocaleTimeString()}
               </div>
-              <div className="text-2xl font-black font-mono tracking-tight text-white">
-                {format12Hour(currentTime)}
+              <div className="text-xs text-blue-300 font-medium">
+                {currentTime.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Shift Details Banner */}
-        <div className="mt-5 pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-300">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-100">Shift Schedule:</span>
-            <span className="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700 font-mono text-blue-300">
-              {office.shift_start} - {office.shift_end} (Grace: {office.grace_period_minutes}m)
-            </span>
-          </div>
+        {/* Global Navigation Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 mt-6 border-t border-slate-700/60 pt-4 scrollbar-none">
+          <button
+            onClick={() => setActiveTab('punch')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'punch'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                : 'text-slate-300 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <Clock size={16} />
+            <span>Punch Clock</span>
+          </button>
 
-          <div className="flex items-center gap-3">
+          <button
+            onClick={() => setActiveTab('calendar')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'calendar'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                : 'text-slate-300 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <CalendarIcon size={16} />
+            <span>Visual Calendar & Stats</span>
+          </button>
+
+          {canManageAttendance && (
+            <>
+              <button
+                onClick={() => setActiveTab('admin-roster')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+                  activeTab === 'admin-roster'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/30'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Users size={16} />
+                <span>Live Staff Roster</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('admin-regularize')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+                  activeTab === 'admin-regularize'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/30'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <ShieldCheck size={16} />
+                <span>Regularizations</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('admin-holidays')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+                  activeTab === 'admin-holidays'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-500/30'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Sparkles size={16} />
+                <span>Company Holidays</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('admin-settings')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+                  activeTab === 'admin-settings'
+                    ? 'bg-slate-700 text-white shadow-md'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Sliders size={16} />
+                <span>Office Geofence</span>
+              </button>
+            </>
+          )}
+
+          {isSuperAdmin && (
             <button
-              onClick={requestGps}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 font-medium transition-colors text-xs border border-white/10"
+              onClick={() => setActiveTab('admin-permissions')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+                activeTab === 'admin-permissions'
+                  ? 'bg-amber-600 text-white shadow-md shadow-amber-500/30'
+                  : 'text-amber-300 hover:text-white hover:bg-white/10'
+              }`}
             >
-              <RefreshCw size={13} className={gpsLoading ? 'animate-spin' : ''} />
-              <span>{gpsLoading ? 'Acquiring GPS...' : 'Refresh Location'}</span>
+              <Lock size={16} />
+              <span>Access Delegation</span>
             </button>
+          )}
+
+          {canManageAttendance && (
             <button
-              onClick={() => setShowRegModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors text-xs shadow-md shadow-indigo-600/30"
+              onClick={() => {
+                setAssignForm({
+                  user_id: user?.id || '',
+                  attendance_date: new Date().toISOString().split('T')[0],
+                  check_in_time: '10:00:00',
+                  check_out_time: '19:00:00',
+                  work_mode: 'office',
+                  notes: 'HR Assigned Punch',
+                });
+                setShowAssignModal(true);
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-500 hover:bg-blue-600 text-white transition-all flex items-center gap-1.5 shrink-0 ml-auto shadow-sm"
             >
-              <Clock size={13} />
-              <span>Request Regularization</span>
+              <Plus size={15} />
+              <span>Assign / Adjust Punch</span>
             </button>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('punch')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${
-            activeTab === 'punch'
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Smartphone size={16} />
-          <span>Punch In / Out</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('calendar')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${
-            activeTab === 'calendar'
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <CalendarIcon size={16} />
-          <span>My Monthly Log</span>
-        </button>
-
-        {isAdmin && (
-          <>
-            <button
-              onClick={() => setActiveTab('admin-roster')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${
-                activeTab === 'admin-roster'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Users size={16} />
-              <span>Today's Live Roster</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('admin-regularize')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap relative ${
-                activeTab === 'admin-regularize'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <ShieldCheck size={16} />
-              <span>Regularization Requests</span>
-              {pendingRegs.filter((r) => r.status === 'PENDING').length > 0 && (
-                <span className="w-2 h-2 rounded-full bg-amber-500 absolute top-2 right-2" />
-              )}
-            </button>
-
-            <button
-              onClick={() => setActiveTab('admin-settings')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${
-                activeTab === 'admin-settings'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Sliders size={16} />
-              <span>Geofence & Schedule</span>
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* =========================================================================
-          TAB 1: DARWINBOX PUNCH CLOCK & GEOFENCE RADAR
+      {/* ==========================================================================
+          TAB 1: DARWINBOX PUNCH CLOCK & RADAR ENGINE
       ========================================================================== */}
       {activeTab === 'punch' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Main Darwinbox Punch Card */}
-          <div className="lg:col-span-7 space-y-6">
-            <div className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/90 shadow-sm relative overflow-hidden">
-              <div className="flex items-center justify-between pb-5 border-b border-slate-100">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Column 1 & 2: Dynamic Punch Card + Work Mode */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6 sm:p-8">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">Today's Attendance Status</h2>
+                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <Clock className="text-blue-600" size={20} />
+                    <span>Daily Shift Punch Terminal</span>
+                  </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    Assigned Shift: <span className="font-semibold text-slate-700">{office.shift_start} - {office.shift_end}</span> (Grace period: {office.grace_period_minutes}m)
                   </p>
                 </div>
 
-                {/* Status Pill */}
-                <div>
-                  {!todayRecord ? (
-                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                      Not Punched In
-                    </span>
-                  ) : todayRecord.check_out_time ? (
-                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
-                      <CheckCircle2 size={12} />
-                      Completed ({Math.floor((todayRecord.total_work_minutes || 0) / 60)}h {(todayRecord.total_work_minutes || 0) % 60}m)
-                    </span>
-                  ) : (
-                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5 animate-pulse">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                      Active ({todayRecord.work_mode?.toUpperCase()})
-                    </span>
-                  )}
-                </div>
+                {/* Live Shift Stopwatch Counter */}
+                {todayRecord && !todayRecord.check_out_time && (
+                  <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl px-4 py-2 flex items-center gap-3">
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">Logged Shift Timer</div>
+                      <div className="text-xl font-mono font-black text-emerald-700">{formatStopwatch(elapsedSeconds)}</div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Work Mode Selector (Disabled if already punched in) */}
-              <div className="my-6">
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+              {/* Work Mode Toggle (Office vs WFH vs On-Duty) */}
+              <div className="mt-6">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                   Select Work Mode
                 </label>
                 <div className="grid grid-cols-3 gap-3">
                   <button
                     type="button"
-                    disabled={!!todayRecord}
+                    disabled={Boolean(todayRecord)}
                     onClick={() => setWorkMode('office')}
-                    className={`flex flex-col items-center justify-center p-3.5 rounded-xl border text-center transition-all ${
+                    className={`p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                       workMode === 'office'
-                        ? 'bg-blue-50/80 border-blue-500 text-blue-700 font-bold shadow-sm'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'border-blue-600 bg-blue-50/40 text-blue-900 shadow-sm'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
                     } ${todayRecord ? 'opacity-70 cursor-not-allowed' : ''}`}
                   >
-                    <Building2 size={20} className={workMode === 'office' ? 'text-blue-600' : 'text-slate-400'} />
-                    <span className="text-xs mt-1.5 font-semibold">In-Office</span>
-                    <span className="text-[10px] text-slate-400">HQ Geofenced</span>
+                    <div className="flex items-center justify-between">
+                      <Building2 size={20} className={workMode === 'office' ? 'text-blue-600' : 'text-slate-400'} />
+                      {workMode === 'office' && <Check size={16} className="text-blue-600" />}
+                    </div>
+                    <div className="mt-3">
+                      <div className="text-xs font-bold">In-Office</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">GPS Geofence Enforced</div>
+                    </div>
                   </button>
 
                   <button
                     type="button"
-                    disabled={!!todayRecord}
+                    disabled={Boolean(todayRecord)}
                     onClick={() => setWorkMode('wfh')}
-                    className={`flex flex-col items-center justify-center p-3.5 rounded-xl border text-center transition-all ${
+                    className={`p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                       workMode === 'wfh'
-                        ? 'bg-blue-50/80 border-blue-500 text-blue-700 font-bold shadow-sm'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'border-blue-600 bg-blue-50/40 text-blue-900 shadow-sm'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
                     } ${todayRecord ? 'opacity-70 cursor-not-allowed' : ''}`}
                   >
-                    <Home size={20} className={workMode === 'wfh' ? 'text-blue-600' : 'text-slate-400'} />
-                    <span className="text-xs mt-1.5 font-semibold">Work From Home</span>
-                    <span className="text-[10px] text-slate-400">Remote Shift</span>
+                    <div className="flex items-center justify-between">
+                      <Home size={20} className={workMode === 'wfh' ? 'text-blue-600' : 'text-slate-400'} />
+                      {workMode === 'wfh' && <Check size={16} className="text-blue-600" />}
+                    </div>
+                    <div className="mt-3">
+                      <div className="text-xs font-bold">Work From Home</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Remote Authorization</div>
+                    </div>
                   </button>
 
                   <button
                     type="button"
-                    disabled={!!todayRecord}
+                    disabled={Boolean(todayRecord)}
                     onClick={() => setWorkMode('on_duty')}
-                    className={`flex flex-col items-center justify-center p-3.5 rounded-xl border text-center transition-all ${
+                    className={`p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                       workMode === 'on_duty'
-                        ? 'bg-blue-50/80 border-blue-500 text-blue-700 font-bold shadow-sm'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'border-blue-600 bg-blue-50/40 text-blue-900 shadow-sm'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
                     } ${todayRecord ? 'opacity-70 cursor-not-allowed' : ''}`}
                   >
-                    <Car size={20} className={workMode === 'on_duty' ? 'text-blue-600' : 'text-slate-400'} />
-                    <span className="text-xs mt-1.5 font-semibold">On-Duty</span>
-                    <span className="text-[10px] text-slate-400">Client / Field</span>
+                    <div className="flex items-center justify-between">
+                      <Car size={20} className={workMode === 'on_duty' ? 'text-blue-600' : 'text-slate-400'} />
+                      {workMode === 'on_duty' && <Check size={16} className="text-blue-600" />}
+                    </div>
+                    <div className="mt-3">
+                      <div className="text-xs font-bold">On-Duty / Field</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Client Location Visit</div>
+                    </div>
                   </button>
                 </div>
               </div>
 
-              {/* Big Darwinbox Action Punch Clock */}
-              <div className="flex flex-col items-center justify-center py-6 px-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 my-4 text-center">
-                {todayRecord && !todayRecord.check_out_time ? (
-                  <>
-                    <div className="text-xs font-bold uppercase tracking-widest text-emerald-600 flex items-center gap-1.5 mb-1">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                      Elapsed Working Time
-                    </div>
-                    <div className="text-4xl sm:text-5xl font-black font-mono tracking-tight text-slate-900 my-2">
-                      {formatTimer(elapsedSeconds)}
-                    </div>
-                    <div className="text-xs text-slate-500 mb-6">
-                      Checked in at {todayRecord.check_in_local || todayRecord.check_in_time} ({todayRecord.work_mode?.toUpperCase()})
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={punching}
-                      onClick={handlePunchOut}
-                      className="w-full sm:w-72 py-4 px-6 rounded-2xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white font-extrabold text-base shadow-lg shadow-rose-600/30 transition-all transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      <Clock size={20} />
-                      <span>{punching ? 'Recording Punch Out...' : 'Punch Out Now'}</span>
-                    </button>
-                  </>
-                ) : todayRecord && todayRecord.check_out_time ? (
-                  <>
-                    <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-3">
-                      <CheckCircle2 size={32} />
-                    </div>
-                    <h3 className="text-lg font-black text-slate-900">Today's Shift Completed</h3>
-                    <p className="text-xs text-slate-500 max-w-sm mt-1">
-                      In: <span className="font-semibold text-slate-700">{todayRecord.check_in_local || todayRecord.check_in_time}</span> • Out:{' '}
-                      <span className="font-semibold text-slate-700">{todayRecord.check_out_local || todayRecord.check_out_time}</span>
-                    </p>
-                    <div className="mt-4 px-4 py-2 rounded-xl bg-purple-100 text-purple-800 text-sm font-extrabold font-mono">
-                      Total Duration: {Math.floor((todayRecord.total_work_minutes || 0) / 60)} hrs {(todayRecord.total_work_minutes || 0) % 60} mins
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">
-                      Shift: {office.shift_start} - {office.shift_end}
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={punching || (workMode === 'office' && !isInsideFence && distanceToOffice !== null)}
-                      onClick={handlePunchIn}
-                      className={`w-full sm:w-72 py-4 px-6 rounded-2xl text-white font-extrabold text-base shadow-lg transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
-                        workMode === 'office' && !isInsideFence && distanceToOffice !== null
-                          ? 'bg-slate-400 shadow-none'
-                          : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-600/30'
-                      }`}
-                    >
-                      <Clock size={20} />
-                      <span>{punching ? 'Verifying & Punching...' : 'Punch In Now'}</span>
-                    </button>
-
-                    {workMode === 'office' && distanceToOffice !== null && !isInsideFence && (
-                      <p className="text-xs text-rose-600 font-semibold mt-3">
-                        ⚠️ Cannot punch in: You are {distanceToOffice}m away (must be within {office.radius_meters}m). Switch to WFH mode if remote.
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {/* Notes Input */}
-              {!todayRecord?.check_out_time && (
-                <div className="mt-4">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Punch Remarks / Notes (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={punchNotes}
-                    onChange={(e) => setPunchNotes(e.target.value)}
-                    placeholder={
-                      workMode === 'wfh'
-                        ? 'e.g. Working remotely today on client sprint'
-                        : workMode === 'on_duty'
-                        ? 'e.g. Client visit at Bandra'
-                        : 'e.g. Morning check-in'
-                    }
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {/* Alerts */}
+              {/* Status Message Alerts */}
               {punchError && (
-                <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
-                  <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
-                  <span>{punchError}</span>
+                <div className="mt-4 p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-3">
+                  <AlertCircle size={18} className="text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="font-bold">Punch Error:</strong> {punchError}
+                  </div>
                 </div>
               )}
 
               {punchSuccess && (
-                <div className="mt-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-start gap-2">
-                  <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" />
-                  <span>{punchSuccess}</span>
+                <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-3">
+                  <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+                  <div>{punchSuccess}</div>
                 </div>
               )}
-            </div>
-          </div>
 
-          {/* Right Column: Visual Geofence Radar */}
-          <div className="lg:col-span-5 space-y-6">
-            <div className="bg-white rounded-2xl p-6 border border-slate-200/90 shadow-sm">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
-                    <Compass size={18} />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">GPS Geofence Radar</h3>
-                    <p className="text-[11px] text-slate-500">Live Haversine Proximity Check</p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={requestGps}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-                  title="Recalculate location"
-                >
-                  <RefreshCw size={15} className={gpsLoading ? 'animate-spin text-blue-600' : ''} />
-                </button>
+              {/* Action Notes Input */}
+              <div className="mt-4">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Punch Remarks / Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={punchNotes}
+                  onChange={(e) => setPunchNotes(e.target.value)}
+                  placeholder="e.g., Working on client onboarding, client site visit..."
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
               </div>
 
-              {/* Animated Radar Visualizer */}
-              <div className="my-6 flex flex-col items-center justify-center">
-                <div className="relative w-44 h-44 flex items-center justify-center">
-                  {/* Outer ripple rings */}
-                  <div
-                    className={`absolute inset-0 rounded-full border-2 animate-ping opacity-25 ${
-                      workMode === 'office'
-                        ? isInsideFence
-                          ? 'border-emerald-500 bg-emerald-50'
-                          : 'border-rose-500 bg-rose-50'
-                        : 'border-blue-500 bg-blue-50'
-                    }`}
-                  />
-                  <div
-                    className={`absolute inset-4 rounded-full border-2 ${
-                      workMode === 'office'
-                        ? isInsideFence
-                          ? 'border-emerald-400/50'
-                          : 'border-rose-400/50'
-                        : 'border-blue-400/50'
-                    }`}
-                  />
-                  <div
-                    className={`absolute inset-8 rounded-full border ${
-                      workMode === 'office'
-                        ? isInsideFence
-                          ? 'border-emerald-300'
-                          : 'border-rose-300'
-                        : 'border-blue-300'
-                    }`}
-                  />
-
-                  {/* Center Dot with Icon */}
-                  <div
-                    className={`w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg z-10 ${
-                      workMode === 'office'
-                        ? isInsideFence
-                          ? 'bg-emerald-600 shadow-emerald-500/30'
-                          : 'bg-rose-600 shadow-rose-500/30'
-                        : 'bg-blue-600 shadow-blue-500/30'
+              {/* Major Action CTA: Punch In vs Punch Out */}
+              <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center gap-4">
+                {!todayRecord ? (
+                  <button
+                    onClick={handlePunchIn}
+                    disabled={punching || (workMode === 'office' && !isInsideFence)}
+                    className={`w-full sm:w-auto px-8 py-3.5 rounded-xl text-sm font-bold text-white transition-all flex items-center justify-center gap-2 shadow-lg ${
+                      workMode === 'office' && !isInsideFence
+                        ? 'bg-slate-400 cursor-not-allowed shadow-none'
+                        : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/25 active:scale-95'
                     }`}
                   >
-                    <Navigation size={22} className="transform -rotate-45" />
+                    <CheckCircle2 size={18} />
+                    <span>{punching ? 'Validating Geofence...' : 'Punch In Now (Web / Mobile)'}</span>
+                  </button>
+                ) : !todayRecord.check_out_time ? (
+                  <button
+                    onClick={handlePunchOut}
+                    disabled={punching}
+                    className="w-full sm:w-auto px-8 py-3.5 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-500/25 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Clock size={18} />
+                    <span>{punching ? 'Recording Punch Out...' : 'Punch Out (End Daily Shift)'}</span>
+                  </button>
+                ) : (
+                  <div className="p-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-2 w-full">
+                    <CheckCircle2 size={16} className="text-emerald-600" />
+                    <span>
+                      Daily Shift Completed. Punched in at {todayRecord.check_in_local || todayRecord.check_in_time} and punched out at {todayRecord.check_out_local || todayRecord.check_out_time}.
+                    </span>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={requestGps}
+                  disabled={gpsLoading}
+                  className="w-full sm:w-auto px-4 py-3 rounded-xl border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw size={14} className={gpsLoading ? 'animate-spin' : ''} />
+                  <span>Refresh GPS Radar</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Today Punch Summary Details */}
+            {todayRecord && (
+              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
+                <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+                  <ShieldCheck size={16} className="text-blue-600" />
+                  <span>Today's Verified Punch Audit</span>
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="text-slate-400 block text-[10px] font-bold uppercase">Punch In</span>
+                    <span className="text-slate-800 font-mono font-bold text-sm">
+                      {todayRecord.check_in_time ? new Date(todayRecord.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </span>
+                    <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      todayRecord.final_status === 'LATE' ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {todayRecord.final_status === 'LATE' ? 'LATE' : 'ON TIME'}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="text-slate-400 block text-[10px] font-bold uppercase">Punch Out</span>
+                    <span className="text-slate-800 font-mono font-bold text-sm">
+                      {todayRecord.check_out_time ? new Date(todayRecord.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'In Progress'}
+                    </span>
+                    {todayRecord.is_early_exit ? (
+                      <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800">
+                        LEFT EARLY
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 block mt-1">
+                        {todayRecord.check_out_time ? 'Completed' : 'Shift Active'}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="text-slate-400 block text-[10px] font-bold uppercase">Work Mode</span>
+                    <span className="text-slate-800 font-bold uppercase text-sm">{todayRecord.work_mode}</span>
+                    <span className="text-[10px] text-slate-400 block mt-1">
+                      {todayRecord.check_in_distance_meters !== null && todayRecord.check_in_distance_meters !== undefined
+                        ? `${Math.round(todayRecord.check_in_distance_meters)}m from HQ`
+                        : 'Remote GPS'}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="text-slate-400 block text-[10px] font-bold uppercase">Status Verdict</span>
+                    <span className="text-slate-800 font-bold text-sm">{todayRecord.final_status}</span>
+                    <span className="text-[10px] text-blue-600 block mt-1">Google Sheets Synced</span>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
 
-                {/* Status Indicator */}
-                <div className="mt-4 text-center">
-                  {gpsLoading ? (
-                    <div className="text-xs font-semibold text-slate-500 animate-pulse">
-                      Acquiring device GPS satellites...
+          {/* Column 3: Geofence Radar & Office Perimeter Card */}
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6 relative overflow-hidden">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <MapPin size={16} className="text-blue-600" />
+                  <span>GPS Geofence Radar</span>
+                </h3>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                  isInsideFence ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                }`}>
+                  {isInsideFence ? 'Within Perimeter' : 'Outside Geofence'}
+                </span>
+              </div>
+
+              {/* Pulsing Visual Radar Display */}
+              <div className="my-6 flex flex-col items-center justify-center">
+                <div className="relative w-44 h-44 rounded-full border-2 border-dashed border-blue-300 flex items-center justify-center bg-blue-50/30">
+                  <div className={`absolute inset-4 rounded-full border transition-all ${
+                    isInsideFence ? 'border-emerald-400 bg-emerald-50/40 animate-pulse' : 'border-red-300 bg-red-50/30'
+                  }`} />
+                  <div className="relative z-10 text-center">
+                    <div className={`w-14 h-14 rounded-full mx-auto flex items-center justify-center shadow-md ${
+                      isInsideFence ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+                    }`}>
+                      <Navigation size={24} className={isInsideFence ? '' : 'animate-bounce'} />
                     </div>
-                  ) : distanceToOffice !== null ? (
-                    <div>
-                      <div
-                        className={`text-sm font-black flex items-center justify-center gap-1.5 ${
-                          workMode === 'office'
-                            ? isInsideFence
-                              ? 'text-emerald-700'
-                              : 'text-rose-700'
-                            : 'text-blue-700'
-                        }`}
-                      >
-                        {isInsideFence ? (
-                          <CheckCircle2 size={16} />
-                        ) : (
-                          <AlertTriangle size={16} />
-                        )}
-                        <span>
-                          {isInsideFence
-                            ? `Inside Office Geofence (${distanceToOffice}m away)`
-                            : `Outside Geofence (${distanceToOffice}m away)`}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Allowed perimeter: within {office.radius_meters}m of {office.name}
-                      </p>
+                    <div className="mt-2 text-xs font-black text-slate-900">
+                      {distanceToOffice !== null ? `${distanceToOffice} meters` : 'Acquiring GPS...'}
                     </div>
-                  ) : (
-                    <div className="text-xs text-slate-400">
-                      GPS coordinates unavailable. Tap "Refresh Location" above.
-                    </div>
-                  )}
+                    <div className="text-[10px] text-slate-500 font-medium">Distance to {office.name}</div>
+                  </div>
                 </div>
               </div>
 
-              {/* Coordinates Info Box */}
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2 text-xs">
-                <div className="flex items-center justify-between text-slate-600">
-                  <span className="text-slate-400 font-medium">Your Position:</span>
-                  <span className="font-mono font-bold text-slate-800">
-                    {gpsLocation ? `${gpsLocation.lat.toFixed(6)}, ${gpsLocation.lng.toFixed(6)}` : 'Detecting...'}
-                  </span>
+              {/* Radar Metrics Table */}
+              <div className="space-y-2 text-xs text-slate-600 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <span>Authorized Perimeter:</span>
+                  <span className="font-bold text-slate-900">{office.radius_meters} meters</span>
                 </div>
-                <div className="flex items-center justify-between text-slate-600">
-                  <span className="text-slate-400 font-medium">Office Target:</span>
-                  <span className="font-mono text-slate-700">
-                    {office.latitude.toFixed(6)}, {office.longitude.toFixed(6)}
-                  </span>
+                <div className="flex items-center justify-between">
+                  <span>GPS Fix Accuracy:</span>
+                  <span className="font-bold text-slate-900">{gpsLocation ? `±${gpsLocation.accuracy}m` : '—'}</span>
                 </div>
-                <div className="flex items-center justify-between text-slate-600">
-                  <span className="text-slate-400 font-medium">GPS Accuracy:</span>
-                  <span className="font-mono text-slate-700">
-                    {gpsLocation ? `±${gpsLocation.accuracy} meters` : 'N/A'}
-                  </span>
+                <div className="flex items-center justify-between">
+                  <span>Office Latitude:</span>
+                  <span className="font-mono text-[11px] text-slate-700">{office.latitude}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Office Longitude:</span>
+                  <span className="font-mono text-[11px] text-slate-700">{office.longitude}</span>
                 </div>
               </div>
 
               {gpsError && (
-                <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-start gap-1.5">
-                  <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                  <span>{gpsError}</span>
+                <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">
+                  {gpsError}
                 </div>
               )}
             </div>
 
-            {/* Google Sheets Sync Notification Card */}
-            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-5 border border-emerald-200/80">
-              <div className="flex items-center gap-2.5 mb-2">
-                <div className="p-2 rounded-lg bg-emerald-600 text-white">
-                  <FileSpreadsheet size={16} />
-                </div>
-                <h4 className="text-xs font-bold text-emerald-900 uppercase tracking-wider">
-                  Real-Time Google Sheet Sync
-                </h4>
-              </div>
-              <p className="text-xs text-emerald-800 leading-relaxed">
-                Every punch-in, punch-out, and regularization instantly streams to your company's Google Sheet under the{' '}
-                <strong className="font-bold">"Attendance Log"</strong> tab with full GPS audit stamps.
+            {/* Mobile PWA Guidance Card */}
+            <div className="bg-gradient-to-br from-blue-900 to-indigo-900 rounded-2xl p-6 text-white shadow-md relative overflow-hidden">
+              <Smartphone size={24} className="text-blue-300 mb-2" />
+              <h4 className="text-sm font-bold text-white">Darwinbox Mobile Experience</h4>
+              <p className="text-xs text-blue-100 mt-1">
+                Install Assurance HR directly onto your phone's Home Screen for 1-tap mobile punches with full GPS support.
               </p>
+              <div className="mt-4 pt-3 border-t border-blue-700/60 flex items-center justify-between text-[11px] text-blue-200">
+                <span>iOS: Safari Share &gt; Add to Home Screen</span>
+                <span>Android: Chrome Menu &gt; Install</span>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* =========================================================================
-          TAB 2: DARWINBOX MONTHLY ATTENDANCE CALENDAR & SUMMARY STATS
+      {/* ==========================================================================
+          TAB 2: DARWINBOX 7-COLUMN VISUAL CALENDAR & SUMMARY STATS
       ========================================================================== */}
       {activeTab === 'calendar' && (
         <div className="space-y-6">
-          {/* Month Selector Bar */}
+          {/* Month Selector Bar & View Toggle */}
           <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => changeMonth(-1)}
+                className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors"
+                title="Previous Month"
+              >
+                <ChevronLeft size={16} />
+              </button>
+
               <input
                 type="month"
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
-              <span className="text-xs text-slate-500 font-medium">
-                Viewing Monthly Breakdown for {user?.name}
-              </span>
+
+              <button
+                onClick={() => changeMonth(1)}
+                className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors"
+                title="Next Month"
+              >
+                <ChevronRight size={16} />
+              </button>
+
+              <button
+                onClick={() => {
+                  const d = new Date();
+                  setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+              >
+                Today
+              </button>
             </div>
 
             <div className="flex items-center gap-2">
+              {/* View Mode Toggle: Grid vs Table */}
+              <div className="inline-flex rounded-xl border border-slate-200 p-0.5 bg-slate-50">
+                <button
+                  onClick={() => setCalendarViewMode('grid')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    calendarViewMode === 'grid'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Grid size={14} />
+                  <span>Visual Calendar</span>
+                </button>
+                <button
+                  onClick={() => setCalendarViewMode('table')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    calendarViewMode === 'table'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <List size={14} />
+                  <span>List Logs</span>
+                </button>
+              </div>
+
               <a
                 href={`/api/admin/attendance/export?month=${selectedMonth}`}
                 download
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
               >
                 <Download size={14} />
-                <span>Download Report</span>
+                <span>Export CSV</span>
               </a>
+
               <button
                 onClick={() => setShowRegModal(true)}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-colors shadow-md shadow-blue-500/20"
               >
                 <Clock size={14} />
-                <span>Apply Regularization</span>
+                <span>Regularize</span>
               </button>
             </div>
           </div>
 
           {/* Darwinbox Stats Metric Cards */}
           {monthStats && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Days Punched</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Punched</div>
                 <div className="text-2xl font-black text-slate-900 mt-1">{monthStats.total_punched_days}</div>
-                <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">Recorded days</div>
+                <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Recorded Days</div>
               </div>
 
               <div className="bg-white p-4 rounded-xl border border-emerald-200/80 bg-emerald-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Present (On-Time)</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Present (Full Day)</div>
                 <div className="text-2xl font-black text-emerald-700 mt-1">{monthStats.present_count}</div>
-                <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">Full days</div>
+                <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">On-Time &gt; 4h</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-red-200/80 bg-red-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-red-700">Late Marks</div>
+                <div className="text-2xl font-black text-red-700 mt-1">{monthStats.late_count}</div>
+                <div className="text-[10px] text-red-600 font-semibold mt-0.5">&gt; 15m Grace</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-red-200/80 bg-red-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-red-700">Early Exits</div>
+                <div className="text-2xl font-black text-red-700 mt-1">{monthStats.early_exit_count || 0}</div>
+                <div className="text-[10px] text-red-600 font-semibold mt-0.5">Before Shift End</div>
               </div>
 
               <div className="bg-white p-4 rounded-xl border border-amber-200/80 bg-amber-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Late Marks</div>
-                <div className="text-2xl font-black text-amber-700 mt-1">{monthStats.late_count}</div>
-                <div className="text-[10px] text-amber-600 font-semibold mt-0.5">&gt; 15 min grace</div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-purple-200/80 bg-purple-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700">Half Days</div>
-                <div className="text-2xl font-black text-purple-700 mt-1">{monthStats.half_day_count}</div>
-                <div className="text-[10px] text-purple-600 font-semibold mt-0.5">&lt; 4 hours</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Half Days</div>
+                <div className="text-2xl font-black text-amber-700 mt-1">{monthStats.half_day_count}</div>
+                <div className="text-[10px] text-amber-600 font-semibold mt-0.5">&lt; 4 Hours</div>
               </div>
 
               <div className="bg-white p-4 rounded-xl border border-blue-200/80 bg-blue-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-blue-700">WFH / OD</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-blue-700">WFH / On-Duty</div>
                 <div className="text-2xl font-black text-blue-700 mt-1">
                   {monthStats.wfh_count + monthStats.on_duty_count}
                 </div>
-                <div className="text-[10px] text-blue-600 font-semibold mt-0.5">Remote / Field</div>
+                <div className="text-[10px] text-blue-600 font-semibold mt-0.5">Remote Logged</div>
               </div>
 
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Hours</div>
-                <div className="text-2xl font-black text-slate-900 mt-1">{monthStats.total_work_hours}h</div>
-                <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Avg: {monthStats.avg_daily_hours}h/day</div>
+              <div className="bg-white p-4 rounded-xl border border-purple-200/80 bg-purple-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700">Total Work Hours</div>
+                <div className="text-2xl font-black text-purple-700 mt-1">{monthStats.total_work_hours}h</div>
+                <div className="text-[10px] text-purple-600 font-semibold mt-0.5">Avg: {monthStats.avg_daily_hours}h/day</div>
               </div>
             </div>
           )}
 
-          {/* Monthly Attendance Table & Detailed List */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900">Daily Punch Logs ({monthRecords.length} Entries)</h3>
-              <span className="text-xs text-slate-500">Tap any row to view location coordinates & audit details</span>
+          {/* VISUAL 7-COLUMN CALENDAR GRID */}
+          {calendarViewMode === 'grid' && (
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    {new Date(calYear, calMonth, 1).toLocaleString('default', { month: 'long', year: 'numeric' })}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Color Codes: <span className="text-emerald-700 font-bold">Green = Present</span>, <span className="text-red-600 font-bold">Red = Late / Early Exit</span>, <span className="text-amber-600 font-bold">Orange = Half Day</span>, <span className="text-purple-600 font-bold">Purple = Holiday</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Day Headers (Sun to Sat) */}
+              <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2 text-center text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
+                <div className="py-2 text-rose-500">Sun</div>
+                <div className="py-2">Mon</div>
+                <div className="py-2">Tue</div>
+                <div className="py-2">Wed</div>
+                <div className="py-2">Thu</div>
+                <div className="py-2">Fri</div>
+                <div className="py-2 text-rose-500">Sat</div>
+              </div>
+
+              {/* Day Boxes Grid */}
+              <div className="grid grid-cols-7 gap-1 sm:gap-2">
+                {/* Empty padding days for previous month */}
+                {Array.from({ length: firstDayOfWeek }).map((_, idx) => (
+                  <div key={`pad-${idx}`} className="min-h-[90px] sm:min-h-[115px] p-2 rounded-xl bg-slate-50/50 border border-transparent opacity-30" />
+                ))}
+
+                {/* Actual days of the month */}
+                {Array.from({ length: daysInMonth }).map((_, idx) => {
+                  const dayNum = idx + 1;
+                  const dayDateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                  const dayRecord = monthRecords.find((r) => r.attendance_date === dayDateStr);
+                  const holiday = holidays.find((h) => h.holiday_date === dayDateStr);
+
+                  const dayOfWeek = new Date(calYear, calMonth, dayNum).getDay();
+                  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                  const todayStr = new Date().toISOString().split('T')[0];
+                  const isToday = dayDateStr === todayStr;
+                  const isPast = dayDateStr < todayStr;
+
+                  const isLate = dayRecord?.is_late || dayRecord?.final_status === 'LATE';
+                  const isEarlyExit = dayRecord?.is_early_exit === 1;
+
+                  return (
+                    <div
+                      key={dayDateStr}
+                      onClick={() => {
+                        setSelectedDayRecord(dayRecord || null);
+                        setSelectedDayHoliday(holiday || null);
+                        setSelectedDayDate(dayDateStr);
+                      }}
+                      className={`min-h-[95px] sm:min-h-[120px] p-2 rounded-xl border transition-all cursor-pointer flex flex-col justify-between text-left ${
+                        isToday
+                          ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/10'
+                          : holiday
+                          ? 'border-purple-200 bg-purple-50/30'
+                          : isLate || isEarlyExit
+                          ? 'border-red-200 bg-red-50/20'
+                          : dayRecord
+                          ? 'border-emerald-200 bg-emerald-50/20'
+                          : isWeekend
+                          ? 'border-slate-100 bg-slate-50/60'
+                          : 'border-slate-200 hover:border-slate-300 bg-white'
+                      }`}
+                    >
+                      {/* Day Number Header */}
+                      <div className="flex items-center justify-between">
+                        <span className={`text-xs font-black ${
+                          isToday
+                            ? 'w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center'
+                            : isWeekend
+                            ? 'text-rose-500'
+                            : 'text-slate-800'
+                        }`}>
+                          {dayNum}
+                        </span>
+
+                        {holiday && (
+                          <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                            <Sparkles size={10} />
+                            <span className="hidden sm:inline">Holiday</span>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Content Badges */}
+                      <div className="mt-1 space-y-1">
+                        {holiday && (
+                          <div className="text-[10px] font-extrabold text-purple-800 bg-purple-100/80 px-1.5 py-1 rounded-lg truncate">
+                            🎉 {holiday.name}
+                          </div>
+                        )}
+
+                        {dayRecord ? (
+                          <>
+                            {/* Times */}
+                            <div className="text-[10px] font-mono text-slate-600 truncate font-semibold">
+                              {dayRecord.check_in_time ? new Date(dayRecord.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                              {dayRecord.check_out_time ? ' - ' + new Date(dayRecord.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                            </div>
+
+                            {/* Red Marker for Late Arrival */}
+                            {isLate && (
+                              <div className="text-[9px] font-black text-white bg-red-600 px-1.5 py-0.5 rounded uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                                <span>🔴 LATE</span>
+                              </div>
+                            )}
+
+                            {/* Red Marker for Early Exit */}
+                            {isEarlyExit && (
+                              <div className="text-[9px] font-black text-white bg-red-600 px-1.5 py-0.5 rounded uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                                <span>🔴 LEFT EARLY</span>
+                              </div>
+                            )}
+
+                            {/* Status badge if on time and not early */}
+                            {!isLate && !isEarlyExit && (
+                              <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                                dayRecord.final_status === 'HALF_DAY'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : dayRecord.work_mode === 'wfh'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {dayRecord.final_status || 'PRESENT'}
+                              </div>
+                            )}
+                          </>
+                        ) : !holiday && isWeekend ? (
+                          <div className="text-[10px] font-semibold text-slate-400">Weekly Off</div>
+                        ) : !holiday && isPast ? (
+                          <div className="text-[10px] font-semibold text-slate-400">Absent</div>
+                        ) : isToday ? (
+                          <div className="text-[10px] font-bold text-blue-600">Active Day</div>
+                        ) : null}
+                      </div>
+
+                      {/* Footer Info (Total Hours) */}
+                      <div className="text-[9px] font-semibold text-slate-400 mt-1">
+                        {dayRecord?.total_work_minutes
+                          ? `${Math.floor(dayRecord.total_work_minutes / 60)}h ${dayRecord.total_work_minutes % 60}m`
+                          : ''}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* LIST / TABLE VIEW */}
+          {calendarViewMode === 'table' && (
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900">Daily Punch Logs ({monthRecords.length} Entries)</h3>
+                <span className="text-xs text-slate-500">Tap any row to view location coordinates & audit details</span>
+              </div>
+
+              {monthRecords.length === 0 ? (
+                <div className="p-12 text-center text-slate-400">
+                  <CalendarIcon size={36} className="mx-auto mb-2 opacity-40" />
+                  <p className="text-sm font-semibold">No attendance records found for {selectedMonth}</p>
+                  <p className="text-xs mt-1">Punches made on mobile or desktop will populate here automatically.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50/80 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
+                        <th className="py-3 px-4">Date</th>
+                        <th className="py-3 px-4">Work Mode</th>
+                        <th className="py-3 px-4">Check-In</th>
+                        <th className="py-3 px-4">Check-Out</th>
+                        <th className="py-3 px-4">Duration</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Late Arrival</th>
+                        <th className="py-3 px-4">Early Exit</th>
+                        <th className="py-3 px-4">Distance</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {monthRecords.map((rec) => {
+                        const totalHours = rec.total_work_minutes ? Math.floor(rec.total_work_minutes / 60) : 0;
+                        const totalMins = rec.total_work_minutes ? rec.total_work_minutes % 60 : 0;
+                        const status = rec.final_status?.toUpperCase() || 'PRESENT';
+                        const isLate = rec.is_late || status === 'LATE';
+
+                        return (
+                          <tr
+                            key={rec.id}
+                            onClick={() => {
+                              setSelectedDayRecord(rec);
+                              setSelectedDayDate(rec.attendance_date);
+                            }}
+                            className="hover:bg-slate-50/80 cursor-pointer transition-colors"
+                          >
+                            <td className="py-3 px-4 font-bold text-slate-800">
+                              {rec.attendance_date}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="px-2 py-0.5 rounded font-semibold text-[11px] uppercase bg-slate-100 text-slate-700">
+                                {rec.work_mode || 'OFFICE'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono font-medium text-slate-700">
+                              {rec.check_in_time ? new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-medium text-slate-700">
+                              {rec.check_out_time ? new Date(rec.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active'}
+                            </td>
+                            <td className="py-3 px-4 font-semibold text-slate-800">
+                              {rec.total_work_minutes ? `${totalHours}h ${totalMins}m` : 'In Progress'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                  status === 'PRESENT'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : status === 'LATE'
+                                    ? 'bg-red-100 text-red-800'
+                                    : status === 'HALF_DAY'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              {isLate ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-red-600 text-white">
+                                  RED: LATE
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">On Time</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              {rec.is_early_exit ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-red-600 text-white">
+                                  RED: EARLY
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">Normal</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-slate-600">
+                              {rec.check_in_distance_meters !== null && rec.check_in_distance_meters !== undefined
+                                ? `${Math.round(rec.check_in_distance_meters)}m`
+                                : '—'}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedDayRecord(rec);
+                                  setSelectedDayDate(rec.attendance_date);
+                                }}
+                                className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px]"
+                              >
+                                View
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==========================================================================
+          TAB 3: ADMIN LIVE ROSTER DASHBOARD
+      ========================================================================== */}
+      {activeTab === 'admin-roster' && canManageAttendance && (
+        <div className="space-y-6">
+          {/* Top Filter Bar */}
+          <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <input
+                type="date"
+                value={adminDate}
+                onChange={(e) => setAdminDate(e.target.value)}
+                className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search staff by name or email..."
+                  value={adminSearch}
+                  onChange={(e) => {
+                    setAdminSearch(e.target.value);
+                    loadAdminRoster(adminDate, e.target.value);
+                  }}
+                  className="pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none w-56 sm:w-64"
+                />
+              </div>
             </div>
 
-            {monthRecords.length === 0 ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setAssignForm({
+                    user_id: '',
+                    attendance_date: adminDate,
+                    check_in_time: '10:00:00',
+                    check_out_time: '19:00:00',
+                    work_mode: 'office',
+                    notes: 'HR Assigned Punch',
+                  });
+                  setShowAssignModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20"
+              >
+                <Plus size={14} />
+                <span>Assign Punch</span>
+              </button>
+
+              <a
+                href={`/api/admin/attendance/export?date=${adminDate}`}
+                download
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
+              >
+                <Download size={14} />
+                <span>Export Daily CSV</span>
+              </a>
+            </div>
+          </div>
+
+          {/* Metric Summary Cards */}
+          {adminSummary && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Staff</div>
+                <div className="text-2xl font-black text-slate-900 mt-1">{adminSummary.total_staff}</div>
+                <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Assigned Agency Users</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-emerald-200/80 bg-emerald-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Present (In-Office)</div>
+                <div className="text-2xl font-black text-emerald-700 mt-1">{adminSummary.present_office}</div>
+                <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">Inside Geofence</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-blue-200/80 bg-blue-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Work From Home</div>
+                <div className="text-2xl font-black text-blue-700 mt-1">{adminSummary.wfh}</div>
+                <div className="text-[10px] text-blue-600 font-semibold mt-0.5">Remote Authorization</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-indigo-200/80 bg-indigo-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">On-Duty / Field</div>
+                <div className="text-2xl font-black text-indigo-700 mt-1">{adminSummary.on_duty}</div>
+                <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">Client Location</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-amber-200/80 bg-amber-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Late Arrivals</div>
+                <div className="text-2xl font-black text-amber-700 mt-1">{adminSummary.late}</div>
+                <div className="text-[10px] text-amber-600 font-semibold mt-0.5">Past 10:15 AM</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-red-200/80 bg-red-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-red-700">Not Punched</div>
+                <div className="text-2xl font-black text-red-700 mt-1">{adminSummary.not_punched}</div>
+                <div className="text-[10px] text-red-600 font-semibold mt-0.5">Absent / Inactive</div>
+              </div>
+            </div>
+          )}
+
+          {/* Roster Table */}
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">
+                Staff Presence Roster for {adminDate} ({adminRoster.length} Members)
+              </h3>
+              <span className="text-xs text-slate-500">Live check-in timestamps, GPS distances, and status flags</span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50/80 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
+                    <th className="py-3 px-4">Employee</th>
+                    <th className="py-3 px-4">Role</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Mode</th>
+                    <th className="py-3 px-4">Check-In</th>
+                    <th className="py-3 px-4">Check-Out</th>
+                    <th className="py-3 px-4">Distance</th>
+                    <th className="py-3 px-4">Duration</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {adminRoster.map((s) => {
+                    const totalHours = s.total_work_minutes ? Math.floor(s.total_work_minutes / 60) : 0;
+                    const totalMins = s.total_work_minutes ? s.total_work_minutes % 60 : 0;
+                    const isLate = s.status === 'LATE' || s.check_in_status === 'late';
+                    const isEarly = s.is_early_exit === 1;
+
+                    return (
+                      <tr key={s.user_id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-slate-900">{s.user_name}</div>
+                          <div className="text-[11px] text-slate-400">{s.user_email}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 capitalize">
+                            {s.user_role?.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                              s.status === 'PRESENT'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : s.status === 'LATE'
+                                ? 'bg-red-100 text-red-800'
+                                : s.status === 'HALF_DAY'
+                                ? 'bg-amber-100 text-amber-800'
+                                : s.status === 'NOT_PUNCHED'
+                                ? 'bg-slate-100 text-slate-600'
+                                : 'bg-blue-100 text-blue-800'
+                            }`}
+                          >
+                            {s.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700">
+                            {s.work_mode || 'OFFICE'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 font-mono font-medium text-slate-700">
+                          {s.check_in_time ? new Date(s.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                          {isLate && <span className="ml-1 text-[9px] font-bold text-red-600">(LATE)</span>}
+                        </td>
+                        <td className="py-3 px-4 font-mono font-medium text-slate-700">
+                          {s.check_out_time ? new Date(s.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : s.attendance_id ? 'Active' : '—'}
+                          {isEarly && <span className="ml-1 text-[9px] font-bold text-red-600">(EARLY)</span>}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-slate-600">
+                          {s.check_in_distance_meters !== null && s.check_in_distance_meters !== undefined
+                            ? `${Math.round(s.check_in_distance_meters)}m`
+                            : '—'}
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-slate-800">
+                          {s.total_work_minutes ? `${totalHours}h ${totalMins}m` : s.attendance_id ? 'In Progress' : '—'}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => {
+                              setAssignForm({
+                                user_id: s.user_id,
+                                attendance_date: adminDate,
+                                check_in_time: s.check_in_time ? new Date(s.check_in_time).toTimeString().split(' ')[0] : '10:00:00',
+                                check_out_time: s.check_out_time ? new Date(s.check_out_time).toTimeString().split(' ')[0] : '19:00:00',
+                                work_mode: s.work_mode || 'office',
+                                notes: s.notes || 'HR Assigned Punch',
+                              });
+                              setShowAssignModal(true);
+                            }}
+                            className="px-2.5 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] transition-colors"
+                          >
+                            Assign Punch
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================================================
+          TAB 4: ADMIN ATTENDANCE REGULARIZATIONS
+      ========================================================================== */}
+      {activeTab === 'admin-regularize' && canManageAttendance && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
+            <h3 className="text-base font-bold text-slate-900 mb-1">Attendance Regularization Requests</h3>
+            <p className="text-xs text-slate-500 mb-6">
+              Review and approve employee missed punch regularization requests. Approving auto-updates their attendance record.
+            </p>
+
+            {adminRegs.length === 0 ? (
               <div className="p-12 text-center text-slate-400">
-                <CalendarIcon size={36} className="mx-auto mb-2 opacity-40" />
-                <p className="text-sm font-semibold">No attendance records found for {selectedMonth}</p>
-                <p className="text-xs mt-1">Punches made on mobile or desktop will populate here automatically.</p>
+                <CheckCircle2 size={36} className="mx-auto mb-2 text-emerald-500 opacity-60" />
+                <p className="text-sm font-semibold text-slate-700">No pending regularization requests</p>
+                <p className="text-xs mt-1 text-slate-400">Employee submissions will appear here for review.</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="space-y-4">
+                {adminRegs.map((reg) => (
+                  <div
+                    key={reg.id}
+                    className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-900 text-sm">{reg.user_name}</span>
+                        <span className="text-xs text-slate-400">({reg.user_email})</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                            reg.status === 'PENDING'
+                              ? 'bg-amber-100 text-amber-800'
+                              : reg.status === 'APPROVED'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}
+                        >
+                          {reg.status}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2 text-xs text-slate-600">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Date</span>
+                          <span className="font-semibold text-slate-800">{reg.attendance_date}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Requested Times</span>
+                          <span className="font-semibold text-slate-800">{reg.requested_check_in} - {reg.requested_check_out}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Work Mode</span>
+                          <span className="font-semibold text-slate-800 uppercase">{reg.work_mode}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Submitted</span>
+                          <span className="font-semibold text-slate-800">{new Date(reg.created_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                        <span className="font-bold text-slate-700">Reason: </span>
+                        <span className="text-slate-600">{reg.reason}</span>
+                      </div>
+                    </div>
+
+                    {reg.status === 'PENDING' && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => handleReviewReg(reg.id, 'approve')}
+                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-500/20"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => handleReviewReg(reg.id, 'reject')}
+                          className="px-4 py-2 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 font-bold text-xs"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================================================
+          TAB 5: COMPANY HOLIDAYS MANAGEMENT
+      ========================================================================== */}
+      {activeTab === 'admin-holidays' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Add Holiday Form */}
+          {canManageAttendance && (
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
+              <h3 className="text-base font-bold text-slate-900 mb-1 flex items-center gap-2">
+                <Sparkles size={18} className="text-purple-600" />
+                <span>Add Company Holiday</span>
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Holidays display in festive purple on the visual calendar and exempt staff from absence marking.
+              </p>
+
+              {holidaySuccess && (
+                <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
+                  {holidaySuccess}
+                </div>
+              )}
+
+              {holidayError && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">
+                  {holidayError}
+                </div>
+              )}
+
+              <form onSubmit={handleAddHoliday} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Holiday Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Diwali, Independence Day, Christmas"
+                    value={newHoliday.name}
+                    onChange={(e) => setNewHoliday({ ...newHoliday, name: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Holiday Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={newHoliday.holiday_date}
+                    onChange={(e) => setNewHoliday({ ...newHoliday, holiday_date: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Description / Notes
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="e.g. Festival of Lights - Office Closed"
+                    value={newHoliday.description}
+                    onChange={(e) => setNewHoliday({ ...newHoliday, description: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingHoliday}
+                  className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md shadow-purple-500/20 transition-all flex items-center justify-center gap-2"
+                >
+                  <Plus size={16} />
+                  <span>{savingHoliday ? 'Saving Holiday...' : 'Save Company Holiday'}</span>
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Holidays List */}
+          <div className={`space-y-4 ${canManageAttendance ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Official Company Holidays ({holidays.length})
+                  </h3>
+                  <p className="text-xs text-slate-500">Official festive and national calendar holidays</p>
+                </div>
+              </div>
+
+              {holidays.length === 0 ? (
+                <div className="p-12 text-center text-slate-400">
+                  <Sparkles size={36} className="mx-auto mb-2 text-purple-400 opacity-50" />
+                  <p className="text-sm font-semibold text-slate-700">No company holidays registered</p>
+                  <p className="text-xs mt-1 text-slate-400">Add holidays using the form on the left.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 mt-2">
+                  {holidays.map((h) => (
+                    <div key={h.id} className="py-3.5 flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 font-black text-sm flex items-center justify-center shrink-0">
+                          {new Date(h.holiday_date).getDate()}
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                            <span>{h.name}</span>
+                            <span className="text-[11px] font-semibold text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full">
+                              {new Date(h.holiday_date).toLocaleString('default', { month: 'short', weekday: 'short' })}
+                            </span>
+                          </div>
+                          {h.description && (
+                            <div className="text-xs text-slate-500 mt-0.5">{h.description}</div>
+                          )}
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">{h.holiday_date}</div>
+                        </div>
+                      </div>
+
+                      {canManageAttendance && (
+                        <button
+                          onClick={() => handleDeleteHoliday(h.id)}
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          title="Delete Holiday"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================================================
+          TAB 6: ACCESS DELEGATION (Super Admin Only)
+      ========================================================================== */}
+      {activeTab === 'admin-permissions' && isSuperAdmin && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
+            <div className="flex items-start justify-between pb-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Lock size={18} className="text-amber-600" />
+                  <span>Attendance Management Access Delegation</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+                  Grant trusted team members full attendance admin rights. Users with access can view the live roster, 
+                  review regularizations, assign manual punches, add company holidays, and configure office geofences.
+                </p>
+              </div>
+            </div>
+
+            {loadingStaff ? (
+              <div className="p-12 text-center text-slate-400 text-xs">Loading agency staff...</div>
+            ) : (
+              <div className="overflow-x-auto mt-4">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
-                    <tr className="bg-slate-50/80 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
-                      <th className="py-3 px-4">Date</th>
-                      <th className="py-3 px-4">Work Mode</th>
-                      <th className="py-3 px-4">Check-In</th>
-                      <th className="py-3 px-4">Check-Out</th>
-                      <th className="py-3 px-4">Duration</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Distance</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
+                    <tr className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                      <th className="py-3 px-4">Staff Member</th>
+                      <th className="py-3 px-4">Email</th>
+                      <th className="py-3 px-4">Role</th>
+                      <th className="py-3 px-4">Attendance Admin Status</th>
+                      <th className="py-3 px-4 text-right">Access Toggle</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {monthRecords.map((rec) => {
-                      const totalHours = rec.total_work_minutes ? Math.floor(rec.total_work_minutes / 60) : 0;
-                      const totalMins = rec.total_work_minutes ? rec.total_work_minutes % 60 : 0;
-                      const status = rec.final_status?.toUpperCase() || 'PRESENT';
+                    {staffList.map((s) => {
+                      const isOwner = s.role === 'super_admin' || s.role === 'support_manager';
+                      const hasAccess = isOwner || Boolean(s.can_manage_attendance);
 
                       return (
-                        <tr
-                          key={rec.id}
-                          onClick={() => setSelectedDayRecord(rec)}
-                          className="hover:bg-slate-50/80 cursor-pointer transition-colors"
-                        >
-                          <td className="py-3 px-4 font-bold text-slate-800">
-                            {rec.attendance_date}
+                        <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center uppercase text-xs">
+                              {s.name.charAt(0)}
+                            </div>
+                            <span>{s.name}</span>
                           </td>
-                          <td className="py-3 px-4">
-                            <span className="px-2 py-0.5 rounded font-semibold text-[11px] uppercase bg-slate-100 text-slate-700">
-                              {rec.work_mode || 'OFFICE'}
+                          <td className="py-3.5 px-4 text-slate-600">{s.email}</td>
+                          <td className="py-3.5 px-4">
+                            <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 capitalize">
+                              {s.role.replace('_', ' ')}
                             </span>
                           </td>
-                          <td className="py-3 px-4 font-mono font-medium text-slate-700">
-                            {rec.check_in_time ? new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
-                          </td>
-                          <td className="py-3 px-4 font-mono font-medium text-slate-700">
-                            {rec.check_out_time ? new Date(rec.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active'}
-                          </td>
-                          <td className="py-3 px-4 font-semibold text-slate-800">
-                            {rec.total_work_minutes ? `${totalHours}h ${totalMins}m` : 'In Progress'}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                                status === 'PRESENT'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : status === 'LATE'
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : status === 'HALF_DAY'
-                                  ? 'bg-purple-100 text-purple-800'
-                                  : status === 'WFH'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : status === 'ON_DUTY'
-                                  ? 'bg-cyan-100 text-cyan-800'
-                                  : 'bg-indigo-100 text-indigo-800'
-                              }`}
-                            >
-                              {status}
-                            </span>
-                            {rec.is_regularized === 1 && (
-                              <span className="ml-1 text-[9px] font-bold text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded">
-                                REG
+                          <td className="py-3.5 px-4">
+                            {isOwner ? (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-blue-100 text-blue-800 uppercase">
+                                Full Admin (By Role)
+                              </span>
+                            ) : hasAccess ? (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 uppercase flex items-center gap-1 w-max">
+                                <Check size={12} />
+                                <span>Delegated Access</span>
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-500 uppercase">
+                                Employee Only
                               </span>
                             )}
                           </td>
-                          <td className="py-3 px-4 font-mono text-slate-500">
-                            {rec.check_in_distance_meters !== null && rec.check_in_distance_meters !== undefined
-                              ? `${Math.round(rec.check_in_distance_meters)}m`
-                              : '—'}
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRegForm({
-                                  attendance_date: rec.attendance_date,
-                                  requested_check_in: '10:00:00',
-                                  requested_check_out: '19:00:00',
-                                  work_mode: rec.work_mode || 'office',
-                                  reason: '',
-                                });
-                                setShowRegModal(true);
-                              }}
-                              className="text-[11px] font-bold text-blue-600 hover:text-blue-800 underline"
-                            >
-                              Regularize
-                            </button>
+                          <td className="py-3.5 px-4 text-right">
+                            {isOwner ? (
+                              <span className="text-[11px] text-slate-400 italic">Built-in Role</span>
+                            ) : (
+                              <button
+                                onClick={() => handleTogglePermission(s.id, Boolean(s.can_manage_attendance))}
+                                disabled={togglingUser === s.id}
+                                className={`px-3.5 py-1.5 rounded-xl font-bold text-xs transition-all shadow-sm ${
+                                  hasAccess
+                                    ? 'bg-red-50 hover:bg-red-100 text-red-700 border border-red-200'
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20'
+                                }`}
+                              >
+                                {togglingUser === s.id ? 'Updating...' : hasAccess ? 'Revoke Access' : 'Grant Full Access'}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1168,564 +2066,249 @@ export const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* =========================================================================
-          TAB 3: ADMIN LIVE AGENCY ROSTER (SUPER ADMIN / SUPPORT MANAGER)
+      {/* ==========================================================================
+          TAB 7: ADMIN OFFICE GEOFENCE & SHIFT SCHEDULE SETTINGS
       ========================================================================== */}
-      {activeTab === 'admin-roster' && isAdmin && (
-        <div className="space-y-6">
-          {/* Controls Bar */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                type="date"
-                value={adminDate}
-                onChange={(e) => setAdminDate(e.target.value)}
-                className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
+      {activeTab === 'admin-settings' && canManageAttendance && (
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6 sm:p-8 max-w-3xl">
+          <h3 className="text-base font-bold text-slate-900 mb-1">Office Location & Shift Configuration</h3>
+          <p className="text-xs text-slate-500 mb-6">
+            Update headquarters GPS coordinates, perimeter radius, and company shift timings.
+          </p>
 
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={adminSearch}
-                  onChange={(e) => setAdminSearch(e.target.value)}
-                  placeholder="Search agency team member..."
-                  className="pl-8 pr-3 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none w-48 sm:w-60"
-                />
-              </div>
-
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
-                <button
-                  onClick={() => setAdminFilter('ALL')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors ${adminFilter === 'ALL' ? 'bg-white shadow text-slate-900' : 'text-slate-500'}`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setAdminFilter('PRESENT')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors ${adminFilter === 'PRESENT' ? 'bg-white shadow text-emerald-700' : 'text-slate-500'}`}
-                >
-                  Present
-                </button>
-                <button
-                  onClick={() => setAdminFilter('WFH_OD')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors ${adminFilter === 'WFH_OD' ? 'bg-white shadow text-blue-700' : 'text-slate-500'}`}
-                >
-                  Remote/Field
-                </button>
-                <button
-                  onClick={() => setAdminFilter('NOT_PUNCHED')}
-                  className={`px-2.5 py-1 rounded-lg transition-colors ${adminFilter === 'NOT_PUNCHED' ? 'bg-white shadow text-rose-700' : 'text-slate-500'}`}
-                >
-                  Not In
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <a
-                href={`/api/admin/attendance/export?date=${adminDate}`}
-                download
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
-              >
-                <Download size={14} />
-                <span>Export CSV</span>
-              </a>
-              <button
-                onClick={() => loadAdminRoster(adminDate)}
-                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
-                title="Refresh Roster"
-              >
-                <RefreshCw size={15} className={loadingRoster ? 'animate-spin text-blue-600' : ''} />
-              </button>
-            </div>
-          </div>
-
-          {/* Roster Overview Summary Cards */}
-          {adminSummary && (
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Team</div>
-                <div className="text-2xl font-black text-slate-900 mt-1">{adminSummary.total_staff}</div>
-              </div>
-              <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Office In</div>
-                <div className="text-2xl font-black text-emerald-700 mt-1">{adminSummary.present_office}</div>
-              </div>
-              <div className="bg-white p-4 rounded-xl border border-blue-200 bg-blue-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-blue-700">WFH / OD</div>
-                <div className="text-2xl font-black text-blue-700 mt-1">
-                  {adminSummary.wfh + adminSummary.on_duty}
-                </div>
-              </div>
-              <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Late Arrivals</div>
-                <div className="text-2xl font-black text-amber-700 mt-1">{adminSummary.late}</div>
-              </div>
-              <div className="bg-white p-4 rounded-xl border border-rose-200 bg-rose-50/20 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Not Punched</div>
-                <div className="text-2xl font-black text-rose-700 mt-1">{adminSummary.not_punched}</div>
-              </div>
+          {officeSaveMsg && (
+            <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+              <CheckCircle2 size={16} />
+              <span>{officeSaveMsg}</span>
             </div>
           )}
 
-          {/* Roster Table */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900">
-                Live Attendance Roster for {adminDate} ({filteredRoster.length} Members)
-              </h3>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/80 text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
-                    <th className="py-3 px-4">Employee</th>
-                    <th className="py-3 px-4">Role</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Mode</th>
-                    <th className="py-3 px-4">In Time</th>
-                    <th className="py-3 px-4">Out Time</th>
-                    <th className="py-3 px-4">Geofence Distance</th>
-                    <th className="py-3 px-4">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredRoster.map((m) => {
-                    const isPunched = m.attendance_id !== null;
-                    const st = m.status?.toUpperCase();
-
-                    return (
-                      <tr key={m.user_id} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-3 px-4">
-                          <div className="font-bold text-slate-900">{m.user_name}</div>
-                          <div className="text-[10px] text-slate-400 font-mono">{m.user_email}</div>
-                        </td>
-                        <td className="py-3 px-4 text-slate-600 font-medium capitalize">
-                          {m.user_role?.replace('_', ' ')}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                              !isPunched
-                                ? 'bg-slate-100 text-slate-500'
-                                : st === 'PRESENT'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : st === 'LATE'
-                                ? 'bg-amber-100 text-amber-800'
-                                : st === 'HALF_DAY'
-                                ? 'bg-purple-100 text-purple-800'
-                                : st === 'WFH'
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-cyan-100 text-cyan-800'
-                            }`}
-                          >
-                            {!isPunched ? 'NOT PUNCHED' : st}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 font-semibold text-slate-700 uppercase text-[11px]">
-                          {m.work_mode || '—'}
-                        </td>
-                        <td className="py-3 px-4 font-mono font-medium text-slate-800">
-                          {m.check_in_time ? new Date(m.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
-                        </td>
-                        <td className="py-3 px-4 font-mono font-medium text-slate-800">
-                          {m.check_out_time ? new Date(m.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : isPunched ? 'Active' : '—'}
-                        </td>
-                        <td className="py-3 px-4 font-mono text-slate-600">
-                          {m.check_in_distance_meters !== null && m.check_in_distance_meters !== undefined
-                            ? `${Math.round(m.check_in_distance_meters)}m`
-                            : '—'}
-                        </td>
-                        <td className="py-3 px-4 text-slate-500 max-w-xs truncate">
-                          {m.notes || '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =========================================================================
-          TAB 4: ADMIN REGULARIZATION QUEUE (SUPER ADMIN / SUPPORT MANAGER)
-      ========================================================================== */}
-      {activeTab === 'admin-regularize' && isAdmin && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <form onSubmit={handleSaveOffice} className="space-y-4">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">Attendance Regularization Requests</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Review and approve missing punches submitted by team members.
-              </p>
-            </div>
-            <button
-              onClick={loadAdminRegs}
-              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
-            >
-              <RefreshCw size={15} />
-            </button>
-          </div>
-
-          {pendingRegs.length === 0 ? (
-            <div className="p-12 text-center text-slate-400">
-              <ShieldCheck size={36} className="mx-auto mb-2 opacity-40 text-emerald-600" />
-              <p className="text-sm font-semibold">No regularization requests</p>
-              <p className="text-xs mt-1">Requests submitted by employees will appear here for 1-click review.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {pendingRegs.map((reg) => (
-                <div key={reg.id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-900 text-sm">{reg.user_name}</span>
-                      <span className="text-xs text-slate-400 font-mono">({reg.user_email})</span>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
-                          reg.status === 'APPROVED'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : reg.status === 'REJECTED'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-amber-100 text-amber-800 animate-pulse'
-                        }`}
-                      >
-                        {reg.status}
-                      </span>
-                    </div>
-
-                    <div className="text-xs text-slate-600 mt-1 flex flex-wrap items-center gap-3">
-                      <span>Date: <strong className="text-slate-800">{reg.attendance_date}</strong></span>
-                      <span>•</span>
-                      <span>Requested In: <strong className="text-slate-800 font-mono">{reg.requested_check_in}</strong></span>
-                      <span>•</span>
-                      <span>Requested Out: <strong className="text-slate-800 font-mono">{reg.requested_check_out}</strong></span>
-                      <span>•</span>
-                      <span>Mode: <strong className="text-slate-800 uppercase">{reg.work_mode}</strong></span>
-                    </div>
-
-                    <p className="text-xs text-slate-600 mt-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200/80">
-                      <strong>Reason:</strong> {reg.reason}
-                    </p>
-                  </div>
-
-                  {reg.status === 'PENDING' && (
-                    <div className="flex items-center gap-2 self-end sm:self-center">
-                      <button
-                        disabled={processingRegId === reg.id}
-                        onClick={() => handleReviewReg(reg.id, 'approve')}
-                        className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50"
-                      >
-                        <Check size={14} />
-                        <span>Approve</span>
-                      </button>
-                      <button
-                        disabled={processingRegId === reg.id}
-                        onClick={() => handleReviewReg(reg.id, 'reject')}
-                        className="px-3.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition-all border border-rose-200 flex items-center gap-1.5 disabled:opacity-50"
-                      >
-                        <X size={14} />
-                        <span>Reject</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =========================================================================
-          TAB 5: ADMIN OFFICE GEOFENCE & SHIFT SCHEDULE CONFIG
-      ========================================================================== */}
-      {activeTab === 'admin-settings' && isAdmin && (
-        <div className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/90 shadow-sm max-w-3xl mx-auto">
-          <div className="flex items-center justify-between pb-5 border-b border-slate-100 mb-6">
-            <div>
-              <h3 className="text-base font-bold text-slate-900">Office Geofence & Shift Configuration</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Set company headquarters GPS center, allowed perimeter radius, and shift timings.
-              </p>
-            </div>
-            <div className="p-2.5 rounded-xl bg-blue-50 text-blue-600">
-              <Sliders size={20} />
-            </div>
-          </div>
-
-          <form onSubmit={handleSaveOffice} className="space-y-5">
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                Office Location Name
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Office Name</label>
               <input
                 type="text"
-                required
                 value={officeForm.name}
                 onChange={(e) => setOfficeForm({ ...officeForm, name: e.target.value })}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Center Latitude
-                </label>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Latitude</label>
                 <input
                   type="number"
-                  step="0.00000001"
-                  required
+                  step="any"
                   value={officeForm.latitude}
                   onChange={(e) => setOfficeForm({ ...officeForm, latitude: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Center Longitude
-                </label>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Longitude</label>
                 <input
                   type="number"
-                  step="0.00000001"
-                  required
+                  step="any"
                   value={officeForm.longitude}
                   onChange={(e) => setOfficeForm({ ...officeForm, longitude: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                />
-              </div>
-            </div>
-
-            {/* Quick Button: Set to current location */}
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  if (gpsLocation) {
-                    setOfficeForm({
-                      ...officeForm,
-                      latitude: gpsLocation.lat,
-                      longitude: gpsLocation.lng,
-                    });
-                  } else {
-                    requestGps();
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition-colors"
-              >
-                <MapPin size={13} />
-                <span>Use My Current Device Coordinates</span>
-              </button>
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Allowed Geofence Radius: <span className="text-blue-600 font-mono">{officeForm.radius_meters} meters</span>
-                </label>
-              </div>
-              <input
-                type="range"
-                min="30"
-                max="2000"
-                step="10"
-                value={officeForm.radius_meters}
-                onChange={(e) => setOfficeForm({ ...officeForm, radius_meters: parseInt(e.target.value) || 100 })}
-                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-                <span>Tight (30m)</span>
-                <span>Standard (100m)</span>
-                <span>Campus / Wide (500m+)</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-slate-100">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Shift Start Time
-                </label>
-                <input
-                  type="time"
-                  required
-                  value={officeForm.shift_start}
-                  onChange={(e) => setOfficeForm({ ...officeForm, shift_start: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Shift End Time
-                </label>
-                <input
-                  type="time"
-                  required
-                  value={officeForm.shift_end}
-                  onChange={(e) => setOfficeForm({ ...officeForm, shift_end: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Grace Period (Minutes)
-                </label>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Allowed Radius (Meters)</label>
                 <input
                   type="number"
-                  min="0"
-                  max="120"
-                  required
-                  value={officeForm.grace_period_minutes}
-                  onChange={(e) => setOfficeForm({ ...officeForm, grace_period_minutes: parseInt(e.target.value) || 0 })}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  value={officeForm.radius_meters}
+                  onChange={(e) => setOfficeForm({ ...officeForm, radius_meters: parseInt(e.target.value, 10) || 100 })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
             </div>
 
-            {officeSaved && (
-              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
-                <CheckCircle2 size={16} />
-                <span>Geofence parameters and shift settings successfully updated!</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Shift Start Time</label>
+                <input
+                  type="time"
+                  step="1"
+                  value={officeForm.shift_start}
+                  onChange={(e) => setOfficeForm({ ...officeForm, shift_start: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
               </div>
-            )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Shift End Time</label>
+                <input
+                  type="time"
+                  step="1"
+                  value={officeForm.shift_end}
+                  onChange={(e) => setOfficeForm({ ...officeForm, shift_end: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Grace Period (Minutes)</label>
+                <input
+                  type="number"
+                  value={officeForm.grace_period_minutes}
+                  onChange={(e) => setOfficeForm({ ...officeForm, grace_period_minutes: parseInt(e.target.value, 10) || 15 })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
 
             <div className="pt-4 flex justify-end">
               <button
                 type="submit"
                 disabled={savingOffice}
-                className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 flex items-center gap-2"
+                className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all"
               >
-                <Check size={16} />
-                <span>{savingOffice ? 'Saving Parameters...' : 'Save Office Geofence'}</span>
+                {savingOffice ? 'Saving Changes...' : 'Save Configuration'}
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* =========================================================================
-          MODAL: APPLY FOR ATTENDANCE REGULARIZATION
+      {/* ==========================================================================
+          MODAL: MANUAL PUNCH ASSIGNMENT (Admin & Attendance Managers)
       ========================================================================== */}
-      {showRegModal && (
+      {showAssignModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative animate-in fade-in zoom-in-95">
-            <button
-              onClick={() => setShowRegModal(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-            >
-              <X size={18} />
-            </button>
-
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2.5 rounded-xl bg-indigo-50 text-indigo-600">
-                <Clock size={20} />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Request Regularization</h3>
-                <p className="text-xs text-slate-500">Missed a punch or were on official duty?</p>
-              </div>
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Clock className="text-blue-600" size={18} />
+                <span>Assign / Adjust Punch Times</span>
+              </h3>
+              <button
+                onClick={() => setShowAssignModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
             </div>
 
-            <form onSubmit={handleRegularizeSubmit} className="space-y-4">
+            {assignSuccess && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
+                Punch assigned and synchronized successfully!
+              </div>
+            )}
+
+            {assignError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">
+                {assignError}
+              </div>
+            )}
+
+            <form onSubmit={handleAssignPunchSubmit} className="space-y-3 text-xs">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Attendance Date
-                </label>
+                <label className="block font-bold text-slate-700 uppercase mb-1">Target Employee *</label>
+                {staffList.length > 0 ? (
+                  <select
+                    required
+                    value={assignForm.user_id}
+                    onChange={(e) => setAssignForm({ ...assignForm, user_id: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    <option value="">Select an employee...</option>
+                    {staffList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.email})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter Employee ID (e.g. usr-...)"
+                    value={assignForm.user_id}
+                    onChange={(e) => setAssignForm({ ...assignForm, user_id: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                )}
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase mb-1">Attendance Date *</label>
                 <input
                   type="date"
                   required
-                  value={regForm.attendance_date}
-                  onChange={(e) => setRegForm({ ...regForm, attendance_date: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  value={assignForm.attendance_date}
+                  onChange={(e) => setAssignForm({ ...assignForm, attendance_date: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                    Requested In Time
-                  </label>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Check-In Time *</label>
                   <input
                     type="time"
+                    step="1"
                     required
-                    value={regForm.requested_check_in}
-                    onChange={(e) => setRegForm({ ...regForm, requested_check_in: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    value={assignForm.check_in_time}
+                    onChange={(e) => setAssignForm({ ...assignForm, check_in_time: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                    Requested Out Time
-                  </label>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Check-Out Time</label>
                   <input
                     type="time"
-                    required
-                    value={regForm.requested_check_out}
-                    onChange={(e) => setRegForm({ ...regForm, requested_check_out: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    step="1"
+                    value={assignForm.check_out_time}
+                    onChange={(e) => setAssignForm({ ...assignForm, check_out_time: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Work Mode
-                </label>
+                <label className="block font-bold text-slate-700 uppercase mb-1">Work Mode</label>
                 <select
-                  value={regForm.work_mode}
-                  onChange={(e) => setRegForm({ ...regForm, work_mode: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  value={assignForm.work_mode}
+                  onChange={(e) => setAssignForm({ ...assignForm, work_mode: e.target.value as any })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 >
-                  <option value="office">In-Office (Assurance Media HQ)</option>
-                  <option value="wfh">Work From Home (Remote)</option>
-                  <option value="on_duty">On-Duty (Client / Field)</option>
+                  <option value="office">In-Office</option>
+                  <option value="wfh">Work From Home (WFH)</option>
+                  <option value="on_duty">On-Duty / Field</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Reason for Regularization *
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  value={regForm.reason}
-                  onChange={(e) => setRegForm({ ...regForm, reason: e.target.value })}
-                  placeholder="e.g. Forgot to punch out due to urgent client deadline..."
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                <label className="block font-bold text-slate-700 uppercase mb-1">HR Note / Reason</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Approved manual shift punch adjustment"
+                  value={assignForm.notes}
+                  onChange={(e) => setAssignForm({ ...assignForm, notes: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
 
-              {regSuccess && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-1.5">
-                  <CheckCircle2 size={16} />
-                  <span>Request submitted for manager approval!</span>
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="pt-3 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowRegModal(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-bold"
+                  onClick={() => setShowAssignModal(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingReg}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                  disabled={assigningPunch}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md shadow-blue-500/20"
                 >
-                  <Send size={14} />
-                  <span>{submittingReg ? 'Submitting...' : 'Submit Request'}</span>
+                  {assigningPunch ? 'Assigning...' : 'Save & Sync'}
                 </button>
               </div>
             </form>
@@ -1733,87 +2316,259 @@ export const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* =========================================================================
-          MODAL: DAY PUNCH DETAILS MODAL
+      {/* ==========================================================================
+          MODAL: ATTENDANCE REGULARIZATION (Employee Self-Service)
       ========================================================================== */}
-      {selectedDayRecord && (
+      {showRegModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative animate-in fade-in zoom-in-95">
-            <button
-              onClick={() => setSelectedDayRecord(null)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-            >
-              <X size={18} />
-            </button>
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Clock className="text-blue-600" size={18} />
+                <span>Attendance Regularization Request</span>
+              </h3>
+              <button
+                onClick={() => setShowRegModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
 
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2.5 rounded-xl bg-blue-50 text-blue-600">
-                <CalendarIcon size={20} />
+            {regSuccess ? (
+              <div className="p-8 text-center">
+                <CheckCircle2 size={40} className="text-emerald-500 mx-auto mb-2" />
+                <h4 className="text-sm font-bold text-slate-800">Regularization Request Submitted!</h4>
+                <p className="text-xs text-slate-500 mt-1">
+                  Sent to HR/Admin for approval. You will be notified once reviewed.
+                </p>
               </div>
+            ) : (
+              <form onSubmit={handleSubmitRegularization} className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Date to Regularize *</label>
+                  <input
+                    type="date"
+                    required
+                    value={regForm.attendance_date}
+                    onChange={(e) => setRegForm({ ...regForm, attendance_date: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Actual Check-In *</label>
+                    <input
+                      type="time"
+                      step="1"
+                      required
+                      value={regForm.requested_check_in}
+                      onChange={(e) => setRegForm({ ...regForm, requested_check_in: e.target.value })}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 uppercase mb-1">Actual Check-Out *</label>
+                    <input
+                      type="time"
+                      step="1"
+                      required
+                      value={regForm.requested_check_out}
+                      onChange={(e) => setRegForm({ ...regForm, requested_check_out: e.target.value })}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Work Mode</label>
+                  <select
+                    value={regForm.work_mode}
+                    onChange={(e) => setRegForm({ ...regForm, work_mode: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    <option value="office">In-Office</option>
+                    <option value="wfh">Work From Home (WFH)</option>
+                    <option value="on_duty">On-Duty / Field Visit</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Reason for Regularization *</label>
+                  <textarea
+                    rows={3}
+                    required
+                    placeholder="Explain why punch was missed (e.g. Client meeting outside, technical device issue)..."
+                    value={regForm.reason}
+                    onChange={(e) => setRegForm({ ...regForm, reason: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="pt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowRegModal(false)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submittingReg}
+                    className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md shadow-blue-500/20"
+                  >
+                    {submittingReg ? 'Submitting...' : 'Send for Approval'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================================================
+          MODAL: DAY AUDIT & DETAILS DRAWER
+      ========================================================================== */}
+      {(selectedDayRecord || selectedDayHoliday || selectedDayDate) && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div>
                 <h3 className="text-base font-bold text-slate-900">
-                  Punch Details: {selectedDayRecord.attendance_date}
+                  Attendance Details for {selectedDayDate || selectedDayRecord?.attendance_date}
                 </h3>
-                <span className="text-xs font-bold uppercase text-blue-600">
-                  Mode: {selectedDayRecord.work_mode || 'OFFICE'}
-                </span>
+                <span className="text-xs text-slate-500">Official log and GPS audit entry</span>
               </div>
-            </div>
-
-            <div className="space-y-3 text-xs divide-y divide-slate-100">
-              <div className="pt-2 flex justify-between">
-                <span className="text-slate-400">Punch In Time:</span>
-                <span className="font-mono font-bold text-slate-800">
-                  {selectedDayRecord.check_in_time ? new Date(selectedDayRecord.check_in_time).toLocaleString() : '—'}
-                </span>
-              </div>
-
-              <div className="pt-2 flex justify-between">
-                <span className="text-slate-400">Punch Out Time:</span>
-                <span className="font-mono font-bold text-slate-800">
-                  {selectedDayRecord.check_out_time ? new Date(selectedDayRecord.check_out_time).toLocaleString() : 'Active'}
-                </span>
-              </div>
-
-              <div className="pt-2 flex justify-between">
-                <span className="text-slate-400">Total Duration:</span>
-                <span className="font-bold text-purple-700">
-                  {selectedDayRecord.total_work_minutes
-                    ? `${Math.floor(selectedDayRecord.total_work_minutes / 60)} hrs ${selectedDayRecord.total_work_minutes % 60} mins`
-                    : 'In Progress'}
-                </span>
-              </div>
-
-              <div className="pt-2 flex justify-between">
-                <span className="text-slate-400">Geofence Distance:</span>
-                <span className="font-mono text-slate-700">
-                  {selectedDayRecord.check_in_distance_meters !== null && selectedDayRecord.check_in_distance_meters !== undefined
-                    ? `${Math.round(selectedDayRecord.check_in_distance_meters)} meters`
-                    : 'N/A'}
-                </span>
-              </div>
-
-              <div className="pt-2 flex justify-between">
-                <span className="text-slate-400">Final Verdict:</span>
-                <span className="font-bold text-emerald-700 uppercase">
-                  {selectedDayRecord.final_status}
-                </span>
-              </div>
-
-              {selectedDayRecord.notes && (
-                <div className="pt-2">
-                  <span className="text-slate-400 block mb-1">Notes:</span>
-                  <p className="bg-slate-50 p-2 rounded-lg text-slate-700 font-medium">
-                    {selectedDayRecord.notes}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6 flex justify-end">
               <button
-                onClick={() => setSelectedDayRecord(null)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+                onClick={() => {
+                  setSelectedDayRecord(null);
+                  setSelectedDayHoliday(null);
+                  setSelectedDayDate(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {selectedDayHoliday && (
+              <div className="mb-4 p-4 rounded-xl bg-purple-50 border border-purple-200 text-purple-900">
+                <div className="font-extrabold text-sm flex items-center gap-1.5">
+                  <Sparkles size={16} className="text-purple-600" />
+                  <span>Company Holiday: {selectedDayHoliday.name}</span>
+                </div>
+                {selectedDayHoliday.description && (
+                  <div className="text-xs text-purple-700 mt-1">{selectedDayHoliday.description}</div>
+                )}
+              </div>
+            )}
+
+            {selectedDayRecord ? (
+              <div className="space-y-4 text-xs">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="text-slate-400 block text-[10px] font-bold uppercase">Check-In</span>
+                    <span className="font-bold text-slate-800 text-sm">
+                      {selectedDayRecord.check_in_time ? new Date(selectedDayRecord.check_in_time).toLocaleTimeString() : '—'}
+                    </span>
+                    {selectedDayRecord.is_late || selectedDayRecord.final_status === 'LATE' ? (
+                      <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-600 text-white">
+                        🔴 LATE ARRIVAL
+                      </span>
+                    ) : (
+                      <span className="inline-block mt-1 text-[10px] text-emerald-600 font-semibold">On-Time</span>
+                    )}
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <span className="text-slate-400 block text-[10px] font-bold uppercase">Check-Out</span>
+                    <span className="font-bold text-slate-800 text-sm">
+                      {selectedDayRecord.check_out_time ? new Date(selectedDayRecord.check_out_time).toLocaleTimeString() : 'Active'}
+                    </span>
+                    {selectedDayRecord.is_early_exit ? (
+                      <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-600 text-white">
+                        🔴 LEFT EARLY
+                      </span>
+                    ) : (
+                      <span className="inline-block mt-1 text-[10px] text-slate-500">Regular Exit</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Work Mode:</span>
+                    <span className="font-bold text-slate-800 uppercase">{selectedDayRecord.work_mode}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Total Duration:</span>
+                    <span className="font-bold text-slate-800">
+                      {selectedDayRecord.total_work_minutes
+                        ? `${Math.floor(selectedDayRecord.total_work_minutes / 60)}h ${selectedDayRecord.total_work_minutes % 60}m`
+                        : 'In Progress'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Geofence Distance:</span>
+                    <span className="font-bold text-slate-800">
+                      {selectedDayRecord.check_in_distance_meters !== null && selectedDayRecord.check_in_distance_meters !== undefined
+                        ? `${Math.round(selectedDayRecord.check_in_distance_meters)} meters`
+                        : 'Remote'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Final Status:</span>
+                    <span className="font-bold text-slate-800">{selectedDayRecord.final_status}</span>
+                  </div>
+                </div>
+
+                {selectedDayRecord.notes && (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <span className="font-bold text-slate-700 block mb-0.5">Remarks / Audit Note:</span>
+                    <p className="text-slate-600">{selectedDayRecord.notes}</p>
+                  </div>
+                )}
+              </div>
+            ) : !selectedDayHoliday ? (
+              <div className="p-6 text-center text-slate-400 text-xs">
+                No attendance recorded for this date.
+              </div>
+            ) : null}
+
+            <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
+              {canManageAttendance && (
+                <button
+                  onClick={() => {
+                    setAssignForm({
+                      user_id: selectedDayRecord?.user_id || user?.id || '',
+                      attendance_date: selectedDayDate || selectedDayRecord?.attendance_date || new Date().toISOString().split('T')[0],
+                      check_in_time: selectedDayRecord?.check_in_time ? new Date(selectedDayRecord.check_in_time).toTimeString().split(' ')[0] : '10:00:00',
+                      check_out_time: selectedDayRecord?.check_out_time ? new Date(selectedDayRecord.check_out_time).toTimeString().split(' ')[0] : '19:00:00',
+                      work_mode: selectedDayRecord?.work_mode || 'office',
+                      notes: selectedDayRecord?.notes || 'HR Assigned Punch',
+                    });
+                    setSelectedDayRecord(null);
+                    setSelectedDayHoliday(null);
+                    setSelectedDayDate(null);
+                    setShowAssignModal(true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs hover:bg-blue-100 flex items-center gap-1"
+                >
+                  <Edit3 size={13} />
+                  <span>Assign / Edit Punch</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  setSelectedDayRecord(null);
+                  setSelectedDayHoliday(null);
+                  setSelectedDayDate(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs ml-auto"
               >
                 Close
               </button>

@@ -64,17 +64,30 @@ function doPost(e) {
     var data = JSON.parse(rawData);
     var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // 1. Attendance Sync
+    // 1. Attendance Sync (Master Log + Dedicated Employee Sheets)
     if (data.sheet_type === "attendance") {
+      // 1A. Master Log
       var attSheet = ss.getSheetByName("Attendance Log");
       if (!attSheet) {
         attSheet = ss.insertSheet("Attendance Log");
         setupAttendanceHeaders(attSheet);
       }
       appendAttendanceRow(attSheet, data);
+
+      // 1B. Dedicated Employee Tab
+      var empName = (data.employee_name || "Employee").trim();
+      var cleanEmpTab = empName.replace(/[:\\\\/?*\\[\\]]/g, "-").substring(0, 30);
+      var userSheet = ss.getSheetByName(cleanEmpTab);
+      if (!userSheet) {
+        userSheet = ss.insertSheet(cleanEmpTab);
+        setupUserAttendanceDashboard(userSheet, data, cleanEmpTab);
+      }
+      appendOrUpdateUserAttendance(userSheet, data);
+
       return ContentService.createTextOutput(JSON.stringify({
         success: true,
         type: "attendance",
+        user_tab: cleanEmpTab,
         timestamp: data.timestamp || new Date().toISOString()
       })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -184,6 +197,8 @@ function setupAttendanceHeaders(sheet) {
     "Check-Out",
     "Total Hours",
     "Status",
+    "Late Arrival?",
+    "Early Exit?",
     "Distance (m)",
     "Geofence Verdict",
     "Notes"
@@ -210,10 +225,140 @@ function appendAttendanceRow(sheet, data) {
     data.check_out_time || "",
     data.total_hours || 0,
     data.status || "PRESENT",
+    data.is_late || "NO",
+    data.is_early_exit || "NO",
     data.distance_meters !== null && data.distance_meters !== undefined ? data.distance_meters : "",
     data.geofence_status || "",
     data.notes || ""
   ]);
+}
+
+function setupUserAttendanceDashboard(sheet, data, tabName) {
+  // Title Banner
+  sheet.getRange("A1:G1").merge();
+  var titleCell = sheet.getRange("A1");
+  titleCell.setValue("ATTENDANCE SCOREBOARD: " + (data.employee_name || tabName).toUpperCase());
+  titleCell.setFontWeight("bold");
+  titleCell.setFontSize(14);
+  titleCell.setFontColor("#FFFFFF");
+  titleCell.setBackground("#0F172A");
+  titleCell.setHorizontalAlignment("center");
+
+  // Subtitle
+  sheet.getRange("A2:G2").merge();
+  var subCell = sheet.getRange("A2");
+  subCell.setValue("Email: " + (data.employee_email || "N/A") + "  |  Role: " + (data.role || "Staff") + "  |  ID: " + (data.user_id || "N/A"));
+  subCell.setFontSize(10);
+  subCell.setFontColor("#94A3B8");
+  subCell.setBackground("#1E293B");
+  subCell.setHorizontalAlignment("center");
+
+  // Metric Cards Headers (Row 4)
+  var kpiHeaders = ["Total Punched Days", "Full Days", "Half Days", "Late Marks", "Early Exits", "WFH / OD", "Total Hours"];
+  for (var i = 0; i < kpiHeaders.length; i++) {
+    sheet.getRange(4, i + 1).setValue(kpiHeaders[i]);
+  }
+  var kpiHeaderRange = sheet.getRange("A4:G4");
+  kpiHeaderRange.setFontWeight("bold");
+  kpiHeaderRange.setFontSize(9);
+  kpiHeaderRange.setHorizontalAlignment("center");
+  kpiHeaderRange.setBackground("#E2E8F0");
+  kpiHeaderRange.setFontColor("#475569");
+
+  // Formulas (Row 5)
+  sheet.getRange("A5").setFormula("=COUNTA(A10:A)");
+  sheet.getRange("B5").setFormula("=COUNTIF(G10:G, \\\"PRESENT\\\") + COUNTIF(G10:G, \\\"REGULARIZED\\\")");
+  sheet.getRange("C5").setFormula("=COUNTIF(G10:G, \\\"HALF_DAY\\\")");
+  sheet.getRange("D5").setFormula("=COUNTIF(H10:H, \\\"YES\\\") + COUNTIF(G10:G, \\\"LATE\\\")");
+  sheet.getRange("E5").setFormula("=COUNTIF(I10:I, \\\"YES\\\")");
+  sheet.getRange("F5").setFormula("=COUNTIF(B10:B, \\\"WFH\\\") + COUNTIF(B10:B, \\\"ON_DUTY\\\")");
+  sheet.getRange("G5").setFormula("=SUM(F10:F)");
+
+  var kpiValRange = sheet.getRange("A5:G5");
+  kpiValRange.setFontWeight("bold");
+  kpiValRange.setFontSize(15);
+  kpiValRange.setHorizontalAlignment("center");
+  kpiValRange.setBackground("#F8FAFC");
+  sheet.getRange("B5").setFontColor("#16A34A");
+  sheet.getRange("C5").setFontColor("#EA580C");
+  sheet.getRange("D5").setFontColor("#DC2626");
+  sheet.getRange("E5").setFontColor("#DC2626");
+  sheet.getRange("F5").setFontColor("#2563EB");
+  sheet.getRange("G5").setFontColor("#0F172A");
+
+  // Log Section Header (Row 8)
+  sheet.getRange("A8:M8").merge();
+  var logTitle = sheet.getRange("A8");
+  logTitle.setValue("DAILY ATTENDANCE LOGS & PUNCH RECORDS");
+  logTitle.setFontWeight("bold");
+  logTitle.setFontSize(10);
+  logTitle.setFontColor("#334155");
+
+  // Table Column Headers (Row 9)
+  var tableHeaders = [
+    "Date",
+    "Work Mode",
+    "Shift Hours",
+    "Check-In Time",
+    "Check-Out Time",
+    "Total Hours",
+    "Status",
+    "Late Arrival?",
+    "Early Exit?",
+    "Distance (m)",
+    "Geofence",
+    "Notes",
+    "Last Updated"
+  ];
+  sheet.appendRow(tableHeaders);
+  var thRange = sheet.getRange(9, 1, 1, tableHeaders.length);
+  thRange.setFontWeight("bold");
+  thRange.setFontColor("#FFFFFF");
+  thRange.setBackground("#2563EB");
+  thRange.setHorizontalAlignment("center");
+  sheet.setFrozenRows(9);
+}
+
+function appendOrUpdateUserAttendance(sheet, data) {
+  var dateStr = data.attendance_date || "";
+  var lastRow = sheet.getLastRow();
+  var existingRowIndex = -1;
+
+  if (lastRow >= 10 && dateStr) {
+    var dateValues = sheet.getRange(10, 1, lastRow - 9, 1).getValues();
+    for (var i = 0; i < dateValues.length; i++) {
+      var cellVal = dateValues[i][0];
+      if (cellVal) {
+        var strVal = (cellVal instanceof Date) ? Utilities.formatDate(cellVal, Session.getScriptTimeZone(), "yyyy-MM-dd") : cellVal.toString().trim();
+        if (strVal.indexOf(dateStr) !== -1) {
+          existingRowIndex = 10 + i;
+          break;
+        }
+      }
+    }
+  }
+
+  var rowData = [
+    dateStr,
+    data.work_mode || "OFFICE",
+    data.shift || "10:00 AM - 07:00 PM",
+    data.check_in_time || "",
+    data.check_out_time || "",
+    data.total_hours || 0,
+    data.status || "PRESENT",
+    data.is_late || "NO",
+    data.is_early_exit || "NO",
+    data.distance_meters !== null && data.distance_meters !== undefined ? data.distance_meters : "",
+    data.geofence_status || "",
+    data.notes || "",
+    data.timestamp || new Date().toLocaleString()
+  ];
+
+  if (existingRowIndex > 0) {
+    sheet.getRange(existingRowIndex, 1, 1, rowData.length).setValues([rowData]);
+  } else {
+    sheet.appendRow(rowData);
+  }
 }
 
 function setupTaskHeaders(sheet) {

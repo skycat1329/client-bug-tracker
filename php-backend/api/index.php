@@ -361,10 +361,16 @@ function get_auth_user(): ?array {
         return null;
     }
 
-    $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password, can_manage_payroll FROM users WHERE id = ?', [$decoded['userId']]);
+    try {
+        $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password, can_manage_payroll, can_manage_attendance FROM users WHERE id = ?', [$decoded['userId']]);
+    } catch (Exception $e) {
+        $user = db_query_one('SELECT id, email, name, role, custom_role, organization_id, must_reset_password, can_manage_payroll FROM users WHERE id = ?', [$decoded['userId']]);
+        if ($user) $user['can_manage_attendance'] = 0;
+    }
     if ($user) {
         $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
         $user['can_manage_payroll'] = !empty($user['can_manage_payroll']) && ((int)$user['can_manage_payroll'] === 1);
+        $user['can_manage_attendance'] = !empty($user['can_manage_attendance']) && ((int)$user['can_manage_attendance'] === 1);
         if (empty($user['organization_id'])) {
             $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
             if ($mem && !empty($mem['organization_id'])) {
@@ -408,6 +414,19 @@ function require_payroll_access(): array {
     $canManage = !empty($user['can_manage_payroll']);
     if (!$isAdmin && !$canManage) {
         json_error('Forbidden: You do not have permission to access Offer Letter and Pay Slip Generation.', 403);
+    }
+    return $user;
+}
+
+function require_attendance_access(): array {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Forbidden: Client brand users cannot access attendance management features.', 403);
+    }
+    $isAdmin = in_array($user['role'], ['super_admin', 'support_manager'], true);
+    $canManage = !empty($user['can_manage_attendance']);
+    if (!$isAdmin && !$canManage) {
+        json_error('Forbidden: You do not have permission to manage attendance.', 403);
     }
     return $user;
 }
@@ -5954,6 +5973,27 @@ function ensure_attendance_schema() {
         if (!in_array('is_regularized', $existingCols, true)) {
             db_execute("ALTER TABLE `attendance` ADD COLUMN `is_regularized` TINYINT(1) NOT NULL DEFAULT 0 AFTER `final_status`");
         }
+        if (!in_array('is_early_exit', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `is_early_exit` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_regularized`");
+        }
+
+        // Migration: Ensure company_holidays table exists
+        db_execute("CREATE TABLE IF NOT EXISTS `company_holidays` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(150) NOT NULL,
+            `holiday_date` DATE NOT NULL UNIQUE,
+            `description` TEXT NULL,
+            `created_by` VARCHAR(64) NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX `idx_holiday_date` (`holiday_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Migration: Ensure can_manage_attendance exists on users table
+        $usrCols = db_query("SHOW COLUMNS FROM `users`");
+        $existingUsrCols = array_column($usrCols, 'Field');
+        if (!in_array('can_manage_attendance', $existingUsrCols, true)) {
+            db_execute("ALTER TABLE `users` ADD COLUMN `can_manage_attendance` TINYINT(1) NOT NULL DEFAULT 0 AFTER `can_manage_payroll`");
+        }
 
         // Migration: Ensure office_locations has Darwinbox shift columns
         $offCols = db_query("SHOW COLUMNS FROM `office_locations`");
@@ -6023,6 +6063,10 @@ function sync_attendance_to_google_sheet(array $attendance, string $event, strin
         'check_out_time' => !empty($attendance['check_out_time']) ? date('h:i:s A', strtotime($attendance['check_out_time'])) : '',
         'total_hours' => $totalHours,
         'status' => strtoupper($attendance['final_status'] ?? $attendance['check_in_status'] ?? 'PRESENT'),
+        'is_late' => (!empty($attendance['check_in_status']) && strtolower($attendance['check_in_status']) === 'late') || (!empty($attendance['final_status']) && $attendance['final_status'] === 'LATE') ? 'YES' : 'NO',
+        'is_early_exit' => !empty($attendance['is_early_exit']) ? 'YES' : 'NO',
+        'is_regularized' => !empty($attendance['is_regularized']) ? 'YES' : 'NO',
+        'user_tab_name' => preg_replace('/[\\\\\\/\?\*\[\]:]/', '-', $employeeName),
         'distance_meters' => $distance,
         'geofence_status' => $geofenceVerdict,
         'latitude' => $attendance['check_in_lat'] ?? null,
@@ -6302,10 +6346,14 @@ if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/
         $dist = haversine_distance_meters($lat, $lng, (float)$office['latitude'], (float)$office['longitude']);
     }
 
-    // Work duration calculation
+    // Work duration & Early exit calculation
     $inTs = strtotime($record['check_in_time']);
     $outTs = time();
     $totalMinutes = max(1, (int)round(($outTs - $inTs) / 60));
+
+    $shiftEnd = $office['shift_end'] ?? '19:00:00';
+    $shiftEndTs = strtotime("{$today} {$shiftEnd}");
+    $isEarlyExit = ($outTs < $shiftEndTs) ? 1 : 0;
 
     // Determine final status
     $finalStatus = $record['final_status'];
@@ -6317,9 +6365,9 @@ if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/
 
     db_execute(
         "UPDATE attendance 
-         SET check_out_time = NOW(), check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, check_out_distance_meters = ?, check_out_method = 'gps', total_work_minutes = ?, final_status = ?, notes = ?
+         SET check_out_time = NOW(), check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, check_out_distance_meters = ?, check_out_method = 'gps', total_work_minutes = ?, final_status = ?, is_early_exit = ?, notes = ?
          WHERE id = ?",
-        [$lat, $lng, $accuracy, $dist, $totalMinutes, $finalStatus, $combinedNotes ?: null, $record['id']]
+        [$lat, $lng, $accuracy, $dist, $totalMinutes, $finalStatus, $isEarlyExit, $combinedNotes ?: null, $record['id']]
     );
 
     $updatedRec = db_query_one("SELECT * FROM attendance WHERE id = ?", [$record['id']]);
@@ -6375,6 +6423,8 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
     $regularizedCount = 0;
     $totalMinutes = 0;
 
+    $earlyExitCount = 0;
+
     foreach ($records as &$r) {
         $r['id'] = (int)$r['id'];
         $r['check_in_lat'] = $r['check_in_lat'] !== null ? (float)$r['check_in_lat'] : null;
@@ -6383,6 +6433,20 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
         $r['check_out_distance_meters'] = $r['check_out_distance_meters'] !== null ? (float)$r['check_out_distance_meters'] : null;
         $r['total_work_minutes'] = $r['total_work_minutes'] !== null ? (int)$r['total_work_minutes'] : null;
         $r['is_regularized'] = !empty($r['is_regularized']) ? 1 : 0;
+        $r['is_early_exit'] = !empty($r['is_early_exit']) ? 1 : 0;
+
+        $isLate = false;
+        if (!empty($r['check_in_time'])) {
+            $shiftStart = $r['shift_start'] ?? '10:00:00';
+            $graceDeadline = strtotime("{$r['attendance_date']} {$shiftStart}") + (15 * 60);
+            if (strtotime($r['check_in_time']) > $graceDeadline) {
+                $isLate = true;
+            }
+        }
+        if (strtoupper($r['final_status'] ?? '') === 'LATE' || strtolower($r['check_in_status'] ?? '') === 'late') {
+            $isLate = true;
+        }
+        $r['is_late'] = $isLate ? 1 : 0;
 
         $st = strtoupper($r['final_status'] ?? $r['check_in_status'] ?? 'PRESENT');
         if ($st === 'PRESENT') $presentCount++;
@@ -6392,10 +6456,16 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
         elseif ($st === 'ON_DUTY') $onDutyCount++;
         elseif ($st === 'REGULARIZED') $regularizedCount++;
 
+        if (!empty($r['is_early_exit'])) {
+            $earlyExitCount++;
+        }
+
         if (!empty($r['total_work_minutes'])) {
             $totalMinutes += $r['total_work_minutes'];
         }
     }
+
+    $holidays = db_query("SELECT * FROM company_holidays WHERE holiday_date LIKE ? ORDER BY holiday_date ASC", ["{$month}%"]);
 
     $totalPunchedDays = count($records);
     $totalHours = round($totalMinutes / 60, 1);
@@ -6405,10 +6475,12 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
         'success' => true,
         'month' => $month,
         'records' => $records,
+        'holidays' => $holidays,
         'stats' => [
             'total_punched_days' => $totalPunchedDays,
             'present_count' => $presentCount,
             'late_count' => $lateCount,
+            'early_exit_count' => $earlyExitCount,
             'half_day_count' => $halfDayCount,
             'wfh_count' => $wfhCount,
             'on_duty_count' => $onDutyCount,
@@ -6461,8 +6533,7 @@ if ($method === 'POST' && $path === '/api/attendance/regularize') {
 
 // GET /api/admin/attendance/roster or GET /api/admin/attendance/report
 if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === '/api/admin/attendance/report')) {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
+    $user = require_attendance_access();
     ensure_attendance_schema();
 
     $targetDate = $_GET['date'] ?? date('Y-m-d');
@@ -6484,7 +6555,7 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
         a.id as attendance_id, a.attendance_date, a.work_mode, a.shift_start, a.shift_end,
         a.check_in_time, a.check_in_lat, a.check_in_lng, a.check_in_distance_meters, a.check_in_status,
         a.check_out_time, a.check_out_lat, a.check_out_lng, a.check_out_distance_meters,
-        a.total_work_minutes, a.final_status, a.is_regularized, a.notes,
+        a.total_work_minutes, a.final_status, a.is_regularized, a.is_early_exit, a.notes,
         CASE 
             WHEN a.id IS NOT NULL THEN COALESCE(a.final_status, 'PRESENT')
             ELSE 'NOT_PUNCHED'
@@ -6537,8 +6608,7 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
 
 // GET /api/admin/attendance/regularizations
 if ($method === 'GET' && $path === '/api/admin/attendance/regularizations') {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
+    $user = require_attendance_access();
     ensure_attendance_schema();
 
     $requests = db_query("SELECT 
@@ -6562,8 +6632,7 @@ if ($method === 'GET' && $path === '/api/admin/attendance/regularizations') {
 
 // POST /api/admin/attendance/regularization/{id}/review
 if ($method === 'POST' && preg_match('#^/api/admin/attendance/regularization/([^/]+)/review$#', $path, $m)) {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
+    $user = require_attendance_access();
     ensure_attendance_schema();
 
     $regId = (int)$m[1];
@@ -6624,8 +6693,7 @@ if ($method === 'POST' && preg_match('#^/api/admin/attendance/regularization/([^
 
 // GET /api/admin/attendance/geofence
 if ($method === 'GET' && $path === '/api/admin/attendance/geofence') {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
+    $user = require_attendance_access();
     ensure_attendance_schema();
 
     $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
@@ -6656,8 +6724,7 @@ if ($method === 'GET' && $path === '/api/admin/attendance/geofence') {
 
 // POST /api/admin/attendance/geofence
 if ($method === 'POST' && $path === '/api/admin/attendance/geofence') {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
+    $user = require_attendance_access();
     ensure_attendance_schema();
 
     $input = get_json_input();
@@ -6698,8 +6765,7 @@ if ($method === 'POST' && $path === '/api/admin/attendance/geofence') {
 
 // GET /api/admin/attendance/export
 if ($method === 'GET' && $path === '/api/admin/attendance/export') {
-    $user = require_auth();
-    require_roles($user, ['super_admin', 'support_manager']);
+    $user = require_attendance_access();
     ensure_attendance_schema();
 
     $date = $_GET['date'] ?? null;
@@ -6750,6 +6816,7 @@ if ($method === 'GET' && $path === '/api/admin/attendance/export') {
         'Total Work Hours',
         'Status',
         'Regularized',
+        'Early Exit',
         'Notes'
     ]);
 
@@ -6770,12 +6837,215 @@ if ($method === 'GET' && $path === '/api/admin/attendance/export') {
             $totalHours ? "{$totalHours} hrs" : '',
             strtoupper($r['final_status'] ?? $r['check_in_status'] ?? 'PRESENT'),
             !empty($r['is_regularized']) ? 'YES' : 'NO',
+            !empty($r['is_early_exit']) ? 'YES' : 'NO',
             $r['notes'] ?? ''
         ]);
     }
 
     fclose($out);
     exit;
+}
+
+// GET /api/admin/attendance/permissions (List internal staff with attendance permissions)
+if ($method === 'GET' && $path === '/api/admin/attendance/permissions') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $staff = db_query("SELECT id, name, email, role, custom_role, avatar_url, COALESCE(can_manage_attendance, 0) as can_manage_attendance FROM users WHERE role != 'client' ORDER BY name ASC");
+    foreach ($staff as &$s) {
+        $s['can_manage_attendance'] = !empty($s['can_manage_attendance']) ? 1 : 0;
+    }
+
+    json_response(['success' => true, 'staff' => $staff]);
+}
+
+// POST /api/admin/attendance/permissions (Grant/Revoke full attendance access to any user)
+if ($method === 'POST' && $path === '/api/admin/attendance/permissions') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $targetUserId = trim($input['user_id'] ?? '');
+    $canManage = !empty($input['can_manage_attendance']) ? 1 : 0;
+
+    if (empty($targetUserId)) {
+        json_error('user_id is required', 400);
+    }
+    $targetUser = db_query_one("SELECT * FROM users WHERE id = ?", [$targetUserId]);
+    if (!$targetUser) {
+        json_error('User not found', 404);
+    }
+
+    db_execute("UPDATE users SET can_manage_attendance = ? WHERE id = ?", [$canManage, $targetUserId]);
+
+    // Audit log
+    $ip = get_client_ip();
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, target_user_id, payload, ip_address, user_agent) VALUES (?, 'permission_toggle', ?, ?, ?, ?)",
+            [$user['id'], $targetUserId, json_encode(['can_manage_attendance' => $canManage]), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    json_response([
+        'success' => true,
+        'message' => "Attendance management permissions " . ($canManage ? "granted to" : "revoked from") . " {$targetUser['name']}",
+        'can_manage_attendance' => $canManage
+    ]);
+}
+
+// POST /api/admin/attendance/assign-punch (Admin assign or adjust punch-in & punch-out for any employee)
+if ($method === 'POST' && $path === '/api/admin/attendance/assign-punch') {
+    $user = require_attendance_access();
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $targetUserId = trim($input['user_id'] ?? '');
+    $date = trim($input['attendance_date'] ?? date('Y-m-d'));
+    $checkInTime = trim($input['check_in_time'] ?? '');
+    $checkOutTime = trim($input['check_out_time'] ?? '');
+    $workMode = in_array(strtolower($input['work_mode'] ?? 'office'), ['office', 'wfh', 'on_duty'], true)
+        ? strtolower($input['work_mode'] ?? 'office')
+        : 'office';
+    $notes = trim($input['notes'] ?? 'HR Assigned Punch');
+
+    if (empty($targetUserId)) {
+        json_error('user_id is required', 400);
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        json_error('Invalid date format (expected YYYY-MM-DD)', 400);
+    }
+    if (empty($checkInTime)) {
+        json_error('check_in_time is required (e.g. 10:00:00 or 10:00)', 400);
+    }
+
+    $targetUser = db_query_one("SELECT * FROM users WHERE id = ?", [$targetUserId]);
+    if (!$targetUser) {
+        json_error('Target employee not found', 404);
+    }
+
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    $shiftStart = $office['shift_start'] ?? '10:00:00';
+    $shiftEnd = $office['shift_end'] ?? '19:00:00';
+    $graceMins = (int)($office['grace_period_minutes'] ?? 15);
+
+    $checkInFull = date('Y-m-d H:i:s', strtotime("{$date} {$checkInTime}"));
+    $checkOutFull = !empty($checkOutTime) ? date('Y-m-d H:i:s', strtotime("{$date} {$checkOutTime}")) : null;
+
+    $inTs = strtotime($checkInFull);
+    $outTs = $checkOutFull ? strtotime($checkOutFull) : null;
+    $totalMinutes = ($inTs && $outTs && $outTs > $inTs) ? max(1, (int)round(($outTs - $inTs) / 60)) : null;
+
+    // Late evaluation
+    $graceDeadline = strtotime("{$date} {$shiftStart}") + ($graceMins * 60);
+    $isLate = ($inTs > $graceDeadline) ? 1 : 0;
+
+    // Early exit evaluation
+    $shiftEndTs = strtotime("{$date} {$shiftEnd}");
+    $isEarlyExit = ($outTs && $outTs < $shiftEndTs) ? 1 : 0;
+
+    // Determine final status
+    if ($workMode === 'wfh') {
+        $finalStatus = 'WFH';
+    } elseif ($workMode === 'on_duty') {
+        $finalStatus = 'ON_DUTY';
+    } else {
+        if ($totalMinutes !== null && $totalMinutes < 240) {
+            $finalStatus = 'HALF_DAY';
+        } elseif ($isLate) {
+            $finalStatus = 'LATE';
+        } else {
+            $finalStatus = 'PRESENT';
+        }
+    }
+
+    $existing = db_query_one("SELECT id FROM attendance WHERE user_id = ? AND attendance_date = ?", [$targetUserId, $date]);
+    if ($existing) {
+        db_execute(
+            "UPDATE attendance 
+             SET check_in_time = ?, check_out_time = ?, work_mode = ?, shift_start = ?, shift_end = ?, total_work_minutes = ?, final_status = ?, is_regularized = 1, is_early_exit = ?, notes = ?
+             WHERE id = ?",
+            [$checkInFull, $checkOutFull, $workMode, $shiftStart, $shiftEnd, $totalMinutes, $finalStatus, $isEarlyExit, $notes, $existing['id']]
+        );
+        $record = db_query_one("SELECT * FROM attendance WHERE id = ?", [$existing['id']]);
+    } else {
+        db_execute(
+            "INSERT INTO attendance (user_id, attendance_date, work_mode, shift_start, shift_end, check_in_time, check_out_time, total_work_minutes, final_status, is_regularized, is_early_exit, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            [$targetUserId, $date, $workMode, $shiftStart, $shiftEnd, $checkInFull, $checkOutFull, $totalMinutes, $finalStatus, $isEarlyExit, $notes]
+        );
+        $record = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?", [$targetUserId, $date]);
+    }
+
+    // Google Sheets sync
+    if ($record) {
+        sync_attendance_to_google_sheet($record, 'ASSIGNED_BY_ADMIN', $user['name']);
+    }
+
+    json_response([
+        'success' => true,
+        'message' => "Attendance for {$targetUser['name']} on {$date} successfully assigned / updated.",
+        'data' => $record
+    ]);
+}
+
+// GET /api/attendance/holidays
+if ($method === 'GET' && $path === '/api/attendance/holidays') {
+    $user = require_auth();
+    ensure_attendance_schema();
+
+    $year = $_GET['year'] ?? date('Y');
+    $month = $_GET['month'] ?? null;
+
+    if ($month && preg_match('/^\d{4}-\d{2}$/', $month)) {
+        $holidays = db_query("SELECT * FROM company_holidays WHERE holiday_date LIKE ? ORDER BY holiday_date ASC", ["{$month}%"]);
+    } else {
+        $holidays = db_query("SELECT * FROM company_holidays WHERE holiday_date LIKE ? ORDER BY holiday_date ASC", ["{$year}%"]);
+    }
+
+    json_response(['success' => true, 'holidays' => $holidays]);
+}
+
+// POST /api/admin/attendance/holidays
+if ($method === 'POST' && $path === '/api/admin/attendance/holidays') {
+    $user = require_attendance_access();
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $name = trim($input['name'] ?? '');
+    $date = trim($input['holiday_date'] ?? '');
+    $desc = trim($input['description'] ?? '');
+
+    if (empty($name) || empty($date)) {
+        json_error('Holiday name and date are required', 400);
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        json_error('Invalid date format (expected YYYY-MM-DD)', 400);
+    }
+
+    $existing = db_query_one("SELECT id FROM company_holidays WHERE holiday_date = ?", [$date]);
+    if ($existing) {
+        db_execute("UPDATE company_holidays SET name = ?, description = ? WHERE id = ?", [$name, $desc ?: null, $existing['id']]);
+        $h = db_query_one("SELECT * FROM company_holidays WHERE id = ?", [$existing['id']]);
+    } else {
+        db_execute("INSERT INTO company_holidays (name, holiday_date, description, created_by) VALUES (?, ?, ?, ?)", [$name, $date, $desc ?: null, $user['id']]);
+        $h = db_query_one("SELECT * FROM company_holidays WHERE holiday_date = ?", [$date]);
+    }
+
+    json_response(['success' => true, 'message' => "Holiday {$name} saved successfully", 'data' => $h]);
+}
+
+// DELETE /api/admin/attendance/holidays/{id}
+if ($method === 'DELETE' && preg_match('#^/api/admin/attendance/holidays/(\d+)$#', $path, $matches)) {
+    $user = require_attendance_access();
+    ensure_attendance_schema();
+
+    $id = (int)$matches[1];
+    db_execute("DELETE FROM company_holidays WHERE id = ?", [$id]);
+    json_response(['success' => true, 'message' => 'Holiday deleted successfully']);
 }
 
 // Default 404 for unknown API routes
