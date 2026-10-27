@@ -5188,22 +5188,27 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
         }
         .header-banner {
           width: 100%;
-          height: 52px;
+          height: 35.2mm;
           flex-shrink: 0;
           overflow: hidden;
+          margin: 0;
+          padding: 0;
         }
         .header-banner img {
           width: 100%;
           height: 100%;
-          object-fit: fill;
+          object-fit: contain;
+          object-position: top center;
           display: block;
+          image-rendering: -webkit-optimize-contrast;
         }
         .letter-content {
           flex: 1;
-          padding: 24px 48px 50px 48px;
-          font-size: 12px;
-          line-height: 1.48;
-          color: #0f172a;
+          padding: 6mm 18mm 32mm 18mm;
+          font-family: Calibri, 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+          font-size: 11pt;
+          line-height: 1.38;
+          color: #000000;
           overflow: hidden;
         }
         .footer-banner {
@@ -5211,61 +5216,65 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
           bottom: 0;
           left: 0;
           width: 100%;
-          height: 44px;
+          height: 29mm;
           overflow: hidden;
+          margin: 0;
+          padding: 0;
         }
         .footer-banner img {
           width: 100%;
           height: 100%;
-          object-fit: fill;
+          object-fit: contain;
+          object-position: bottom center;
           display: block;
+          image-rendering: -webkit-optimize-contrast;
         }
         
         /* Typography matching the PDF */
         .subject-title {
-          font-size: 13px;
+          font-size: 11.5pt;
           font-weight: 700;
           color: #000000;
-          margin-bottom: 12px;
+          margin-bottom: 10px;
         }
         .salutation {
-          font-size: 12.5px;
+          font-size: 11pt;
           font-weight: 700;
           color: #000000;
-          margin-bottom: 3px;
+          margin-bottom: 2px;
         }
         .candidate-addr {
-          font-size: 11.5px;
-          color: #1e293b;
-          margin-bottom: 12px;
-          line-height: 1.4;
+          font-size: 10.5pt;
+          color: #111111;
+          margin-bottom: 10px;
+          line-height: 1.35;
         }
         .body-p {
-          font-size: 11.8px;
-          line-height: 1.46;
-          margin-bottom: 10px;
-          color: #0f172a;
+          font-size: 11pt;
+          line-height: 1.38;
+          margin-bottom: 8px;
+          color: #000000;
         }
         .section-header {
-          font-size: 12.5px;
+          font-size: 11pt;
           font-weight: 700;
           color: #000000;
-          margin-top: 13px;
-          margin-bottom: 4px;
+          margin-top: 10px;
+          margin-bottom: 3px;
         }
         .details-grid {
-          margin-bottom: 11px;
-          line-height: 1.6;
-          font-size: 11.8px;
+          margin-bottom: 8px;
+          line-height: 1.45;
+          font-size: 11pt;
         }
         .details-grid div strong {
           color: #000000;
         }
         .bullet-list {
-          margin: 2px 0 10px 0;
-          padding-left: 20px;
-          font-size: 11.8px;
-          line-height: 1.55;
+          margin: 2px 0 8px 0;
+          padding-left: 18px;
+          font-size: 11pt;
+          line-height: 1.4;
         }
         .bullet-list li {
           margin-bottom: 2px;
@@ -5276,15 +5285,19 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
           width: 100%;
           border-collapse: collapse;
           border: 1px solid #111111;
-          margin-top: 16px;
+          margin-top: 14px;
         }
         .sign-table td {
           width: 50%;
           vertical-align: top;
-          padding: 8px 14px 10px 14px;
+          padding: 6px 12px 8px 12px;
           border: 1px solid #111111;
         }
         
+        @page {
+          size: A4 portrait;
+          margin: 0;
+        }
         @media print {
           html, body {
             margin: 0 !important;
@@ -5297,15 +5310,24 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
           .doc-page {
             width: 210mm !important;
             height: 297mm !important;
+            min-height: 297mm !important;
             max-height: 297mm !important;
             margin: 0 !important;
             box-shadow: none !important;
             page-break-after: always !important;
             break-after: page !important;
+            overflow: hidden !important;
           }
           .doc-page:last-child {
             page-break-after: auto !important;
             break-after: auto !important;
+          }
+          .header-banner {
+            height: 35.2mm !important;
+          }
+          .footer-banner {
+            height: 29mm !important;
+            bottom: 0 !important;
           }
         }
       </style>
@@ -5356,7 +5378,7 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
           </div>
 
           <div class='section-header'>Compensation Structure</div>
-          <div style='font-size: 12px; font-weight: 700; margin-bottom: 2px;'>Fixed Salary</div>
+          <div style='font-size: 11pt; font-weight: 700; margin-bottom: 2px;'>Fixed Salary</div>
           <ul class='bullet-list'>
             <li>Monthly Salary: ₹" . $monthlyFormatted . "/-</li>
             <li>Salary will be paid on a monthly basis as per the company's payroll cycle.</li>
@@ -5368,13 +5390,11 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
             The first 15 days of the Job will be considered a probation period.<br/>
             During this period, the Company reserves the right to evaluate performance, conduct, and suitability for the role.
           </div>
-          <div style='font-size: 11.8px; margin-bottom: 2px;'>During the probation period:</div>
+          <div style='font-size: 11pt; margin-bottom: 2px;'>During the probation period:</div>
           <ul class='bullet-list'>
             <li>The Company may terminate the Job <strong>immediately, without notice</strong> and <strong>without any obligation</strong> to continue the Job.</li>
             <li>Upon successful completion of the probation period, the Job will continue for the remaining agreed duration.</li>
           </ul>
-
-          <div class='section-header' style='margin-bottom: 0;'>Working Hours</div>
         </div>
 
         <div class='footer-banner'>
@@ -5389,7 +5409,8 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
         </div>
 
         <div class='letter-content'>
-          <div class='details-grid' style='margin-bottom: 12px;'>
+          <div class='section-header' style='margin-top: 0;'>Working Hours</div>
+          <div class='details-grid' style='margin-bottom: 8px;'>
             <div><strong>Work Mode:</strong> " . htmlspecialchars($offer['work_mode']) . "</div>
             <div><strong>Working Days:</strong> " . htmlspecialchars($offer['working_days']) . "</div>
             <div><strong>Working Hours:</strong> " . htmlspecialchars($offer['working_hours']) . "</div>
@@ -5425,7 +5446,7 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
           </div>
 
           <div class='section-header'>Insurance Benefits</div>
-          <ul class='bullet-list' style='margin-bottom: 12px;'>
+          <ul class='bullet-list' style='margin-bottom: 10px;'>
             <li>
               <strong>After completion of one (1) year of service:</strong><br/>
               You will be covered under a Personal Accidental Insurance Policy of <strong>₹20,00,000 (Twenty Lakh)</strong> and a Health Insurance Policy of <strong>₹5,00,000 (Five Lakh)</strong>.
@@ -5443,18 +5464,18 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/offer/([a-zA-Z0-9]+)$#'
           <table class='sign-table'>
             <tr>
               <td>
-                <div style='font-size: 12.5px; font-weight: 700; color: #000; margin-bottom: 4px;'>For Assurance Media LLP</div>
-                <div style='min-height: 48px; margin: 4px 0;'>
-                  <img src='" . $signatureImg . "' style='height: 48px; display: block;' alt='Mr. Faizan Siddiqui Signature' />
+                <div style='font-size: 11pt; font-weight: 700; color: #000; margin-bottom: 2px;'>For Assurance Media LLP</div>
+                <div style='min-height: 44px; margin: 2px 0;'>
+                  <img src='" . $signatureImg . "' style='height: 44px; display: block;' alt='Mr. Faizan Siddiqui Signature' />
                 </div>
-                <div style='font-size: 12px; font-weight: 600; color: #0f172a;'>" . htmlspecialchars($offer['signatory_name'] ?: 'Mr. Faizan Siddiqui') . "</div>
-                <div style='font-size: 11.5px; color: #475569; margin-top: 1px;'>( " . htmlspecialchars($offer['signatory_title'] ?: 'Business Head') . " )</div>
+                <div style='font-size: 11pt; font-weight: 600; color: #000;'>" . htmlspecialchars($offer['signatory_name'] ?: 'Mr. Faizan Siddiqui') . "</div>
+                <div style='font-size: 10pt; color: #333333; margin-top: 1px;'>( " . htmlspecialchars($offer['signatory_title'] ?: 'Business Head') . " )</div>
               </td>
               <td>
-                <div style='font-size: 12.5px; font-weight: 700; color: #000; margin-bottom: 4px;'>For " . htmlspecialchars($offer['candidate_name']) . "</div>
-                <div style='height: 48px; margin: 4px 0;'></div>
-                <div style='font-size: 12px; font-weight: 600; color: #0f172a;'>Candidate Signature</div>
-                <div style='font-size: 11.5px; color: #475569; margin-top: 1px;'>Date: ____________________</div>
+                <div style='font-size: 11pt; font-weight: 700; color: #000; margin-bottom: 2px;'>For " . htmlspecialchars($offer['candidate_name']) . "</div>
+                <div style='height: 44px; margin: 2px 0;'></div>
+                <div style='font-size: 11pt; font-weight: 600; color: #000;'>Candidate Signature</div>
+                <div style='font-size: 10pt; color: #333333; margin-top: 1px;'>Date: ____________________</div>
               </td>
             </tr>
           </table>
