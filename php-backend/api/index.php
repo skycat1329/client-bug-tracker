@@ -196,8 +196,87 @@ function ensure_security_schema() {
 
         db_execute("INSERT INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('OFF', 1000) ON DUPLICATE KEY UPDATE `prefix` = `prefix`");
         db_execute("INSERT INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('PAY', 1000) ON DUPLICATE KEY UPDATE `prefix` = `prefix`");
+
+        ensure_attendance_schema();
     } catch (Exception $e) {}
 }
+
+function ensure_attendance_schema() {
+    static $ensured = false;
+    if ($ensured) return;
+    $ensured = true;
+    try {
+        db_execute("CREATE TABLE IF NOT EXISTS `office_locations` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(150) NOT NULL,
+            `latitude` DECIMAL(10, 8) NOT NULL,
+            `longitude` DECIMAL(11, 8) NOT NULL,
+            `radius_meters` INT NOT NULL DEFAULT 100,
+            `punch_out_geofence_required` TINYINT(1) NOT NULL DEFAULT 1,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("CREATE TABLE IF NOT EXISTS `attendance` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` VARCHAR(64) NOT NULL,
+            `attendance_date` DATE NOT NULL,
+            `check_in_time` DATETIME NOT NULL,
+            `check_in_lat` DECIMAL(10, 8) NOT NULL,
+            `check_in_lng` DECIMAL(11, 8) NOT NULL,
+            `check_in_accuracy` FLOAT NULL,
+            `check_in_distance_meters` FLOAT NULL,
+            `check_in_status` VARCHAR(20) NOT NULL DEFAULT 'present',
+            `check_in_method` VARCHAR(20) NOT NULL DEFAULT 'gps',
+            `check_out_time` DATETIME NULL,
+            `check_out_lat` DECIMAL(10, 8) NULL,
+            `check_out_lng` DECIMAL(11, 8) NULL,
+            `check_out_accuracy` FLOAT NULL,
+            `check_out_distance_meters` FLOAT NULL,
+            `check_out_method` VARCHAR(20) NULL,
+            `notes` TEXT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `unique_user_date` (`user_id`, `attendance_date`),
+            INDEX `idx_attendance_user` (`user_id`),
+            INDEX `idx_attendance_date` (`attendance_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("CREATE TABLE IF NOT EXISTS `attendance_audit_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `actor_user_id` VARCHAR(64) NULL,
+            `action` VARCHAR(50) NOT NULL,
+            `target_user_id` VARCHAR(64) NULL,
+            `payload` LONGTEXT NULL,
+            `ip_address` VARCHAR(45) NULL,
+            `user_agent` TEXT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX `idx_audit_actor` (`actor_user_id`),
+            INDEX `idx_audit_target` (`target_user_id`),
+            INDEX `idx_audit_created` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Seed default office location if empty
+        $cnt = db_query_one("SELECT COUNT(*) as c FROM office_locations");
+        if (empty($cnt['c'])) {
+            db_execute("INSERT INTO office_locations (name, latitude, longitude, radius_meters, punch_out_geofence_required, is_active)
+                        VALUES ('Assurance Media LLP', 19.08250795, 72.89673053, 100, 1, 1)");
+        }
+    } catch (Exception $e) {}
+}
+
+function haversine_distance_meters(float $lat1, float $lon1, float $lat2, float $lon2): float {
+    $earthRadius = 6371000; // in meters
+    $dLat = deg2rad($lat2 - $lat1);
+    $dLon = deg2rad($lon2 - $lon1);
+    $a = sin($dLat / 2) * sin($dLat / 2) +
+         cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+         sin($dLon / 2) * sin($dLon / 2);
+    $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+    return round($earthRadius * $c, 2);
+}
+
 
 function check_rate_limit(string $email = ''): bool {
     ensure_security_schema();
@@ -1670,13 +1749,13 @@ if ($method === 'GET' && $path === '/api/health') {
 // POST /api/auth/login
 if ($method === 'POST' && $path === '/api/auth/login') {
     $input = get_json_input();
-    $email = strtolower(trim($input['email'] ?? ''));
+    $email = strtolower(trim($input['email'] ?? $input['username'] ?? ''));
     $password = $input['password'] ?? '';
     $totpCode = trim($input['totp_code'] ?? '');
     $portal = strtolower(trim($input['portal'] ?? ''));
 
     if (empty($email) || empty($password)) {
-        json_error('Email and password are required', 400);
+        json_error('Email or username and password are required', 400);
     }
 
     // Rate Limiting & Account Lockout Check (Max 5 failed attempts per IP or Email in 15 mins)
@@ -1687,7 +1766,7 @@ if ($method === 'POST' && $path === '/api/auth/login') {
         ], 429);
     }
 
-    $user = db_query_one('SELECT * FROM users WHERE LOWER(TRIM(email)) = ?', [$email]);
+    $user = db_query_one('SELECT * FROM users WHERE LOWER(TRIM(email)) = ? OR LOWER(TRIM(name)) = ? OR id = ?', [$email, $email, $email]);
     if (!$user || !password_verify($password, $user['password_hash'])) {
         auth_generic_failure($email);
     }
@@ -5569,29 +5648,36 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
         }
 
         .header-box {
-          position: relative;
-          text-align: center;
-          margin-bottom: 24px;
-          min-height: 70px;
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          margin-bottom: 20px;
+          min-height: 56px;
         }
         .header-logo {
-          position: absolute;
-          left: 0;
-          top: 0;
-          height: 62px;
+          height: 52px;
+          width: auto;
+          flex-shrink: 0;
+          display: block;
+        }
+        .header-text {
+          flex: 1;
+          text-align: center;
+          padding-right: 20px;
         }
         .header-title {
-          font-size: 20px;
+          font-size: 19px;
           font-weight: 800;
           color: #000000;
           letter-spacing: -0.3px;
+          line-height: 1.2;
         }
         .header-addr {
-          font-size: 11.5px;
+          font-size: 10.5px;
           font-weight: 600;
           color: #111111;
-          margin-top: 4px;
-          line-height: 1.4;
+          margin-top: 3px;
+          line-height: 1.35;
         }
 
         .payslip-table {
@@ -5651,6 +5737,22 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
             padding: 30px 36px !important;
             box-shadow: none !important;
           }
+          .header-box {
+            display: flex !important;
+            align-items: center !important;
+            gap: 16px !important;
+          }
+          .header-logo {
+            height: 52px !important;
+            width: auto !important;
+            flex-shrink: 0 !important;
+            display: block !important;
+          }
+          .header-text {
+            flex: 1 !important;
+            text-align: center !important;
+            padding-right: 20px !important;
+          }
         }
       </style>
     </head>
@@ -5667,11 +5769,13 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
       </div>
 
       <div class='doc-page'>
-        <!-- Company Header with Logo -->
+        <!-- Company Header with Logo (Flexbox non-overlapping columns) -->
         <div class='header-box'>
           <img src='" . $payslipLogo . "' class='header-logo' alt='Assurance Media' />
-          <div class='header-title'>Assurance Media LLP</div>
-          <div class='header-addr'>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.</div>
+          <div class='header-text'>
+            <div class='header-title'>Assurance Media LLP</div>
+            <div class='header-addr'>302, 3rd Floor, Shivkrupa Bldg, Opp Neelkanth Corporate Park, Vidyavihar West Mumbai - 400086.</div>
+          </div>
         </div>
 
         <!-- Boxed Payslip Grid (Exact Replica of Sample) -->
@@ -5736,6 +5840,451 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
       </div>
     </body>
     </html>";
+    exit;
+}
+
+// ==============================================================================
+// 5. GPS Geofence Employee Attendance Endpoints
+// ==============================================================================
+
+// GET /api/attendance/office & GET /api/admin/office
+if ($method === 'GET' && ($path === '/api/attendance/office' || $path === '/api/admin/office')) {
+    $user = require_auth();
+    ensure_attendance_schema();
+
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if (!$office) {
+        $office = [
+            'id' => 1,
+            'name' => 'Assurance Media LLP',
+            'latitude' => 19.08250795,
+            'longitude' => 72.89673053,
+            'radius_meters' => 100,
+            'punch_out_geofence_required' => 1,
+            'is_active' => 1
+        ];
+    }
+
+    $office['id'] = (int)$office['id'];
+    $office['latitude'] = (float)$office['latitude'];
+    $office['longitude'] = (float)$office['longitude'];
+    $office['radius_meters'] = (int)$office['radius_meters'];
+    $office['punch_out_geofence_required'] = (bool)$office['punch_out_geofence_required'];
+    $office['is_active'] = (bool)$office['is_active'];
+
+    json_response(['success' => true, 'data' => $office]);
+}
+
+// PUT /api/admin/attendance/office & PUT /api/admin/office
+if ($method === 'PUT' && ($path === '/api/admin/attendance/office' || $path === '/api/admin/office')) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $name = trim($input['name'] ?? 'Assurance Media LLP');
+    $lat = isset($input['latitude']) ? (float)$input['latitude'] : 0.0;
+    $lng = isset($input['longitude']) ? (float)$input['longitude'] : 0.0;
+    $radius = max(10, min(5000, (int)($input['radius_meters'] ?? 100)));
+    $punchOutReq = !empty($input['punch_out_geofence_required']) ? 1 : 0;
+
+    $existing = db_query_one("SELECT id FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if ($existing) {
+        db_execute(
+            "UPDATE office_locations SET name = ?, latitude = ?, longitude = ?, radius_meters = ?, punch_out_geofence_required = ? WHERE id = ?",
+            [$name, $lat, $lng, $radius, $punchOutReq, $existing['id']]
+        );
+    } else {
+        db_execute(
+            "INSERT INTO office_locations (name, latitude, longitude, radius_meters, punch_out_geofence_required, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+            [$name, $lat, $lng, $radius, $punchOutReq]
+        );
+    }
+
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, payload, ip_address, user_agent) VALUES (?, 'update_office_location', ?, ?, ?)",
+            [$user['id'], json_encode($input), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    $updated = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    $updated['id'] = (int)$updated['id'];
+    $updated['latitude'] = (float)$updated['latitude'];
+    $updated['longitude'] = (float)$updated['longitude'];
+    $updated['radius_meters'] = (int)$updated['radius_meters'];
+    $updated['punch_out_geofence_required'] = (bool)$updated['punch_out_geofence_required'];
+    $updated['is_active'] = (bool)$updated['is_active'];
+
+    json_response([
+        'success' => true,
+        'message' => 'Office geofence location updated successfully',
+        'data' => $updated
+    ]);
+}
+
+// GET /api/attendance/today & /api/v1/attendance/today
+if ($method === 'GET' && ($path === '/api/attendance/today' || $path === '/api/v1/attendance/today')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $today = date('Y-m-d');
+    $record = db_query_one(
+        "SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1",
+        [$user['id'], $today]
+    );
+
+    if ($record) {
+        $record['id'] = (int)$record['id'];
+        $record['check_in_lat'] = (float)$record['check_in_lat'];
+        $record['check_in_lng'] = (float)$record['check_in_lng'];
+        $record['check_in_accuracy'] = $record['check_in_accuracy'] !== null ? (float)$record['check_in_accuracy'] : null;
+        $record['check_in_distance_meters'] = $record['check_in_distance_meters'] !== null ? (float)$record['check_in_distance_meters'] : null;
+        $record['check_in_local'] = date('h:i:s A', strtotime($record['check_in_time']));
+        $record['check_in_utc'] = $record['check_in_time'];
+        if ($record['check_out_time'] !== null) {
+            $record['check_out_lat'] = $record['check_out_lat'] !== null ? (float)$record['check_out_lat'] : null;
+            $record['check_out_lng'] = $record['check_out_lng'] !== null ? (float)$record['check_out_lng'] : null;
+            $record['check_out_accuracy'] = $record['check_out_accuracy'] !== null ? (float)$record['check_out_accuracy'] : null;
+            $record['check_out_distance_meters'] = $record['check_out_distance_meters'] !== null ? (float)$record['check_out_distance_meters'] : null;
+            $record['check_out_local'] = date('h:i:s A', strtotime($record['check_out_time']));
+            $record['check_out_utc'] = $record['check_out_time'];
+        }
+    }
+
+    $payload = [
+        'attendance_date' => $today,
+        'attendance' => $record ?: null,
+        'is_checked_in' => $record !== null,
+        'is_checked_out' => $record !== null && !empty($record['check_out_time']),
+        // Direct properties for flat consumption:
+        'id' => $record ? $record['id'] : null,
+        'check_in_time' => $record ? $record['check_in_time'] : null,
+        'check_in_local' => $record ? $record['check_in_local'] : null,
+        'check_out_time' => $record ? $record['check_out_time'] : null,
+        'check_out_local' => $record ? ($record['check_out_local'] ?? null) : null,
+        'check_in_distance_meters' => $record ? $record['check_in_distance_meters'] : null,
+        'check_out_distance_meters' => $record ? $record['check_out_distance_meters'] : null,
+    ];
+
+    json_response([
+        'success' => true,
+        'data' => $payload
+    ]);
+}
+
+// POST /api/attendance/check-in & /api/v1/attendance/punch-in
+if ($method === 'POST' && ($path === '/api/attendance/check-in' || $path === '/api/v1/attendance/punch-in' || $path === '/api/attendance/punch-in')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    if (!isset($input['latitude']) || !isset($input['longitude'])) {
+        json_error('GPS latitude and longitude coordinates are required for attendance punch', 400);
+    }
+
+    $lat = (float)$input['latitude'];
+    $lng = (float)$input['longitude'];
+    $accuracy = isset($input['accuracy']) ? (float)$input['accuracy'] : (isset($input['accuracy_meters']) ? (float)$input['accuracy_meters'] : null);
+    $notes = trim($input['notes'] ?? '');
+    $today = date('Y-m-d');
+
+    // Prevent double punch-in
+    $existing = db_query_one(
+        "SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1",
+        [$user['id'], $today]
+    );
+    if ($existing) {
+        $formattedTime = date('h:i:s A', strtotime($existing['check_in_time']));
+        json_error("You have already punched in for today at {$formattedTime}", 409, [
+            'existing_check_in_local' => $formattedTime,
+            'record' => $existing
+        ]);
+    }
+
+    // Geofence Distance Validation
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if (!$office) {
+        json_error('Office location is not configured in the system', 500);
+    }
+
+    $dist = haversine_distance_meters($lat, $lng, (float)$office['latitude'], (float)$office['longitude']);
+    $allowedRadius = (int)$office['radius_meters'];
+
+    if ($dist > $allowedRadius) {
+        $roundedDist = round($dist);
+        json_error("You are outside the office geofence ({$roundedDist}m away, allowed within {$allowedRadius}m of {$office['name']})", 403, [
+            'distance_meters' => $dist,
+            'radius_meters' => $allowedRadius,
+            'office_name' => $office['name']
+        ]);
+    }
+
+    db_execute(
+        "INSERT INTO attendance (user_id, attendance_date, check_in_time, check_in_lat, check_in_lng, check_in_accuracy, check_in_distance_meters, check_in_status, check_in_method, notes)
+         VALUES (?, ?, NOW(), ?, ?, ?, ?, 'present', 'gps', ?)",
+        [$user['id'], $today, $lat, $lng, $accuracy, $dist, $notes]
+    );
+
+    $newRec = db_query_one(
+        "SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1",
+        [$user['id'], $today]
+    );
+
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, target_user_id, payload, ip_address, user_agent) VALUES (?, 'check_in', ?, ?, ?, ?)",
+            [$user['id'], $user['id'], json_encode(['distance' => $dist, 'lat' => $lat, 'lng' => $lng]), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    $timeStr = date('h:i:s A', strtotime($newRec['check_in_time']));
+    $newRec['check_in_local'] = $timeStr;
+    $newRec['check_in_utc'] = $newRec['check_in_time'];
+    $newRec['attendance_id'] = (int)$newRec['id'];
+    $newRec['distance_meters'] = (float)$dist;
+    $newRec['accuracy_meters'] = $accuracy !== null ? (float)$accuracy : 0.0;
+
+    json_response([
+        'success' => true,
+        'message' => "Punched in successfully at {$timeStr}",
+        'data' => $newRec
+    ], 201);
+}
+
+// POST /api/attendance/check-out & /api/v1/attendance/punch-out
+if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/api/v1/attendance/punch-out' || $path === '/api/attendance/punch-out')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $today = date('Y-m-d');
+    $record = db_query_one(
+        "SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1",
+        [$user['id'], $today]
+    );
+
+    if (!$record) {
+        json_error('You have not punched in today', 400);
+    }
+    if (!empty($record['check_out_time'])) {
+        $formattedOut = date('h:i:s A', strtotime($record['check_out_time']));
+        json_error("You have already punched out for today at {$formattedOut}", 409, [
+            'existing_check_out_local' => $formattedOut
+        ]);
+    }
+
+    $input = get_json_input();
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+
+    $lat = isset($input['latitude']) ? (float)$input['latitude'] : null;
+    $lng = isset($input['longitude']) ? (float)$input['longitude'] : null;
+    $accuracy = isset($input['accuracy']) ? (float)$input['accuracy'] : null;
+    $dist = null;
+
+    if (!empty($office['punch_out_geofence_required'])) {
+        if ($lat === null || $lng === null) {
+            json_error('GPS location is required for punch out', 400);
+        }
+        $dist = haversine_distance_meters($lat, $lng, (float)$office['latitude'], (float)$office['longitude']);
+        $allowedRadius = (int)$office['radius_meters'];
+        if ($dist > $allowedRadius) {
+            $roundedDist = round($dist);
+            json_error("You are outside the office geofence for punch out ({$roundedDist}m away, allowed within {$allowedRadius}m)", 403, [
+                'distance_meters' => $dist,
+                'radius_meters' => $allowedRadius
+            ]);
+        }
+    } elseif ($lat !== null && $lng !== null && $office) {
+        $dist = haversine_distance_meters($lat, $lng, (float)$office['latitude'], (float)$office['longitude']);
+    }
+
+    db_execute(
+        "UPDATE attendance SET check_out_time = NOW(), check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, check_out_distance_meters = ?, check_out_method = 'gps' WHERE id = ?",
+        [$lat, $lng, $accuracy, $dist, $record['id']]
+    );
+
+    $updatedRec = db_query_one("SELECT * FROM attendance WHERE id = ?", [$record['id']]);
+
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, target_user_id, payload, ip_address, user_agent) VALUES (?, 'check_out', ?, ?, ?, ?)",
+            [$user['id'], $user['id'], json_encode(['distance' => $dist, 'lat' => $lat, 'lng' => $lng]), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    $timeStr = date('h:i:s A', strtotime($updatedRec['check_out_time']));
+    json_response([
+        'success' => true,
+        'message' => "Punched out successfully at {$timeStr}",
+        'data' => $updatedRec
+    ]);
+}
+
+// GET /api/attendance/my-history
+if ($method === 'GET' && $path === '/api/attendance/my-history') {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $limit = min(90, max(1, (int)($_GET['limit'] ?? 30)));
+    $records = db_query(
+        "SELECT * FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC, check_in_time DESC LIMIT {$limit}",
+        [$user['id']]
+    );
+
+    foreach ($records as &$r) {
+        $r['id'] = (int)$r['id'];
+        $r['check_in_lat'] = (float)$r['check_in_lat'];
+        $r['check_in_lng'] = (float)$r['check_in_lng'];
+        if ($r['check_in_accuracy'] !== null) $r['check_in_accuracy'] = (float)$r['check_in_accuracy'];
+        if ($r['check_in_distance_meters'] !== null) $r['check_in_distance_meters'] = (float)$r['check_in_distance_meters'];
+        if ($r['check_out_lat'] !== null) $r['check_out_lat'] = (float)$r['check_out_lat'];
+        if ($r['check_out_lng'] !== null) $r['check_out_lng'] = (float)$r['check_out_lng'];
+        if ($r['check_out_accuracy'] !== null) $r['check_out_accuracy'] = (float)$r['check_out_accuracy'];
+        if ($r['check_out_distance_meters'] !== null) $r['check_out_distance_meters'] = (float)$r['check_out_distance_meters'];
+    }
+
+    json_response(['success' => true, 'data' => $records]);
+}
+
+// GET /api/admin/attendance/report
+if ($method === 'GET' && $path === '/api/admin/attendance/report') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $targetDate = $_GET['date'] ?? date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $targetDate)) {
+        $targetDate = date('Y-m-d');
+    }
+
+    $search = trim($_GET['search'] ?? '');
+    $params = [$targetDate];
+    $searchClause = "";
+    if (!empty($search)) {
+        $searchClause = " AND (u.name LIKE ? OR u.email LIKE ?) ";
+        $params[] = "%{$search}%";
+        $params[] = "%{$search}%";
+    }
+
+    $roster = db_query("SELECT 
+        u.id as user_id, u.name as user_name, u.email as user_email, u.role as user_role, u.avatar_url,
+        a.id as attendance_id, a.attendance_date, a.check_in_time, a.check_in_lat, a.check_in_lng, a.check_in_distance_meters, a.check_in_accuracy,
+        a.check_out_time, a.check_out_lat, a.check_out_lng, a.check_out_distance_meters, a.notes,
+        CASE 
+            WHEN a.id IS NOT NULL THEN 'PRESENT'
+            ELSE 'NOT_PUNCHED'
+        END as status
+    FROM users u
+    LEFT JOIN attendance a ON a.user_id = u.id AND a.attendance_date = ?
+    WHERE u.role != 'client' {$searchClause}
+    ORDER BY (a.check_in_time IS NULL) ASC, a.check_in_time DESC, u.name ASC", $params);
+
+    foreach ($roster as &$row) {
+        if ($row['attendance_id'] !== null) $row['attendance_id'] = (int)$row['attendance_id'];
+        if ($row['check_in_lat'] !== null) $row['check_in_lat'] = (float)$row['check_in_lat'];
+        if ($row['check_in_lng'] !== null) $row['check_in_lng'] = (float)$row['check_in_lng'];
+        if ($row['check_in_distance_meters'] !== null) $row['check_in_distance_meters'] = (float)$row['check_in_distance_meters'];
+        if ($row['check_out_lat'] !== null) $row['check_out_lat'] = (float)$row['check_out_lat'];
+        if ($row['check_out_lng'] !== null) $row['check_out_lng'] = (float)$row['check_out_lng'];
+        if ($row['check_out_distance_meters'] !== null) $row['check_out_distance_meters'] = (float)$row['check_out_distance_meters'];
+    }
+
+    json_response([
+        'success' => true,
+        'date' => $targetDate,
+        'data' => $roster
+    ]);
+}
+
+// GET /api/admin/attendance/export
+if ($method === 'GET' && $path === '/api/admin/attendance/export') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $date = $_GET['date'] ?? null;
+    $month = $_GET['month'] ?? date('Y-m');
+
+    if ($date && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        $records = db_query(
+            "SELECT a.*, u.name as user_name, u.email as user_email, u.role as user_role 
+             FROM attendance a 
+             JOIN users u ON u.id = a.user_id 
+             WHERE a.attendance_date = ? 
+             ORDER BY a.check_in_time ASC",
+            [$date]
+        );
+        $filename = "attendance_roster_{$date}.csv";
+    } else {
+        $records = db_query(
+            "SELECT a.*, u.name as user_name, u.email as user_email, u.role as user_role 
+             FROM attendance a 
+             JOIN users u ON u.id = a.user_id 
+             WHERE a.attendance_date LIKE ? 
+             ORDER BY a.attendance_date DESC, a.check_in_time ASC",
+            ["{$month}%"]
+        );
+        $filename = "attendance_roster_{$month}.csv";
+    }
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header("Content-Disposition: attachment; filename=\"{$filename}\"");
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    $out = fopen('php://output', 'w');
+    // UTF-8 BOM for Microsoft Excel compatibility
+    fwrite($out, "\xEF\xBB\xBF");
+
+    fputcsv($out, [
+        'Date',
+        'Employee ID',
+        'Employee Name',
+        'Email',
+        'Role',
+        'Check-In Time',
+        'Check-In Distance (m)',
+        'Check-Out Time',
+        'Check-Out Distance (m)',
+        'Status',
+        'Notes'
+    ]);
+
+    foreach ($records as $r) {
+        fputcsv($out, [
+            $r['attendance_date'],
+            $r['user_id'],
+            $r['user_name'],
+            $r['user_email'],
+            $r['user_role'],
+            $r['check_in_time'] ? date('h:i:s A', strtotime($r['check_in_time'])) : '',
+            $r['check_in_distance_meters'] !== null ? round($r['check_in_distance_meters']) . ' m' : '',
+            $r['check_out_time'] ? date('h:i:s A', strtotime($r['check_out_time'])) : '',
+            $r['check_out_distance_meters'] !== null ? round($r['check_out_distance_meters']) . ' m' : '',
+            $r['check_in_status'] ?? 'present',
+            $r['notes'] ?? ''
+        ]);
+    }
+
+    fclose($out);
     exit;
 }
 
