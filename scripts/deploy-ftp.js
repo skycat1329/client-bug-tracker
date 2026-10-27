@@ -85,8 +85,9 @@ async function deploy() {
     }
 
     const client = new ftp.Client();
-    client.ftp.verbose = false;
-    client.ftp.timeout = 45000;
+    client.ftp.verbose = true;
+    client.ftp.timeout = 60000;
+    client.prepareTransfer = ftp.enterPassiveModeIPv4;
 
     try {
       if (attempt > 1) {
@@ -115,6 +116,20 @@ async function deploy() {
           await client.ensureDir(`${remoteRoot}/${remoteDir}`);
         } else {
           await client.cd(remoteRoot);
+        }
+
+        // If it's an unchanging image or static asset and remote size matches local size, skip re-uploading
+        const isStaticAsset = file.relPath.includes('/documents/') || file.relPath.endsWith('.jpg') || file.relPath.endsWith('.png');
+        if (isStaticAsset) {
+          try {
+            const remoteSize = await client.size(remoteFileName);
+            const localSize = fs.statSync(file.fullPath).size;
+            if (remoteSize === localSize) {
+              uploadedFiles.add(file.relPath);
+              console.log(`   ⏭️ Skipped (unchanged): ${file.relPath}`);
+              continue;
+            }
+          } catch (_) {}
         }
 
         // Remove any pure-ftpd temporary lock file left by interrupted uploads

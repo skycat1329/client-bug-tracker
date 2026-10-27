@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Ticket, UserCheck, Menu, PlusCircle } from 'lucide-react';
+import { LayoutDashboard, Ticket, UserCheck, Menu, PlusCircle, Clock } from 'lucide-react';
 import { useAuth } from './context/AuthContext.js';
 import { Navbar } from './components/Navbar.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -25,6 +25,7 @@ import { GoogleSheetsPage } from './pages/internal/GoogleSheetsPage.js';
 import { QueuesPage } from './pages/internal/QueuesPage.js';
 import { TasksPage } from './pages/internal/TasksPage.js';
 import { PayrollDocumentsPage } from './pages/internal/PayrollDocumentsPage.js';
+import { AttendancePage } from './pages/internal/AttendancePage.js';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
@@ -63,6 +64,7 @@ export const App: React.FC = () => {
       user &&
       ![
         'overview',
+        'attendance',
         'tickets',
         'my-tickets',
         'ticket-detail',
@@ -199,6 +201,7 @@ export const App: React.FC = () => {
                   onBack={handleBackToTickets}
                 />
               )}
+              {currentView === 'attendance' && <AttendancePage />}
               {currentView === 'organizations' && <OrganizationsPage />}
               {currentView === 'queues' && <QueuesPage />}
               {currentView === 'team' && <TeamPage />}
@@ -254,20 +257,36 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Mobile Bottom Navigation Bar for Internal Staff */}
+      {/* Mobile Bottom Navigation Bar for Internal Staff (Darwinbox Mobile App Experience) */}
       {!isClient && (
-        <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 py-1.5 flex items-center justify-around shadow-lg">
+        <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 flex items-center justify-between shadow-xl">
           <button
             onClick={() => {
               setSelectedTicketId(null);
               setCurrentView('overview');
             }}
-            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
+            className={`flex flex-col items-center py-1 px-2 rounded-lg text-xs font-semibold transition-colors ${
               currentView === 'overview' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             <LayoutDashboard size={18} />
-            <span className="text-[10px] mt-0.5">Overview</span>
+            <span className="text-[10px] mt-0.5 font-bold">Home</span>
+          </button>
+
+          {/* Darwinbox Prime Action: Clock-In */}
+          <button
+            onClick={() => {
+              setSelectedTicketId(null);
+              setCurrentView('attendance');
+            }}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-extrabold shadow-md transition-all ${
+              currentView === 'attendance'
+                ? 'bg-blue-600 text-white shadow-blue-500/30 ring-2 ring-blue-400/50'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-emerald-600/25 active:scale-95'
+            }`}
+          >
+            <Clock size={15} className="animate-pulse" />
+            <span>Punch Clock</span>
           </button>
 
           <button
@@ -275,33 +294,33 @@ export const App: React.FC = () => {
               setSelectedTicketId(null);
               setCurrentView('tickets');
             }}
-            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
+            className={`flex flex-col items-center py-1 px-2 rounded-lg text-xs font-semibold transition-colors ${
               currentView === 'tickets' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             <Ticket size={18} />
-            <span className="text-[10px] mt-0.5">Queues</span>
+            <span className="text-[10px] mt-0.5 font-bold">Queues</span>
           </button>
 
           <button
             onClick={() => {
               setSelectedTicketId(null);
-              setCurrentView('my-tickets');
+              setCurrentView('tasks');
             }}
-            className={`flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold transition-colors ${
-              currentView === 'my-tickets' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+            className={`flex flex-col items-center py-1 px-2 rounded-lg text-xs font-semibold transition-colors ${
+              currentView === 'tasks' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             <UserCheck size={18} />
-            <span className="text-[10px] mt-0.5">My Tasks</span>
+            <span className="text-[10px] mt-0.5 font-bold">Tasks</span>
           </button>
 
           <button
             onClick={() => setMobileNavOpen(true)}
-            className="flex flex-col items-center py-1 px-3 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-700"
+            className="flex flex-col items-center py-1 px-2 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-700"
           >
             <Menu size={18} />
-            <span className="text-[10px] mt-0.5">More</span>
+            <span className="text-[10px] mt-0.5 font-bold">Menu</span>
           </button>
         </div>
       )}

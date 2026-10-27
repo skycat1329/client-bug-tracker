@@ -5832,5 +5832,951 @@ if ($method === 'GET' && preg_match('#^/api/payroll/view/payslip/([a-zA-Z0-9]+)$
     exit;
 }
 
+// ==============================================================================
+// 15. Darwinbox Attendance, GPS Geofencing & Google Sheets Sync
+// ==============================================================================
+
+function haversine_distance_meters(float $lat1, float $lon1, float $lat2, float $lon2): float {
+    $earthRadius = 6371000; // in meters
+    $dLat = deg2rad($lat2 - $lat1);
+    $dLon = deg2rad($lon2 - $lon1);
+    $a = sin($dLat / 2) * sin($dLat / 2) +
+         cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+         sin($dLon / 2) * sin($dLon / 2);
+    $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+    return round($earthRadius * $c, 2);
+}
+
+function ensure_attendance_schema() {
+    static $ensured = false;
+    if ($ensured) return;
+    $ensured = true;
+    try {
+        db_execute("CREATE TABLE IF NOT EXISTS `office_locations` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `name` VARCHAR(150) NOT NULL DEFAULT 'Assurance Media HQ',
+            `latitude` DECIMAL(10, 8) NOT NULL DEFAULT 19.08250795,
+            `longitude` DECIMAL(11, 8) NOT NULL DEFAULT 72.89673053,
+            `radius_meters` INT NOT NULL DEFAULT 100,
+            `shift_start` TIME NOT NULL DEFAULT '10:00:00',
+            `shift_end` TIME NOT NULL DEFAULT '19:00:00',
+            `grace_period_minutes` INT NOT NULL DEFAULT 15,
+            `half_day_hours` DECIMAL(4, 2) NOT NULL DEFAULT 4.00,
+            `full_day_hours` DECIMAL(4, 2) NOT NULL DEFAULT 8.00,
+            `punch_out_geofence_required` TINYINT(1) NOT NULL DEFAULT 1,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("CREATE TABLE IF NOT EXISTS `attendance` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` VARCHAR(64) NOT NULL,
+            `attendance_date` DATE NOT NULL,
+            `work_mode` ENUM('office', 'wfh', 'on_duty') NOT NULL DEFAULT 'office',
+            `shift_start` TIME DEFAULT '10:00:00',
+            `shift_end` TIME DEFAULT '19:00:00',
+            `check_in_time` DATETIME NOT NULL,
+            `check_in_lat` DECIMAL(10, 8) NULL,
+            `check_in_lng` DECIMAL(11, 8) NULL,
+            `check_in_accuracy` FLOAT NULL,
+            `check_in_distance_meters` FLOAT NULL,
+            `check_in_status` VARCHAR(20) NOT NULL DEFAULT 'present',
+            `check_in_method` VARCHAR(20) NOT NULL DEFAULT 'gps',
+            `check_out_time` DATETIME NULL,
+            `check_out_lat` DECIMAL(10, 8) NULL,
+            `check_out_lng` DECIMAL(11, 8) NULL,
+            `check_out_accuracy` FLOAT NULL,
+            `check_out_distance_meters` FLOAT NULL,
+            `check_out_method` VARCHAR(20) NULL,
+            `total_work_minutes` INT NULL,
+            `final_status` VARCHAR(20) NOT NULL DEFAULT 'PRESENT',
+            `is_regularized` TINYINT(1) NOT NULL DEFAULT 0,
+            `notes` TEXT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY `unique_user_date` (`user_id`, `attendance_date`),
+            INDEX `idx_attendance_user` (`user_id`),
+            INDEX `idx_attendance_date` (`attendance_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("CREATE TABLE IF NOT EXISTS `attendance_regularizations` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` VARCHAR(64) NOT NULL,
+            `attendance_date` DATE NOT NULL,
+            `requested_check_in` TIME NOT NULL,
+            `requested_check_out` TIME NOT NULL,
+            `work_mode` ENUM('office', 'wfh', 'on_duty') NOT NULL DEFAULT 'office',
+            `reason` TEXT NOT NULL,
+            `status` ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'PENDING',
+            `reviewer_id` VARCHAR(64) NULL,
+            `reviewer_notes` TEXT NULL,
+            `reviewed_at` DATETIME NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_reg_user` (`user_id`),
+            INDEX `idx_reg_date` (`attendance_date`),
+            INDEX `idx_reg_status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("CREATE TABLE IF NOT EXISTS `attendance_audit_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `actor_user_id` VARCHAR(64) NULL,
+            `action` VARCHAR(50) NOT NULL,
+            `target_user_id` VARCHAR(64) NULL,
+            `payload` LONGTEXT NULL,
+            `ip_address` VARCHAR(45) NULL,
+            `user_agent` TEXT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX `idx_audit_actor` (`actor_user_id`),
+            INDEX `idx_audit_target` (`target_user_id`),
+            INDEX `idx_audit_created` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Migration: Ensure new Darwinbox columns exist on existing attendance table
+        $attCols = db_query("SHOW COLUMNS FROM `attendance`");
+        $existingCols = array_column($attCols, 'Field');
+        if (!in_array('work_mode', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `work_mode` ENUM('office', 'wfh', 'on_duty') NOT NULL DEFAULT 'office' AFTER `attendance_date`");
+        }
+        if (!in_array('shift_start', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `shift_start` TIME DEFAULT '10:00:00' AFTER `work_mode`");
+        }
+        if (!in_array('shift_end', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `shift_end` TIME DEFAULT '19:00:00' AFTER `shift_start`");
+        }
+        if (!in_array('total_work_minutes', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `total_work_minutes` INT NULL AFTER `check_out_method`");
+        }
+        if (!in_array('final_status', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `final_status` VARCHAR(20) NOT NULL DEFAULT 'PRESENT' AFTER `total_work_minutes`");
+        }
+        if (!in_array('is_regularized', $existingCols, true)) {
+            db_execute("ALTER TABLE `attendance` ADD COLUMN `is_regularized` TINYINT(1) NOT NULL DEFAULT 0 AFTER `final_status`");
+        }
+
+        // Migration: Ensure office_locations has Darwinbox shift columns
+        $offCols = db_query("SHOW COLUMNS FROM `office_locations`");
+        $existingOffCols = array_column($offCols, 'Field');
+        if (!in_array('shift_start', $existingOffCols, true)) {
+            db_execute("ALTER TABLE `office_locations` ADD COLUMN `shift_start` TIME NOT NULL DEFAULT '10:00:00' AFTER `radius_meters`");
+        }
+        if (!in_array('shift_end', $existingOffCols, true)) {
+            db_execute("ALTER TABLE `office_locations` ADD COLUMN `shift_end` TIME NOT NULL DEFAULT '19:00:00' AFTER `shift_start`");
+        }
+        if (!in_array('grace_period_minutes', $existingOffCols, true)) {
+            db_execute("ALTER TABLE `office_locations` ADD COLUMN `grace_period_minutes` INT NOT NULL DEFAULT 15 AFTER `shift_end`");
+        }
+        if (!in_array('half_day_hours', $existingOffCols, true)) {
+            db_execute("ALTER TABLE `office_locations` ADD COLUMN `half_day_hours` DECIMAL(4, 2) NOT NULL DEFAULT 4.00 AFTER `grace_period_minutes`");
+        }
+        if (!in_array('full_day_hours', $existingOffCols, true)) {
+            db_execute("ALTER TABLE `office_locations` ADD COLUMN `full_day_hours` DECIMAL(4, 2) NOT NULL DEFAULT 8.00 AFTER `half_day_hours`");
+        }
+
+        // Seed default office location if empty
+        $cnt = db_query_one("SELECT COUNT(*) as c FROM office_locations");
+        if (empty($cnt['c'])) {
+            db_execute("INSERT INTO office_locations (name, latitude, longitude, radius_meters, shift_start, shift_end, grace_period_minutes, half_day_hours, full_day_hours, punch_out_geofence_required, is_active)
+                        VALUES ('Assurance Media HQ', 19.08250795, 72.89673053, 100, '10:00:00', '19:00:00', 15, 4.00, 8.00, 1, 1)");
+        }
+    } catch (Exception $e) {}
+}
+
+function sync_attendance_to_google_sheet(array $attendance, string $event, string $actorName = 'System'): bool {
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
+    $config = $setting ? json_decode($setting['value'], true) : [];
+
+    $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
+    $globalUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+
+    if (!$globalEnabled || empty($globalUrl)) {
+        return false;
+    }
+
+    $u = db_query_one('SELECT name, email, role FROM users WHERE id = ?', [$attendance['user_id']]);
+    $employeeName = $u ? $u['name'] : ($attendance['user_name'] ?? 'Employee');
+    $employeeEmail = $u ? $u['email'] : ($attendance['user_email'] ?? '');
+    $role = $u ? $u['role'] : '';
+
+    $distance = $attendance['check_in_distance_meters'] !== null ? round((float)$attendance['check_in_distance_meters']) : null;
+    $geofenceVerdict = ($attendance['work_mode'] ?? 'office') === 'office'
+        ? ($distance !== null ? "Inside ({$distance}m)" : "In-Office")
+        : strtoupper($attendance['work_mode'] ?? 'WFH');
+
+    $totalHours = !empty($attendance['total_work_minutes']) ? round($attendance['total_work_minutes'] / 60, 2) : 0;
+
+    $payload = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'sheet_type' => 'attendance',
+        'tab_name' => 'Attendance',
+        'event' => $event,
+        'attendance_id' => $attendance['id'] ?? '',
+        'attendance_date' => $attendance['attendance_date'] ?? date('Y-m-d'),
+        'user_id' => $attendance['user_id'] ?? '',
+        'employee_name' => $employeeName,
+        'employee_email' => $employeeEmail,
+        'role' => $role,
+        'work_mode' => strtoupper($attendance['work_mode'] ?? 'OFFICE'),
+        'shift' => ($attendance['shift_start'] ?? '10:00:00') . ' - ' . ($attendance['shift_end'] ?? '19:00:00'),
+        'check_in_time' => !empty($attendance['check_in_time']) ? date('h:i:s A', strtotime($attendance['check_in_time'])) : '',
+        'check_out_time' => !empty($attendance['check_out_time']) ? date('h:i:s A', strtotime($attendance['check_out_time'])) : '',
+        'total_hours' => $totalHours,
+        'status' => strtoupper($attendance['final_status'] ?? $attendance['check_in_status'] ?? 'PRESENT'),
+        'distance_meters' => $distance,
+        'geofence_status' => $geofenceVerdict,
+        'latitude' => $attendance['check_in_lat'] ?? null,
+        'longitude' => $attendance['check_in_lng'] ?? null,
+        'notes' => $attendance['notes'] ?? '',
+        'actor_name' => $actorName
+    ];
+
+    $ch = curl_init($globalUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    $success = ($code >= 200 && $code < 400 && empty($err));
+
+    try {
+        $delivId = 'deliv-' . time() . '-' . bin2hex(random_bytes(4));
+        db_execute(
+            'INSERT INTO notification_deliveries (id, channel, recipient, event, ticket_id, payload, status, attempts, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $delivId,
+                'google_sheets',
+                "Attendance: {$employeeName} ({$event})",
+                $event,
+                null,
+                json_encode($payload),
+                $success ? 'delivered' : 'failed',
+                1,
+                $err ?: ($success ? null : "HTTP status $code: $resp")
+            ]
+        );
+    } catch (Exception $e) {}
+
+    return $success;
+}
+
+// GET /api/attendance/status or GET /api/attendance/today
+if ($method === 'GET' && ($path === '/api/attendance/status' || $path === '/api/attendance/today')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $today = date('Y-m-d');
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if (!$office) {
+        $office = [
+            'id' => 1,
+            'name' => 'Assurance Media HQ',
+            'latitude' => 19.08250795,
+            'longitude' => 72.89673053,
+            'radius_meters' => 100,
+            'shift_start' => '10:00:00',
+            'shift_end' => '19:00:00',
+            'grace_period_minutes' => 15,
+            'half_day_hours' => 4.00,
+            'full_day_hours' => 8.00,
+            'punch_out_geofence_required' => 1
+        ];
+    } else {
+        $office['latitude'] = (float)$office['latitude'];
+        $office['longitude'] = (float)$office['longitude'];
+        $office['radius_meters'] = (int)$office['radius_meters'];
+        $office['grace_period_minutes'] = (int)$office['grace_period_minutes'];
+        $office['half_day_hours'] = (float)$office['half_day_hours'];
+        $office['full_day_hours'] = (float)$office['full_day_hours'];
+    }
+
+    $record = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1", [$user['id'], $today]);
+    $elapsedSeconds = 0;
+    if ($record) {
+        $record['id'] = (int)$record['id'];
+        $record['check_in_lat'] = $record['check_in_lat'] !== null ? (float)$record['check_in_lat'] : null;
+        $record['check_in_lng'] = $record['check_in_lng'] !== null ? (float)$record['check_in_lng'] : null;
+        $record['check_in_accuracy'] = $record['check_in_accuracy'] !== null ? (float)$record['check_in_accuracy'] : null;
+        $record['check_in_distance_meters'] = $record['check_in_distance_meters'] !== null ? (float)$record['check_in_distance_meters'] : null;
+        $record['check_in_local'] = date('h:i:s A', strtotime($record['check_in_time']));
+
+        if (!empty($record['check_out_time'])) {
+            $record['check_out_lat'] = $record['check_out_lat'] !== null ? (float)$record['check_out_lat'] : null;
+            $record['check_out_lng'] = $record['check_out_lng'] !== null ? (float)$record['check_out_lng'] : null;
+            $record['check_out_accuracy'] = $record['check_out_accuracy'] !== null ? (float)$record['check_out_accuracy'] : null;
+            $record['check_out_distance_meters'] = $record['check_out_distance_meters'] !== null ? (float)$record['check_out_distance_meters'] : null;
+            $record['check_out_local'] = date('h:i:s A', strtotime($record['check_out_time']));
+            $elapsedSeconds = max(0, strtotime($record['check_out_time']) - strtotime($record['check_in_time']));
+        } else {
+            $elapsedSeconds = max(0, time() - strtotime($record['check_in_time']));
+        }
+    }
+
+    // Recent 5 punches
+    $recent = db_query(
+        "SELECT id, attendance_date, work_mode, check_in_time, check_out_time, total_work_minutes, final_status 
+         FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC LIMIT 5",
+        [$user['id']]
+    );
+
+    json_response([
+        'success' => true,
+        'today' => $today,
+        'server_time' => date('Y-m-d H:i:s'),
+        'office' => $office,
+        'record' => $record,
+        'is_checked_in' => !empty($record),
+        'is_checked_out' => !empty($record['check_out_time']),
+        'elapsed_seconds' => $elapsedSeconds,
+        'recent_records' => $recent
+    ]);
+}
+
+// POST /api/attendance/check-in or POST /api/attendance/punch-in
+if ($method === 'POST' && ($path === '/api/attendance/check-in' || $path === '/api/attendance/punch-in')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $workMode = in_array(strtolower($input['work_mode'] ?? 'office'), ['office', 'wfh', 'on_duty'], true)
+        ? strtolower($input['work_mode'] ?? 'office')
+        : 'office';
+    $notes = trim($input['notes'] ?? '');
+    $lat = isset($input['latitude']) && is_numeric($input['latitude']) ? (float)$input['latitude'] : null;
+    $lng = isset($input['longitude']) && is_numeric($input['longitude']) ? (float)$input['longitude'] : null;
+    $accuracy = isset($input['accuracy']) && is_numeric($input['accuracy']) ? (float)$input['accuracy'] : null;
+
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if (!$office) {
+        $office = [
+            'name' => 'Assurance Media HQ',
+            'latitude' => 19.08250795,
+            'longitude' => 72.89673053,
+            'radius_meters' => 100,
+            'shift_start' => '10:00:00',
+            'shift_end' => '19:00:00',
+            'grace_period_minutes' => 15
+        ];
+    }
+
+    $dist = null;
+    if ($lat !== null && $lng !== null) {
+        $dist = haversine_distance_meters($lat, $lng, (float)$office['latitude'], (float)$office['longitude']);
+    }
+
+    if ($workMode === 'office') {
+        if ($lat === null || $lng === null) {
+            json_error('GPS coordinates are required for In-Office punch. Please allow browser location access or select Work From Home.', 400);
+        }
+        $allowedRadius = (int)$office['radius_meters'];
+        if ($dist > $allowedRadius) {
+            $roundD = round($dist);
+            json_error("You are outside the office geofence ({$roundD}m away, allowed within {$allowedRadius}m). Move closer to {$office['name']} or switch to Work From Home mode.", 403, [
+                'distance_meters' => $dist,
+                'radius_meters' => $allowedRadius,
+                'office_name' => $office['name']
+            ]);
+        }
+    }
+
+    $today = date('Y-m-d');
+    $existing = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1", [$user['id'], $today]);
+    if ($existing) {
+        $formatted = date('h:i:s A', strtotime($existing['check_in_time']));
+        json_error("You have already punched in for today at {$formatted}", 409, [
+            'existing_check_in_local' => $formatted,
+            'record' => $existing
+        ]);
+    }
+
+    // Evaluate punctuality: shift_start + grace_period_minutes
+    $shiftStartStr = $office['shift_start'] ?? '10:00:00';
+    $graceMins = (int)($office['grace_period_minutes'] ?? 15);
+    $graceDeadline = strtotime("{$today} {$shiftStartStr}") + ($graceMins * 60);
+
+    $nowTime = time();
+    $checkInStatus = 'present';
+    $finalStatus = 'PRESENT';
+
+    if ($workMode === 'wfh') {
+        $checkInStatus = 'wfh';
+        $finalStatus = 'WFH';
+    } elseif ($workMode === 'on_duty') {
+        $checkInStatus = 'on_duty';
+        $finalStatus = 'ON_DUTY';
+    } else {
+        if ($nowTime > $graceDeadline) {
+            $checkInStatus = 'late';
+            $finalStatus = 'LATE';
+        } else {
+            $checkInStatus = 'present';
+            $finalStatus = 'PRESENT';
+        }
+    }
+
+    db_execute(
+        "INSERT INTO attendance (user_id, attendance_date, work_mode, shift_start, shift_end, check_in_time, check_in_lat, check_in_lng, check_in_accuracy, check_in_distance_meters, check_in_status, final_status, notes)
+         VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)",
+        [
+            $user['id'],
+            $today,
+            $workMode,
+            $office['shift_start'] ?? '10:00:00',
+            $office['shift_end'] ?? '19:00:00',
+            $lat,
+            $lng,
+            $accuracy,
+            $dist,
+            $checkInStatus,
+            $finalStatus,
+            $notes ?: null
+        ]
+    );
+
+    $record = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1", [$user['id'], $today]);
+
+    // Google Sheets Real-time Sync
+    sync_attendance_to_google_sheet($record, 'CHECK_IN', $user['name']);
+
+    $ip = get_client_ip();
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, target_user_id, payload, ip_address, user_agent) VALUES (?, 'check_in', ?, ?, ?, ?)",
+            [$user['id'], $user['id'], json_encode(['mode' => $workMode, 'distance' => $dist, 'status' => $finalStatus]), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    $timeStr = date('h:i:s A', strtotime($record['check_in_time']));
+    $modeLabel = $workMode === 'office' ? 'Office' : ($workMode === 'wfh' ? 'WFH' : 'On-Duty');
+    json_response([
+        'success' => true,
+        'message' => "Successfully punched in ({$modeLabel}) at {$timeStr}" . ($dist !== null ? " (" . round($dist) . "m from office)" : ""),
+        'data' => $record
+    ]);
+}
+
+// POST /api/attendance/check-out or POST /api/attendance/punch-out
+if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/api/attendance/punch-out')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $today = date('Y-m-d');
+    $record = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ? LIMIT 1", [$user['id'], $today]);
+    if (!$record) {
+        json_error('You have not punched in today', 400);
+    }
+    if (!empty($record['check_out_time'])) {
+        $formattedOut = date('h:i:s A', strtotime($record['check_out_time']));
+        json_error("You have already punched out for today at {$formattedOut}", 409, [
+            'existing_check_out_local' => $formattedOut
+        ]);
+    }
+
+    $input = get_json_input();
+    $notes = trim($input['notes'] ?? '');
+    $lat = isset($input['latitude']) && is_numeric($input['latitude']) ? (float)$input['latitude'] : null;
+    $lng = isset($input['longitude']) && is_numeric($input['longitude']) ? (float)$input['longitude'] : null;
+    $accuracy = isset($input['accuracy']) && is_numeric($input['accuracy']) ? (float)$input['accuracy'] : null;
+
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    $dist = null;
+    if ($lat !== null && $lng !== null && $office) {
+        $dist = haversine_distance_meters($lat, $lng, (float)$office['latitude'], (float)$office['longitude']);
+    }
+
+    // Work duration calculation
+    $inTs = strtotime($record['check_in_time']);
+    $outTs = time();
+    $totalMinutes = max(1, (int)round(($outTs - $inTs) / 60));
+
+    // Determine final status
+    $finalStatus = $record['final_status'];
+    if ($totalMinutes < 240) { // < 4 hours = Half Day
+        $finalStatus = 'HALF_DAY';
+    }
+
+    $combinedNotes = trim(($record['notes'] ?? '') . ($notes ? "\nCheck-out: {$notes}" : ''));
+
+    db_execute(
+        "UPDATE attendance 
+         SET check_out_time = NOW(), check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, check_out_distance_meters = ?, check_out_method = 'gps', total_work_minutes = ?, final_status = ?, notes = ?
+         WHERE id = ?",
+        [$lat, $lng, $accuracy, $dist, $totalMinutes, $finalStatus, $combinedNotes ?: null, $record['id']]
+    );
+
+    $updatedRec = db_query_one("SELECT * FROM attendance WHERE id = ?", [$record['id']]);
+
+    // Google Sheets Real-time Sync
+    sync_attendance_to_google_sheet($updatedRec, 'CHECK_OUT', $user['name']);
+
+    $ip = get_client_ip();
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, target_user_id, payload, ip_address, user_agent) VALUES (?, 'check_out', ?, ?, ?, ?)",
+            [$user['id'], $user['id'], json_encode(['minutes' => $totalMinutes, 'status' => $finalStatus]), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    $hours = floor($totalMinutes / 60);
+    $mins = $totalMinutes % 60;
+    $timeStr = date('h:i:s A', strtotime($updatedRec['check_out_time']));
+
+    json_response([
+        'success' => true,
+        'message' => "Punched out successfully at {$timeStr}. Total work time: {$hours}h {$mins}m.",
+        'data' => $updatedRec,
+        'total_work_minutes' => $totalMinutes,
+        'formatted_duration' => "{$hours}h {$mins}m"
+    ]);
+}
+
+// GET /api/attendance/history or GET /api/attendance/my-history
+if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api/attendance/my-history')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance tracking is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $month = $_GET['month'] ?? date('Y-m');
+    if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+        $month = date('Y-m');
+    }
+
+    $records = db_query(
+        "SELECT * FROM attendance WHERE user_id = ? AND attendance_date LIKE ? ORDER BY attendance_date ASC",
+        [$user['id'], "{$month}%"]
+    );
+
+    $presentCount = 0;
+    $lateCount = 0;
+    $halfDayCount = 0;
+    $wfhCount = 0;
+    $onDutyCount = 0;
+    $regularizedCount = 0;
+    $totalMinutes = 0;
+
+    foreach ($records as &$r) {
+        $r['id'] = (int)$r['id'];
+        $r['check_in_lat'] = $r['check_in_lat'] !== null ? (float)$r['check_in_lat'] : null;
+        $r['check_in_lng'] = $r['check_in_lng'] !== null ? (float)$r['check_in_lng'] : null;
+        $r['check_in_distance_meters'] = $r['check_in_distance_meters'] !== null ? (float)$r['check_in_distance_meters'] : null;
+        $r['check_out_distance_meters'] = $r['check_out_distance_meters'] !== null ? (float)$r['check_out_distance_meters'] : null;
+        $r['total_work_minutes'] = $r['total_work_minutes'] !== null ? (int)$r['total_work_minutes'] : null;
+        $r['is_regularized'] = !empty($r['is_regularized']) ? 1 : 0;
+
+        $st = strtoupper($r['final_status'] ?? $r['check_in_status'] ?? 'PRESENT');
+        if ($st === 'PRESENT') $presentCount++;
+        elseif ($st === 'LATE') $lateCount++;
+        elseif ($st === 'HALF_DAY') $halfDayCount++;
+        elseif ($st === 'WFH') $wfhCount++;
+        elseif ($st === 'ON_DUTY') $onDutyCount++;
+        elseif ($st === 'REGULARIZED') $regularizedCount++;
+
+        if (!empty($r['total_work_minutes'])) {
+            $totalMinutes += $r['total_work_minutes'];
+        }
+    }
+
+    $totalPunchedDays = count($records);
+    $totalHours = round($totalMinutes / 60, 1);
+    $avgHours = $totalPunchedDays > 0 ? round($totalHours / $totalPunchedDays, 1) : 0;
+
+    json_response([
+        'success' => true,
+        'month' => $month,
+        'records' => $records,
+        'stats' => [
+            'total_punched_days' => $totalPunchedDays,
+            'present_count' => $presentCount,
+            'late_count' => $lateCount,
+            'half_day_count' => $halfDayCount,
+            'wfh_count' => $wfhCount,
+            'on_duty_count' => $onDutyCount,
+            'regularized_count' => $regularizedCount,
+            'total_work_hours' => $totalHours,
+            'avg_daily_hours' => $avgHours
+        ]
+    ]);
+}
+
+// POST /api/attendance/regularize
+if ($method === 'POST' && $path === '/api/attendance/regularize') {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance regularization is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $attDate = trim($input['attendance_date'] ?? '');
+    $inTime = trim($input['requested_check_in'] ?? '10:00:00');
+    $outTime = trim($input['requested_check_out'] ?? '19:00:00');
+    $mode = in_array(strtolower($input['work_mode'] ?? 'office'), ['office', 'wfh', 'on_duty'], true)
+        ? strtolower($input['work_mode'] ?? 'office')
+        : 'office';
+    $reason = trim($input['reason'] ?? '');
+
+    if (empty($attDate) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $attDate)) {
+        json_error('Valid attendance date (YYYY-MM-DD) is required', 400);
+    }
+    if (empty($reason)) {
+        json_error('Please specify a valid reason for regularization', 400);
+    }
+
+    db_execute(
+        "INSERT INTO attendance_regularizations (user_id, attendance_date, requested_check_in, requested_check_out, work_mode, reason, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'PENDING')",
+        [$user['id'], $attDate, $inTime, $outTime, $mode, $reason]
+    );
+
+    $id = db_query_one("SELECT LAST_INSERT_ID() as id");
+    $created = db_query_one("SELECT * FROM attendance_regularizations WHERE id = ?", [$id['id']]);
+
+    json_response([
+        'success' => true,
+        'message' => 'Attendance regularization request submitted successfully',
+        'data' => $created
+    ], 201);
+}
+
+// GET /api/admin/attendance/roster or GET /api/admin/attendance/report
+if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === '/api/admin/attendance/report')) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $targetDate = $_GET['date'] ?? date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $targetDate)) {
+        $targetDate = date('Y-m-d');
+    }
+
+    $search = trim($_GET['search'] ?? '');
+    $params = [$targetDate];
+    $searchClause = "";
+    if (!empty($search)) {
+        $searchClause = " AND (u.name LIKE ? OR u.email LIKE ?) ";
+        $params[] = "%{$search}%";
+        $params[] = "%{$search}%";
+    }
+
+    $roster = db_query("SELECT 
+        u.id as user_id, u.name as user_name, u.email as user_email, u.role as user_role, u.avatar_url,
+        a.id as attendance_id, a.attendance_date, a.work_mode, a.shift_start, a.shift_end,
+        a.check_in_time, a.check_in_lat, a.check_in_lng, a.check_in_distance_meters, a.check_in_status,
+        a.check_out_time, a.check_out_lat, a.check_out_lng, a.check_out_distance_meters,
+        a.total_work_minutes, a.final_status, a.is_regularized, a.notes,
+        CASE 
+            WHEN a.id IS NOT NULL THEN COALESCE(a.final_status, 'PRESENT')
+            ELSE 'NOT_PUNCHED'
+        END as status
+    FROM users u
+    LEFT JOIN attendance a ON a.user_id = u.id AND a.attendance_date = ?
+    WHERE u.role != 'client' {$searchClause}
+    ORDER BY (a.check_in_time IS NULL) ASC, a.check_in_time DESC, u.name ASC", $params);
+
+    $presentOfficeCount = 0;
+    $wfhCount = 0;
+    $onDutyCount = 0;
+    $notPunchedCount = 0;
+    $lateCount = 0;
+
+    foreach ($roster as &$row) {
+        if ($row['attendance_id'] !== null) $row['attendance_id'] = (int)$row['attendance_id'];
+        if ($row['check_in_distance_meters'] !== null) $row['check_in_distance_meters'] = (float)$row['check_in_distance_meters'];
+        if ($row['check_out_distance_meters'] !== null) $row['check_out_distance_meters'] = (float)$row['check_out_distance_meters'];
+        if ($row['total_work_minutes'] !== null) $row['total_work_minutes'] = (int)$row['total_work_minutes'];
+
+        if ($row['attendance_id'] === null) {
+            $notPunchedCount++;
+        } else {
+            $mode = $row['work_mode'] ?? 'office';
+            if ($mode === 'wfh') $wfhCount++;
+            elseif ($mode === 'on_duty') $onDutyCount++;
+            else $presentOfficeCount++;
+
+            if (($row['check_in_status'] ?? '') === 'late' || ($row['final_status'] ?? '') === 'LATE') {
+                $lateCount++;
+            }
+        }
+    }
+
+    json_response([
+        'success' => true,
+        'date' => $targetDate,
+        'summary' => [
+            'total_staff' => count($roster),
+            'present_office' => $presentOfficeCount,
+            'wfh' => $wfhCount,
+            'on_duty' => $onDutyCount,
+            'not_punched' => $notPunchedCount,
+            'late' => $lateCount
+        ],
+        'data' => $roster
+    ]);
+}
+
+// GET /api/admin/attendance/regularizations
+if ($method === 'GET' && $path === '/api/admin/attendance/regularizations') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $requests = db_query("SELECT 
+        r.*, u.name as user_name, u.email as user_email, u.role as user_role, u.avatar_url,
+        rev.name as reviewer_name
+    FROM attendance_regularizations r
+    JOIN users u ON u.id = r.user_id
+    LEFT JOIN users rev ON rev.id = r.reviewer_id
+    ORDER BY (r.status = 'PENDING') DESC, r.created_at DESC
+    LIMIT 100");
+
+    foreach ($requests as &$req) {
+        $req['id'] = (int)$req['id'];
+    }
+
+    json_response([
+        'success' => true,
+        'data' => $requests
+    ]);
+}
+
+// POST /api/admin/attendance/regularization/{id}/review
+if ($method === 'POST' && preg_match('#^/api/admin/attendance/regularization/([^/]+)/review$#', $path, $m)) {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $regId = (int)$m[1];
+    $input = get_json_input();
+    $action = strtolower(trim($input['action'] ?? ''));
+    $reviewerNotes = trim($input['notes'] ?? '');
+
+    if (!in_array($action, ['approve', 'reject'], true)) {
+        json_error("Action must be 'approve' or 'reject'", 400);
+    }
+
+    $req = db_query_one("SELECT * FROM attendance_regularizations WHERE id = ?", [$regId]);
+    if (!$req) {
+        json_error("Regularization request not found", 404);
+    }
+
+    $newStatus = ($action === 'approve') ? 'APPROVED' : 'REJECTED';
+    db_execute(
+        "UPDATE attendance_regularizations SET status = ?, reviewer_id = ?, reviewer_notes = ?, reviewed_at = NOW() WHERE id = ?",
+        [$newStatus, $user['id'], $reviewerNotes ?: null, $regId]
+    );
+
+    if ($action === 'approve') {
+        $inTime = $req['attendance_date'] . ' ' . $req['requested_check_in'];
+        $outTime = $req['attendance_date'] . ' ' . $req['requested_check_out'];
+        $durationMinutes = max(1, (int)round((strtotime($outTime) - strtotime($inTime)) / 60));
+
+        $existing = db_query_one("SELECT id FROM attendance WHERE user_id = ? AND attendance_date = ?", [$req['user_id'], $req['attendance_date']]);
+        if ($existing) {
+            db_execute(
+                "UPDATE attendance 
+                 SET check_in_time = ?, check_out_time = ?, work_mode = ?, total_work_minutes = ?, final_status = 'REGULARIZED', is_regularized = 1, notes = ?
+                 WHERE id = ?",
+                [$inTime, $outTime, $req['work_mode'], $durationMinutes, "Regularized: " . $req['reason'], $existing['id']]
+            );
+            $record = db_query_one("SELECT * FROM attendance WHERE id = ?", [$existing['id']]);
+        } else {
+            db_execute(
+                "INSERT INTO attendance (user_id, attendance_date, work_mode, check_in_time, check_out_time, total_work_minutes, final_status, is_regularized, notes)
+                 VALUES (?, ?, ?, ?, ?, ?, 'REGULARIZED', 1, ?)",
+                [$req['user_id'], $req['attendance_date'], $req['work_mode'], $inTime, $outTime, $durationMinutes, "Regularized: " . $req['reason']]
+            );
+            $record = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?", [$req['user_id'], $req['attendance_date']]);
+        }
+
+        // Google Sheets sync
+        if ($record) {
+            sync_attendance_to_google_sheet($record, 'REGULARIZATION', $user['name']);
+        }
+    }
+
+    json_response([
+        'success' => true,
+        'message' => "Regularization request " . strtolower($newStatus) . " successfully",
+        'status' => $newStatus
+    ]);
+}
+
+// GET /api/admin/attendance/geofence
+if ($method === 'GET' && $path === '/api/admin/attendance/geofence') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $office = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if (!$office) {
+        $office = [
+            'name' => 'Assurance Media HQ',
+            'latitude' => 19.08250795,
+            'longitude' => 72.89673053,
+            'radius_meters' => 100,
+            'shift_start' => '10:00:00',
+            'shift_end' => '19:00:00',
+            'grace_period_minutes' => 15,
+            'half_day_hours' => 4.00,
+            'full_day_hours' => 8.00,
+            'punch_out_geofence_required' => 1
+        ];
+    } else {
+        $office['latitude'] = (float)$office['latitude'];
+        $office['longitude'] = (float)$office['longitude'];
+        $office['radius_meters'] = (int)$office['radius_meters'];
+        $office['grace_period_minutes'] = (int)$office['grace_period_minutes'];
+        $office['half_day_hours'] = (float)$office['half_day_hours'];
+        $office['full_day_hours'] = (float)$office['full_day_hours'];
+    }
+
+    json_response(['success' => true, 'data' => $office]);
+}
+
+// POST /api/admin/attendance/geofence
+if ($method === 'POST' && $path === '/api/admin/attendance/geofence') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $name = trim($input['name'] ?? 'Assurance Media HQ');
+    $lat = (float)($input['latitude'] ?? 19.08250795);
+    $lng = (float)($input['longitude'] ?? 72.89673053);
+    $radius = max(20, min(5000, (int)($input['radius_meters'] ?? 100)));
+    $shiftStart = trim($input['shift_start'] ?? '10:00:00');
+    $shiftEnd = trim($input['shift_end'] ?? '19:00:00');
+    $grace = max(0, min(120, (int)($input['grace_period_minutes'] ?? 15)));
+    $halfDay = (float)($input['half_day_hours'] ?? 4.00);
+    $fullDay = (float)($input['full_day_hours'] ?? 8.00);
+    $punchOutReq = !empty($input['punch_out_geofence_required']) ? 1 : 0;
+
+    $office = db_query_one("SELECT id FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    if ($office) {
+        db_execute(
+            "UPDATE office_locations 
+             SET name = ?, latitude = ?, longitude = ?, radius_meters = ?, shift_start = ?, shift_end = ?, grace_period_minutes = ?, half_day_hours = ?, full_day_hours = ?, punch_out_geofence_required = ?
+             WHERE id = ?",
+            [$name, $lat, $lng, $radius, $shiftStart, $shiftEnd, $grace, $halfDay, $fullDay, $punchOutReq, $office['id']]
+        );
+    } else {
+        db_execute(
+            "INSERT INTO office_locations (name, latitude, longitude, radius_meters, shift_start, shift_end, grace_period_minutes, half_day_hours, full_day_hours, punch_out_geofence_required, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            [$name, $lat, $lng, $radius, $shiftStart, $shiftEnd, $grace, $halfDay, $fullDay, $punchOutReq]
+        );
+    }
+
+    $updated = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
+    json_response([
+        'success' => true,
+        'message' => 'Office Geofence & Shift schedule updated successfully',
+        'data' => $updated
+    ]);
+}
+
+// GET /api/admin/attendance/export
+if ($method === 'GET' && $path === '/api/admin/attendance/export') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    ensure_attendance_schema();
+
+    $date = $_GET['date'] ?? null;
+    $month = $_GET['month'] ?? date('Y-m');
+
+    if ($date && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        $records = db_query(
+            "SELECT a.*, u.name as user_name, u.email as user_email, u.role as user_role 
+             FROM attendance a 
+             JOIN users u ON u.id = a.user_id 
+             WHERE a.attendance_date = ? 
+             ORDER BY a.check_in_time ASC",
+            [$date]
+        );
+        $filename = "attendance_roster_{$date}.csv";
+    } else {
+        $records = db_query(
+            "SELECT a.*, u.name as user_name, u.email as user_email, u.role as user_role 
+             FROM attendance a 
+             JOIN users u ON u.id = a.user_id 
+             WHERE a.attendance_date LIKE ? 
+             ORDER BY a.attendance_date DESC, a.check_in_time ASC",
+            ["{$month}%"]
+        );
+        $filename = "attendance_roster_{$month}.csv";
+    }
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header("Content-Disposition: attachment; filename=\"{$filename}\"");
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    $out = fopen('php://output', 'w');
+    fwrite($out, "\xEF\xBB\xBF"); // UTF-8 BOM
+
+    fputcsv($out, [
+        'Date',
+        'Employee ID',
+        'Employee Name',
+        'Email',
+        'Role',
+        'Work Mode',
+        'Shift',
+        'Check-In Time',
+        'Check-In Distance',
+        'Check-Out Time',
+        'Check-Out Distance',
+        'Total Work Hours',
+        'Status',
+        'Regularized',
+        'Notes'
+    ]);
+
+    foreach ($records as $r) {
+        $totalHours = !empty($r['total_work_minutes']) ? round($r['total_work_minutes'] / 60, 2) : 0;
+        fputcsv($out, [
+            $r['attendance_date'],
+            $r['user_id'],
+            $r['user_name'],
+            $r['user_email'],
+            $r['user_role'],
+            strtoupper($r['work_mode'] ?? 'OFFICE'),
+            ($r['shift_start'] ?? '10:00:00') . ' - ' . ($r['shift_end'] ?? '19:00:00'),
+            $r['check_in_time'] ? date('h:i:s A', strtotime($r['check_in_time'])) : '',
+            $r['check_in_distance_meters'] !== null ? round($r['check_in_distance_meters']) . ' m' : '',
+            $r['check_out_time'] ? date('h:i:s A', strtotime($r['check_out_time'])) : '',
+            $r['check_out_distance_meters'] !== null ? round($r['check_out_distance_meters']) . ' m' : '',
+            $totalHours ? "{$totalHours} hrs" : '',
+            strtoupper($r['final_status'] ?? $r['check_in_status'] ?? 'PRESENT'),
+            !empty($r['is_regularized']) ? 'YES' : 'NO',
+            $r['notes'] ?? ''
+        ]);
+    }
+
+    fclose($out);
+    exit;
+}
+
 // Default 404 for unknown API routes
 json_error("Route not found: {$method} {$path}", 404);

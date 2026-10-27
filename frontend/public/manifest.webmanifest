@@ -1,0 +1,19 @@
+﻿{
+  "short_name": "Assurance HR",
+  "name": "Assurance Media HR & Attendance",
+  "description": "Darwinbox-grade Attendance, GPS Geofencing, Tasks & Team Command Center",
+  "icons": [
+    {
+      "src": "/assurance-media-logo.jpg",
+      "type": "image/jpeg",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/?pwa=1",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "scope": "/"
+}

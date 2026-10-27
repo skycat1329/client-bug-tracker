@@ -3,11 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/jpeg" href="/assurance-media-logo.jpg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Assurance Media | Client Bug Tracker & Command Center</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Assurance Media | HR Attendance & Command Center</title>
+    
+    <!-- PWA Web App Manifest -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#2563eb" />
+    
+    <!-- iOS Web App Support -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Assurance HR" />
+    <link rel="apple-touch-icon" href="/assurance-media-logo.jpg" />
+    <meta name="format-detection" content="telephone=no" />
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased font-sans">
+  <body class="bg-slate-50 text-slate-900 antialiased font-sans select-none sm:select-auto">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch((err) => {
+            console.log('SW registration skipped:', err);
+          });
+        });
+      }
+    </script>
   </body>
 </html>

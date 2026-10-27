@@ -64,7 +64,37 @@ function doPost(e) {
     var data = JSON.parse(rawData);
     var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // 1. Separate tab per brand (e.g. "enem", "Brand Alpha")
+    // 1. Attendance Sync
+    if (data.sheet_type === "attendance") {
+      var attSheet = ss.getSheetByName("Attendance Log");
+      if (!attSheet) {
+        attSheet = ss.insertSheet("Attendance Log");
+        setupAttendanceHeaders(attSheet);
+      }
+      appendAttendanceRow(attSheet, data);
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        type: "attendance",
+        timestamp: data.timestamp || new Date().toISOString()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 2. Tasks Sync
+    if (data.sheet_type === "tasks") {
+      var taskSheet = ss.getSheetByName("Engineering Tasks");
+      if (!taskSheet) {
+        taskSheet = ss.insertSheet("Engineering Tasks");
+        setupTaskHeaders(taskSheet);
+      }
+      appendTaskRow(taskSheet, data);
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        type: "tasks",
+        timestamp: data.timestamp || new Date().toISOString()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3. Brand Ticket Log & Master Audit Trail
     var brandName = (data.brand_name || "General Brand").trim();
     var cleanBrandTab = brandName.replace(/[:\\\\/?*\\[\\]]/g, "-").substring(0, 50);
 
@@ -75,7 +105,6 @@ function doPost(e) {
     }
     appendRowToSheet(brandSheet, data);
 
-    // 2. Unified Master Log tab
     var masterSheet = ss.getSheetByName("All Brands Master Log");
     if (!masterSheet) {
       masterSheet = ss.insertSheet("All Brands Master Log");
@@ -116,29 +145,12 @@ function setupHeaders(sheet, title) {
     "Actor / Performed By"
   ];
   sheet.appendRow(headers);
-
-  // Format header row
   var range = sheet.getRange(1, 1, 1, headers.length);
   range.setFontWeight("bold");
   range.setFontColor("#FFFFFF");
-  range.setBackground("#0176D3"); // Agency Salesforce Blue
+  range.setBackground("#0176D3");
   range.setHorizontalAlignment("center");
   sheet.setFrozenRows(1);
-
-  // Set initial column widths
-  sheet.setColumnWidth(1, 160); // Date & Time
-  sheet.setColumnWidth(2, 140); // Brand
-  sheet.setColumnWidth(3, 110); // Ticket ID
-  sheet.setColumnWidth(4, 180); // Event / Action
-  sheet.setColumnWidth(5, 120); // Status
-  sheet.setColumnWidth(6, 90);  // Priority
-  sheet.setColumnWidth(7, 260); // Ticket Title
-  sheet.setColumnWidth(8, 160); // Managed Website
-  sheet.setColumnWidth(9, 180); // Requester
-  sheet.setColumnWidth(10, 180); // Assignee
-  sheet.setColumnWidth(11, 350); // Action Details
-  sheet.setColumnWidth(12, 120); // Environment
-  sheet.setColumnWidth(13, 150); // Actor
 }
 
 function appendRowToSheet(sheet, data) {
@@ -156,6 +168,86 @@ function appendRowToSheet(sheet, data) {
     data.details || "",
     data.environment || "production",
     data.actor_name || "System"
+  ]);
+}
+
+function setupAttendanceHeaders(sheet) {
+  var headers = [
+    "Timestamp",
+    "Date",
+    "Employee Name",
+    "Email",
+    "Role",
+    "Work Mode",
+    "Shift",
+    "Check-In",
+    "Check-Out",
+    "Total Hours",
+    "Status",
+    "Distance (m)",
+    "Geofence Verdict",
+    "Notes"
+  ];
+  sheet.appendRow(headers);
+  var range = sheet.getRange(1, 1, 1, headers.length);
+  range.setFontWeight("bold");
+  range.setFontColor("#FFFFFF");
+  range.setBackground("#059669"); // Emerald Green
+  range.setHorizontalAlignment("center");
+  sheet.setFrozenRows(1);
+}
+
+function appendAttendanceRow(sheet, data) {
+  sheet.appendRow([
+    data.timestamp || new Date().toLocaleString(),
+    data.attendance_date || "",
+    data.employee_name || "",
+    data.employee_email || "",
+    data.role || "",
+    data.work_mode || "OFFICE",
+    data.shift || "10:00 AM - 07:00 PM",
+    data.check_in_time || "",
+    data.check_out_time || "",
+    data.total_hours || 0,
+    data.status || "PRESENT",
+    data.distance_meters !== null && data.distance_meters !== undefined ? data.distance_meters : "",
+    data.geofence_status || "",
+    data.notes || ""
+  ]);
+}
+
+function setupTaskHeaders(sheet) {
+  var headers = [
+    "Timestamp",
+    "Task Number",
+    "Title",
+    "Assignee",
+    "Creator",
+    "Deadline",
+    "Priority",
+    "Status",
+    "Notes"
+  ];
+  sheet.appendRow(headers);
+  var range = sheet.getRange(1, 1, 1, headers.length);
+  range.setFontWeight("bold");
+  range.setFontColor("#FFFFFF");
+  range.setBackground("#7C3AED"); // Purple
+  range.setHorizontalAlignment("center");
+  sheet.setFrozenRows(1);
+}
+
+function appendTaskRow(sheet, data) {
+  sheet.appendRow([
+    data.timestamp || new Date().toLocaleString(),
+    data.task_number || "",
+    data.title || "",
+    data.assignee_name || "",
+    data.creator_name || "",
+    data.deadline || "",
+    data.priority || "",
+    data.status || "",
+    data.description || ""
   ]);
 }`;
 
