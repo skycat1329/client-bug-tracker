@@ -38,7 +38,7 @@ define('SLACK_CHANNEL_INCIDENTS', '#production-incidents');
 define('SLACK_CHANNEL_RESOLUTIONS', '#ticket-resolutions');
 
 // Google Sheets Webhook URL (Optional global fallback, or configure dynamically in Web UI)
-define('GOOGLE_SHEETS_WEBHOOK_URL', 'https://script.google.com/macros/s/AKfycbx_bw1Elm-2XQAt6pWB-zQKKOcBka5xkaJaOTlgOYFnH5se5MtgOFIx3QpjIEwmm3VALQ/exec');
+define('GOOGLE_SHEETS_WEBHOOK_URL', 'https://script.google.com/macros/s/AKfycbzZt7aTSC6TtNa98NyjIAyD0cZ3zcDkuCW8YAiiN5AaQgArJ6OH0BIrXlCEMUAVvD-rWg/exec');
 
 // WhatsApp Gateway / Webhook Notification Settings
 define('WHATSAPP_ENABLED', true);
