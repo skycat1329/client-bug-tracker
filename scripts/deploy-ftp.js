@@ -86,7 +86,8 @@ async function deploy() {
 
     const client = new ftp.Client();
     client.ftp.verbose = true;
-    client.ftp.timeout = 60000;
+    client.ftp.ipFamily = 4;
+    client.ftp.timeout = 30000;
     client.prepareTransfer = ftp.enterPassiveModeIPv4;
 
     try {

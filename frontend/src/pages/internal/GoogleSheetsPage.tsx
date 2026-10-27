@@ -50,7 +50,7 @@ export const GoogleSheetsPage: React.FC = () => {
 // 3. Click "Deploy" > "New deployment"
 // 4. Select Type: "Web app"
 // 5. Execute as: "Me"
-// 6. Who has access: "Anyone" (crucial for your Hostinger server to post rows)
+// 6. Who has access: "Anyone" (CRITICAL: Do NOT choose "Anyone within your company", choose "Anyone" so the server webhook can deliver updates!)
 // 7. Click "Deploy" and copy the Web App URL (ends in /exec)
 // 8. Paste the Web App URL into your Bug Tracker Google Sheets Sync settings!
 // ==============================================================================
@@ -139,6 +139,14 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "online",
+    message: "Assurance Media Google Sheets Webhook is active and listening for Attendance & Ticket updates!",
+    timestamp: new Date().toISOString()
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function setupHeaders(sheet, title) {
