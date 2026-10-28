@@ -2,7 +2,8 @@
 // ==============================================================================
 // Client Bug Tracker - PHP Configuration (Hostinger)
 // ==============================================================================
-
+// Enforce Indian Standard Time (IST - Asia/Kolkata UTC+5:30) across all operations
+date_default_timezone_set('Asia/Kolkata');
 // Database Credentials (Hostinger MySQL Database)
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'u634780755_tracker_db');

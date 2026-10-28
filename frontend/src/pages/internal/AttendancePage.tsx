@@ -109,6 +109,56 @@ interface StaffMember {
   can_manage_attendance?: number | boolean;
 }
 
+// Robust time formatters for cross-platform / Safari and timezone safety
+export const formatPunchTime = (timeStr?: string | null): string => {
+  if (!timeStr) return '—';
+  const clean = String(timeStr).trim();
+  if (!clean || clean === '—') return '—';
+
+  // If already contains AM/PM, e.g. "10:15:00 AM" or "10:15 AM"
+  const ampmMatch = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP]M)$/i);
+  if (ampmMatch) {
+    return `${ampmMatch[1]}:${ampmMatch[2]} ${ampmMatch[3].toUpperCase()}`;
+  }
+
+  // If pure time format "HH:MM:SS" or "HH:MM"
+  const timeOnlyMatch = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (timeOnlyMatch) {
+    let h = parseInt(timeOnlyMatch[1], 10);
+    const m = timeOnlyMatch[2];
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${m} ${ampm}`;
+  }
+
+  // If DATETIME format "YYYY-MM-DD HH:MM:SS" or ISO
+  // Replace space with T for cross-browser / Safari safety
+  const isoLike = clean.replace(' ', 'T');
+  const d = new Date(isoLike);
+  if (!isNaN(d.getTime())) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  return clean;
+};
+
+export const extractTimeOnly = (timeStr?: string | null, fallback = '10:00:00'): string => {
+  if (!timeStr) return fallback;
+  const clean = String(timeStr).trim();
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(clean)) {
+    return clean.length === 5 ? `${clean}:00` : clean;
+  }
+  const match = clean.match(/(\d{2}):(\d{2}):(\d{2})/);
+  if (match) {
+    return `${match[1]}:${match[2]}:${match[3]}`;
+  }
+  const d = new Date(clean.replace(' ', 'T'));
+  if (!isNaN(d.getTime())) {
+    return d.toTimeString().split(' ')[0];
+  }
+  return fallback;
+};
+
 export const AttendancePage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user && ['super_admin', 'support_manager'].includes(user.role);
@@ -143,6 +193,13 @@ export const AttendancePage: React.FC = () => {
   const [workMode, setWorkMode] = useState<'office' | 'wfh' | 'on_duty'>('office');
   const [punchNotes, setPunchNotes] = useState('');
   const [punching, setPunching] = useState(false);
+
+  // Live Real-Time Clock (ticks every second in Indian Standard Time)
+  const [currentClock, setCurrentClock] = useState<Date>(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentClock(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const [punchError, setPunchError] = useState<string | null>(null);
   const [punchSuccess, setPunchSuccess] = useState<string | null>(null);
 
@@ -824,16 +881,29 @@ export const AttendancePage: React.FC = () => {
                   </p>
                 </div>
 
-                {/* Live Shift Stopwatch Counter */}
-                {todayRecord && !todayRecord.check_out_time && (
-                  <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl px-4 py-2 flex items-center gap-3">
-                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Live Real-Time Indian Standard Time (IST) Clock */}
+                  <div className="bg-slate-900 text-white rounded-xl px-4 py-2 border border-slate-800 shadow-sm flex items-center gap-2.5">
+                    <Clock size={16} className="text-blue-400 animate-pulse" />
                     <div>
-                      <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">Logged Shift Timer</div>
-                      <div className="text-xl font-mono font-black text-emerald-700">{formatStopwatch(elapsedSeconds)}</div>
+                      <div className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Current Time (IST)</div>
+                      <div className="text-base sm:text-lg font-mono font-black text-white tracking-tight">
+                        {currentClock.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </div>
                     </div>
                   </div>
-                )}
+
+                  {/* Live Shift Stopwatch Counter */}
+                  {todayRecord && !todayRecord.check_out_time && (
+                    <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl px-4 py-2 flex items-center gap-3">
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                      <div>
+                        <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">Logged Shift Timer</div>
+                        <div className="text-lg sm:text-xl font-mono font-black text-emerald-700">{formatStopwatch(elapsedSeconds)}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Work Mode Toggle (Office vs WFH vs On-Duty) */}
@@ -963,7 +1033,7 @@ export const AttendancePage: React.FC = () => {
                   <div className="p-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-2 w-full">
                     <CheckCircle2 size={16} className="text-emerald-600" />
                     <span>
-                      Daily Shift Completed. Punched in at {todayRecord.check_in_local || todayRecord.check_in_time} and punched out at {todayRecord.check_out_local || todayRecord.check_out_time}.
+                      Daily Shift Completed. Punched in at {formatPunchTime(todayRecord.check_in_local || todayRecord.check_in_time)} and punched out at {formatPunchTime(todayRecord.check_out_local || todayRecord.check_out_time)}.
                     </span>
                   </div>
                 )}
@@ -991,7 +1061,7 @@ export const AttendancePage: React.FC = () => {
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Punch In</span>
                     <span className="text-slate-800 font-mono font-bold text-sm">
-                      {todayRecord.check_in_time ? new Date(todayRecord.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      {formatPunchTime(todayRecord.check_in_local || todayRecord.check_in_time)}
                     </span>
                     <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${
                       todayRecord.final_status === 'LATE' ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'
@@ -1003,7 +1073,7 @@ export const AttendancePage: React.FC = () => {
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Punch Out</span>
                     <span className="text-slate-800 font-mono font-bold text-sm">
-                      {todayRecord.check_out_time ? new Date(todayRecord.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'In Progress'}
+                      {todayRecord.check_out_time ? formatPunchTime(todayRecord.check_out_local || todayRecord.check_out_time) : 'In Progress'}
                     </span>
                     {todayRecord.is_early_exit ? (
                       <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800">
@@ -1354,8 +1424,8 @@ export const AttendancePage: React.FC = () => {
                           <>
                             {/* Times */}
                             <div className="text-[10px] font-mono text-slate-600 truncate font-semibold">
-                              {dayRecord.check_in_time ? new Date(dayRecord.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                              {dayRecord.check_out_time ? ' - ' + new Date(dayRecord.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                              {dayRecord.check_in_time ? formatPunchTime(dayRecord.check_in_local || dayRecord.check_in_time) : ''}
+                              {dayRecord.check_out_time ? ' - ' + formatPunchTime(dayRecord.check_out_local || dayRecord.check_out_time) : ''}
                             </div>
 
                             {/* Red Marker for Late Arrival */}
@@ -1463,10 +1533,10 @@ export const AttendancePage: React.FC = () => {
                               </span>
                             </td>
                             <td className="py-3 px-4 font-mono font-medium text-slate-700">
-                              {rec.check_in_time ? new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                              {rec.check_in_time ? formatPunchTime(rec.check_in_local || rec.check_in_time) : '—'}
                             </td>
                             <td className="py-3 px-4 font-mono font-medium text-slate-700">
-                              {rec.check_out_time ? new Date(rec.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Active'}
+                              {rec.check_out_time ? formatPunchTime(rec.check_out_local || rec.check_out_time) : 'Active'}
                             </td>
                             <td className="py-3 px-4 font-semibold text-slate-800">
                               {rec.total_work_minutes ? `${totalHours}h ${totalMins}m` : 'In Progress'}
@@ -1698,11 +1768,11 @@ export const AttendancePage: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-3 px-4 font-mono font-medium text-slate-700">
-                          {s.check_in_time ? new Date(s.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                          {s.check_in_time ? formatPunchTime(s.check_in_time) : '—'}
                           {isLate && <span className="ml-1 text-[9px] font-bold text-red-600">(LATE)</span>}
                         </td>
                         <td className="py-3 px-4 font-mono font-medium text-slate-700">
-                          {s.check_out_time ? new Date(s.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : s.attendance_id ? 'Active' : '—'}
+                          {s.check_out_time ? formatPunchTime(s.check_out_time) : s.attendance_id ? 'Active' : '—'}
                           {isEarly && <span className="ml-1 text-[9px] font-bold text-red-600">(EARLY)</span>}
                         </td>
                         <td className="py-3 px-4 font-mono text-slate-600">
@@ -1719,8 +1789,8 @@ export const AttendancePage: React.FC = () => {
                               setAssignForm({
                                 user_id: s.user_id,
                                 attendance_date: adminDate,
-                                check_in_time: s.check_in_time ? new Date(s.check_in_time).toTimeString().split(' ')[0] : '10:00:00',
-                                check_out_time: s.check_out_time ? new Date(s.check_out_time).toTimeString().split(' ')[0] : '19:00:00',
+                                check_in_time: extractTimeOnly(s.check_in_time, '10:00:00'),
+                                check_out_time: extractTimeOnly(s.check_out_time, '19:00:00'),
                                 work_mode: s.work_mode || 'office',
                                 notes: s.notes || 'HR Assigned Punch',
                               });
@@ -2472,7 +2542,7 @@ export const AttendancePage: React.FC = () => {
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Check-In</span>
                     <span className="font-bold text-slate-800 text-sm">
-                      {selectedDayRecord.check_in_time ? new Date(selectedDayRecord.check_in_time).toLocaleTimeString() : '—'}
+                      {selectedDayRecord.check_in_time ? formatPunchTime(selectedDayRecord.check_in_local || selectedDayRecord.check_in_time) : '—'}
                     </span>
                     {selectedDayRecord.is_late || selectedDayRecord.final_status === 'LATE' ? (
                       <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-600 text-white">
@@ -2486,7 +2556,7 @@ export const AttendancePage: React.FC = () => {
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                     <span className="text-slate-400 block text-[10px] font-bold uppercase">Check-Out</span>
                     <span className="font-bold text-slate-800 text-sm">
-                      {selectedDayRecord.check_out_time ? new Date(selectedDayRecord.check_out_time).toLocaleTimeString() : 'Active'}
+                      {selectedDayRecord.check_out_time ? formatPunchTime(selectedDayRecord.check_out_local || selectedDayRecord.check_out_time) : 'Active'}
                     </span>
                     {selectedDayRecord.is_early_exit ? (
                       <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-red-600 text-white">
@@ -2545,8 +2615,8 @@ export const AttendancePage: React.FC = () => {
                     setAssignForm({
                       user_id: selectedDayRecord?.user_id || user?.id || '',
                       attendance_date: selectedDayDate || selectedDayRecord?.attendance_date || new Date().toISOString().split('T')[0],
-                      check_in_time: selectedDayRecord?.check_in_time ? new Date(selectedDayRecord.check_in_time).toTimeString().split(' ')[0] : '10:00:00',
-                      check_out_time: selectedDayRecord?.check_out_time ? new Date(selectedDayRecord.check_out_time).toTimeString().split(' ')[0] : '19:00:00',
+                      check_in_time: extractTimeOnly(selectedDayRecord?.check_in_time, '10:00:00'),
+                      check_out_time: extractTimeOnly(selectedDayRecord?.check_out_time, '19:00:00'),
                       work_mode: selectedDayRecord?.work_mode || 'office',
                       notes: selectedDayRecord?.notes || 'HR Assigned Punch',
                     });

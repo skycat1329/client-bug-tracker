@@ -45,9 +45,13 @@ async function deploy() {
   const startTime = Date.now();
   console.log('\n🚀 Starting Automated Hostinger Deployment...\n');
 
-  // 1. Build Frontend
-  console.log('1️⃣ Compiling React production bundle...');
-  execSync('npm --prefix frontend run build', { stdio: 'inherit', cwd: rootDir });
+  const skipBuild = process.argv.includes('--skip-build');
+  if (!skipBuild) {
+    console.log('1️⃣ Compiling React production bundle...');
+    execSync('npm --prefix frontend run build', { stdio: 'inherit', cwd: rootDir });
+  } else {
+    console.log('1️⃣ Skipping frontend build (using existing dist bundle)...');
+  }
 
   // 2. Package into hostinger-public_html
   console.log('\n2️⃣ Packaging files into hostinger-public_html...');

@@ -16,6 +16,8 @@ function get_db(): PDO {
         ];
         try {
             $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+            // Synchronize MySQL session time zone with Indian Standard Time (IST - UTC+5:30)
+            $pdo->exec("SET time_zone = '+05:30'");
         } catch (PDOException $e) {
             http_response_code(500);
             echo json_encode([

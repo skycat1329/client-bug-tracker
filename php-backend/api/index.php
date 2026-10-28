@@ -2,6 +2,8 @@
 // ==============================================================================
 // Client Bug Tracker - Unified PHP REST API Router (Hostinger Compatible)
 // ==============================================================================
+// Enforce Indian Standard Time (IST - Asia/Kolkata UTC+5:30)
+date_default_timezone_set('Asia/Kolkata');
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/db.php';
@@ -6020,6 +6022,16 @@ function ensure_attendance_schema() {
             db_execute("INSERT INTO office_locations (name, latitude, longitude, radius_meters, shift_start, shift_end, grace_period_minutes, half_day_hours, full_day_hours, punch_out_geofence_required, is_active)
                         VALUES ('Assurance Media HQ', 19.08250795, 72.89673053, 100, '10:00:00', '19:00:00', 15, 4.00, 8.00, 1, 1)");
         }
+
+        // One-time repair: Adjust legacy UTC punches from 2026-10-27 to Indian Standard Time (+05:30 = 330 minutes)
+        try {
+            db_execute("UPDATE attendance 
+                        SET check_in_time = DATE_ADD(check_in_time, INTERVAL 330 MINUTE),
+                            check_out_time = IF(check_out_time IS NOT NULL, DATE_ADD(check_out_time, INTERVAL 330 MINUTE), NULL)
+                        WHERE attendance_date = '2026-10-27' 
+                          AND is_regularized = 0 
+                          AND check_in_time < '2026-10-27 13:00:00'");
+        } catch (Exception $e) {}
     } catch (Exception $e) {}
 }
 
@@ -6272,15 +6284,17 @@ if ($method === 'POST' && ($path === '/api/attendance/check-in' || $path === '/a
         }
     }
 
+    $now = date('Y-m-d H:i:s');
     db_execute(
         "INSERT INTO attendance (user_id, attendance_date, work_mode, shift_start, shift_end, check_in_time, check_in_lat, check_in_lng, check_in_accuracy, check_in_distance_meters, check_in_status, final_status, notes)
-         VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             $user['id'],
             $today,
             $workMode,
             $office['shift_start'] ?? '10:00:00',
             $office['shift_end'] ?? '19:00:00',
+            $now,
             $lat,
             $lng,
             $accuracy,
@@ -6363,11 +6377,12 @@ if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/
 
     $combinedNotes = trim(($record['notes'] ?? '') . ($notes ? "\nCheck-out: {$notes}" : ''));
 
+    $now = date('Y-m-d H:i:s');
     db_execute(
         "UPDATE attendance 
-         SET check_out_time = NOW(), check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, check_out_distance_meters = ?, check_out_method = 'gps', total_work_minutes = ?, final_status = ?, is_early_exit = ?, notes = ?
+         SET check_out_time = ?, check_out_lat = ?, check_out_lng = ?, check_out_accuracy = ?, check_out_distance_meters = ?, check_out_method = 'gps', total_work_minutes = ?, final_status = ?, is_early_exit = ?, notes = ?
          WHERE id = ?",
-        [$lat, $lng, $accuracy, $dist, $totalMinutes, $finalStatus, $isEarlyExit, $combinedNotes ?: null, $record['id']]
+        [$now, $lat, $lng, $accuracy, $dist, $totalMinutes, $finalStatus, $isEarlyExit, $combinedNotes ?: null, $record['id']]
     );
 
     $updatedRec = db_query_one("SELECT * FROM attendance WHERE id = ?", [$record['id']]);
