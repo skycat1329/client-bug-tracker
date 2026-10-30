@@ -2144,8 +2144,9 @@ function sync_to_google_sheet(string $brandId, string $event, array $ticket, str
     $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
     $config = $setting ? json_decode($setting['value'], true) : [];
 
-    $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
-    $globalUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+    $fallbackUrl = defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : '';
+    $globalUrl = !empty($config['global_webhook_url']) ? trim($config['global_webhook_url']) : $fallbackUrl;
+    $globalEnabled = !empty($config['enabled']) || (!empty($fallbackUrl));
 
     // 2. Fetch Brand details
     $org = db_query_one('SELECT name, google_sheet_url FROM organizations WHERE id = ?', [$brandId]);
@@ -2253,8 +2254,9 @@ function sync_task_to_google_sheet(array $task, string $event, string $actorName
     $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
     $config = $setting ? json_decode($setting['value'], true) : [];
 
-    $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
-    $globalUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+    $fallbackUrl = defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : '';
+    $globalUrl = !empty($config['global_webhook_url']) ? trim($config['global_webhook_url']) : $fallbackUrl;
+    $globalEnabled = !empty($config['enabled']) || (!empty($fallbackUrl));
 
     if (!$globalEnabled || empty($globalUrl)) {
         return false;
@@ -4640,9 +4642,15 @@ if ($method === 'POST' && $path === '/api/integrations/sheets/config') {
     require_roles($user, ['super_admin', 'support_manager']);
     $input = get_json_input();
 
+    $fallbackUrl = defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : '';
+    $webhookUrl = trim($input['global_webhook_url'] ?? '');
+    if (empty($webhookUrl) && !empty($fallbackUrl)) {
+        $webhookUrl = $fallbackUrl;
+    }
+
     $config = [
-        'enabled' => !empty($input['enabled']),
-        'global_webhook_url' => trim($input['global_webhook_url'] ?? ''),
+        'enabled' => isset($input['enabled']) ? (bool)$input['enabled'] : true,
+        'global_webhook_url' => $webhookUrl,
         'create_brand_tabs' => isset($input['create_brand_tabs']) ? (bool)$input['create_brand_tabs'] : true
     ];
 
@@ -4677,7 +4685,8 @@ if ($method === 'POST' && $path === '/api/integrations/sheets/test') {
     if (empty($targetUrl)) {
         $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
         $config = $setting ? json_decode($setting['value'], true) : [];
-        $targetUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+        $fallbackUrl = defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : '';
+        $targetUrl = !empty($config['global_webhook_url']) ? trim($config['global_webhook_url']) : $fallbackUrl;
     }
 
     if (empty($targetUrl)) {
@@ -7209,8 +7218,9 @@ function sync_attendance_to_google_sheet(array $attendance, string $event, strin
     $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
     $config = $setting ? json_decode($setting['value'], true) : [];
 
-    $globalEnabled = !empty($config['enabled']) || (defined('GOOGLE_SHEETS_WEBHOOK_URL') && !empty(GOOGLE_SHEETS_WEBHOOK_URL));
-    $globalUrl = trim($config['global_webhook_url'] ?? (defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : ''));
+    $fallbackUrl = defined('GOOGLE_SHEETS_WEBHOOK_URL') ? GOOGLE_SHEETS_WEBHOOK_URL : '';
+    $globalUrl = !empty($config['global_webhook_url']) ? trim($config['global_webhook_url']) : $fallbackUrl;
+    $globalEnabled = !empty($config['enabled']) || (!empty($fallbackUrl));
 
     if (!$globalEnabled || empty($globalUrl)) {
         return false;
@@ -7263,7 +7273,7 @@ function sync_attendance_to_google_sheet(array $attendance, string $event, strin
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 12);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     $resp = curl_exec($ch);
@@ -8206,6 +8216,54 @@ if ($method === 'POST' && $path === '/api/admin/attendance/assign-punch') {
         'success' => true,
         'message' => "Attendance for {$targetUser['name']} on {$date} successfully assigned / updated.",
         'data' => $record
+    ]);
+}
+
+// POST /api/attendance/sync-sheets or POST /api/admin/attendance/sync-sheets
+if ($method === 'POST' && ($path === '/api/attendance/sync-sheets' || $path === '/api/admin/attendance/sync-sheets')) {
+    $user = require_auth();
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $targetDate = !empty($input['date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $input['date']) ? $input['date'] : date('Y-m-d');
+
+    $records = db_query(
+        "SELECT a.*, u.name as user_name, u.email as user_email, u.role as user_role 
+         FROM attendance a 
+         JOIN users u ON a.user_id = u.id 
+         WHERE a.attendance_date = ? 
+         ORDER BY a.check_in_time ASC",
+        [$targetDate]
+    );
+
+    $synced = 0;
+    $failed = 0;
+    $details = [];
+    foreach ($records as $rec) {
+        $event = !empty($rec['check_out_time']) ? 'CHECK_OUT' : 'CHECK_IN';
+        $res = sync_attendance_to_google_sheet($rec, $event, $user['name'] . ' (Sync)');
+        if ($res) {
+            $synced++;
+        } else {
+            $failed++;
+        }
+        $details[] = [
+            'user' => $rec['user_name'],
+            'check_in' => $rec['check_in_time'],
+            'check_out' => $rec['check_out_time'],
+            'event' => $event,
+            'success' => $res
+        ];
+    }
+
+    json_response([
+        'success' => true,
+        'date' => $targetDate,
+        'total_found' => count($records),
+        'synced_count' => $synced,
+        'failed_count' => $failed,
+        'details' => $details,
+        'message' => "Successfully synced {$synced} attendance record(s) to Google Sheets for {$targetDate}."
     ]);
 }
 

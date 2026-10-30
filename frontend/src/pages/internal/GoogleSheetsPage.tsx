@@ -33,6 +33,8 @@ export const GoogleSheetsPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
+  const [syncingAttendance, setSyncingAttendance] = useState(false);
+  const [syncAttendanceResult, setSyncAttendanceResult] = useState<any>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
@@ -457,6 +459,20 @@ function appendTaskRow(sheet, data) {
     }
   };
 
+  const handleSyncAttendanceToday = async () => {
+    setSyncingAttendance(true);
+    setSyncAttendanceResult(null);
+    try {
+      const res = await api.post<any>('/attendance/sync-sheets', {});
+      setSyncAttendanceResult(res);
+      await loadData();
+    } catch (err: any) {
+      setSyncAttendanceResult({ success: false, message: err.message });
+    } finally {
+      setSyncingAttendance(false);
+    }
+  };
+
   const handleCopyCode = () => {
     navigator.clipboard.writeText(googleAppsScriptCode);
     setCopiedCode(true);
@@ -505,13 +521,53 @@ function appendTaskRow(sheet, data) {
           <button
             disabled={testing || (!config.global_webhook_url && !config.enabled)}
             onClick={() => handleTestGlobal()}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
           >
             <Send size={13} />
             {testing ? 'Sending Test Row...' : 'Send Test Log Row'}
           </button>
+          <button
+            disabled={syncingAttendance}
+            onClick={() => handleSyncAttendanceToday()}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+            title="Push all punch-in and punch-out records for today into Google Sheets"
+          >
+            <RefreshCw size={13} className={syncingAttendance ? 'animate-spin' : ''} />
+            {syncingAttendance ? 'Syncing Attendance...' : "Sync Today's Attendance"}
+          </button>
         </div>
       </div>
+
+      {/* Sync Attendance Result Alert */}
+      {syncAttendanceResult && (
+        <div
+          className={`p-4 rounded-xl border text-sm flex items-start gap-3 shadow-sm ${
+            syncAttendanceResult.success
+              ? 'bg-blue-50 border-blue-200 text-blue-900'
+              : 'bg-red-50 border-red-200 text-red-900'
+          }`}
+        >
+          {syncAttendanceResult.success ? (
+            <CheckCircle2 size={18} className="text-blue-600 mt-0.5 flex-shrink-0" />
+          ) : (
+            <AlertTriangle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+          )}
+          <div className="flex-1">
+            <div className="font-semibold text-xs uppercase tracking-wider">
+              {syncAttendanceResult.success ? 'Attendance Sync Completed' : 'Attendance Sync Failed'}
+            </div>
+            <p className="mt-0.5 text-xs">
+              {syncAttendanceResult.message || (syncAttendanceResult.success ? `Synced ${syncAttendanceResult.synced_count} records.` : syncAttendanceResult.error)}
+            </p>
+          </div>
+          <button
+            onClick={() => setSyncAttendanceResult(null)}
+            className="text-xs text-slate-400 hover:text-slate-600 font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Test Result Alert */}
       {testResult && (
