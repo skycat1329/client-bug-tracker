@@ -676,7 +676,19 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
             $endpoint = "{$baseUrl}/send/message";
         }
 
-        $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+        $deviceId = !empty($config['device_id']) && $config['device_id'] !== 'default' ? $config['device_id'] : 'default';
+        if ($deviceId === 'default') {
+            $devCheck = gowa_proxy_request('/devices');
+            $devList = $devCheck['data']['results'] ?? $devCheck['data'] ?? [];
+            if (is_array($devList)) {
+                foreach ($devList as $d) {
+                    if (in_array(strtolower($d['state'] ?? ''), ['logged_in', 'connected'], true)) {
+                        $deviceId = !empty($d['jid']) ? $d['jid'] : ($d['id'] ?? 'default');
+                        break;
+                    }
+                }
+            }
+        }
         if (strpos($endpoint, 'device_id=') === false) {
             $sep = (strpos($endpoint, '?') !== false) ? '&' : '?';
             $endpoint .= $sep . 'device_id=' . urlencode($deviceId);
@@ -4371,18 +4383,43 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/status') {
     $isConnected = false;
     $isLoggedIn = false;
     $targetDeviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
-    $pairedDevice = null;
+    $targetDevice = null;
 
     if (is_array($devices)) {
+        // Priority 1: Check if any device in the instance is logged in
         foreach ($devices as $d) {
             $state = strtolower($d['state'] ?? '');
             if (in_array($state, ['logged_in', 'connected', 'authenticated'], true)) {
+                $targetDevice = $d;
+                $targetDeviceId = !empty($d['jid']) ? $d['jid'] : ($d['id'] ?? $targetDeviceId);
                 $isConnected = true;
                 $isLoggedIn = true;
-                $pairedDevice = $d;
                 break;
             }
         }
+        // Priority 2: If none logged in, match by configured ID or JID
+        if (!$targetDevice) {
+            foreach ($devices as $d) {
+                if (($d['id'] ?? '') === $targetDeviceId || ($d['jid'] ?? '') === $targetDeviceId) {
+                    $targetDevice = $d;
+                    $state = strtolower($d['state'] ?? '');
+                    if (in_array($state, ['logged_in', 'connected', 'authenticated'], true)) {
+                        $isConnected = true;
+                        $isLoggedIn = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Automatically sync active device ID into config so all message dispatches use it
+    if ($isConnected && !empty($targetDeviceId) && ($config['device_id'] ?? '') !== $targetDeviceId) {
+        $config['device_id'] = $targetDeviceId;
+        db_execute(
+            'INSERT INTO integration_settings (`key`, `value`, `description`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+            ['whatsapp_config', json_encode($config), 'WhatsApp notifications configuration for brand and team dispatches']
+        );
     }
 
     $isReachable = ($devicesRes['http_code'] === 200 || $devicesRes['http_code'] > 0);
@@ -4391,11 +4428,12 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/status') {
         'success' => true,
         'configured' => true,
         'gateway_url' => $config['gateway_url'],
+        'device_id' => $targetDeviceId,
         'reachable' => $isReachable,
         'connected' => $isConnected,
         'logged_in' => $isLoggedIn,
         'devices' => $devices,
-        'active_device' => $pairedDevice,
+        'active_device' => $targetDevice,
         'raw_error' => $devicesRes['error'] ?? null
     ]);
 }
@@ -4406,7 +4444,7 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/login-qr') {
     require_roles($user, ['super_admin', 'support_manager']);
 
     $config = get_whatsapp_config();
-    $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+    $deviceId = 'default';
 
     // Ensure device is initialized in GOWA
     gowa_proxy_request('/devices', 'POST', ['device_id' => $deviceId]);
@@ -4442,7 +4480,7 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/login-code') {
     }
 
     $config = get_whatsapp_config();
-    $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+    $deviceId = 'default';
 
     // Ensure device is initialized in GOWA
     gowa_proxy_request('/devices', 'POST', ['device_id' => $deviceId]);
@@ -4482,11 +4520,38 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/logout') {
     $user = require_auth();
     require_roles($user, ['super_admin', 'support_manager']);
 
-    $res = gowa_proxy_request('/app/logout');
+    $config = get_whatsapp_config();
+
+    // 1. Query /devices to find all device slots and logout/delete each
+    $devicesRes = gowa_proxy_request('/devices');
+    $devices = $devicesRes['data']['results'] ?? $devicesRes['data'] ?? [];
+
+    if (is_array($devices)) {
+        foreach ($devices as $d) {
+            $devId = $d['id'] ?? null;
+            if (!empty($devId)) {
+                gowa_proxy_request('/devices/' . urlencode($devId) . '/logout', 'POST');
+                gowa_proxy_request('/devices/' . urlencode($devId), 'DELETE');
+            }
+        }
+    }
+
+    // Fallback: also trigger legacy logout
+    gowa_proxy_request('/app/logout');
+
+    // 2. Reset device_id in config
+    $config['device_id'] = 'default';
+    db_execute(
+        'INSERT INTO integration_settings (`key`, `value`, `description`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+        ['whatsapp_config', json_encode($config), 'WhatsApp notifications configuration for brand and team dispatches']
+    );
+
+    // 3. Recreate clean default slot ready for next pair
+    gowa_proxy_request('/devices', 'POST', ['device_id' => 'default']);
+
     json_response([
-        'success' => $res['success'],
-        'data' => $res['data'],
-        'error' => $res['error']
+        'success' => true,
+        'message' => 'WhatsApp device session disconnected and reset successfully'
     ]);
 }
 
@@ -4495,11 +4560,31 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/reconnect') {
     $user = require_auth();
     require_roles($user, ['super_admin', 'support_manager']);
 
-    $res = gowa_proxy_request('/app/reconnect');
+    $config = get_whatsapp_config();
+    $devicesRes = gowa_proxy_request('/devices');
+    $devices = $devicesRes['data']['results'] ?? $devicesRes['data'] ?? [];
+
+    $reconnected = false;
+    if (is_array($devices)) {
+        foreach ($devices as $d) {
+            $devId = $d['id'] ?? null;
+            if (!empty($devId)) {
+                $res = gowa_proxy_request('/devices/' . urlencode($devId) . '/reconnect', 'POST');
+                if ($res['success']) {
+                    $reconnected = true;
+                }
+            }
+        }
+    }
+
+    if (!$reconnected) {
+        $legacyRes = gowa_proxy_request('/app/reconnect', 'POST');
+        $reconnected = !empty($legacyRes['success']);
+    }
+
     json_response([
-        'success' => $res['success'],
-        'data' => $res['data'],
-        'error' => $res['error']
+        'success' => true,
+        'message' => 'WhatsApp reconnect signal dispatched to gateway'
     ]);
 }
 

@@ -52,6 +52,8 @@ export const SlackHealthPage: React.FC = () => {
   const [savingWa, setSavingWa] = useState(false);
   const [saveWaSuccess, setSaveWaSuccess] = useState(false);
   const [saveWaError, setSaveWaError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // WhatsApp Testing
   const [targetPhone, setTargetPhone] = useState('+919999999999');
@@ -198,21 +200,45 @@ export const SlackHealthPage: React.FC = () => {
   };
 
   const handleLogoutWa = async () => {
-    if (!confirm('Are you sure you want to disconnect this WhatsApp session from the gateway?')) return;
+    if (!confirm('Are you sure you want to disconnect this WhatsApp session? All active device slots on the gateway will be reset.')) return;
+    setActionLoading('disconnecting');
+    setActionFeedback(null);
     try {
-      await api.post('/integrations/whatsapp/logout', {});
+      const res = await api.post<any>('/integrations/whatsapp/logout', {});
+      setActionFeedback({
+        type: 'success',
+        message: res?.message || 'Device disconnected and session slot reset successfully.'
+      });
       await checkWaStatus();
-    } catch (err) {
-      console.error(err);
+      setTimeout(() => setActionFeedback(null), 5000);
+    } catch (err: any) {
+      setActionFeedback({
+        type: 'error',
+        message: err?.message || 'Failed to disconnect WhatsApp session'
+      });
+    } finally {
+      setActionLoading(null);
     }
   };
 
   const handleReconnectWa = async () => {
+    setActionLoading('reconnecting');
+    setActionFeedback(null);
     try {
-      await api.post('/integrations/whatsapp/reconnect', {});
+      const res = await api.post<any>('/integrations/whatsapp/reconnect', {});
+      setActionFeedback({
+        type: 'success',
+        message: res?.message || 'Reconnection signal dispatched to WhatsApp Gateway.'
+      });
       await checkWaStatus();
-    } catch (err) {
-      console.error(err);
+      setTimeout(() => setActionFeedback(null), 5000);
+    } catch (err: any) {
+      setActionFeedback({
+        type: 'error',
+        message: err?.message || 'Failed to reconnect'
+      });
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -348,8 +374,25 @@ export const SlackHealthPage: React.FC = () => {
       {activeTab === 'whatsapp' && (
         <div className="space-y-6">
           {/* Status Banner */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+            {actionFeedback && (
+              <div
+                className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 border ${
+                  actionFeedback.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                {actionFeedback.type === 'success' ? (
+                  <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                ) : (
+                  <AlertTriangle size={16} className="text-rose-600 flex-shrink-0" />
+                )}
+                <span>{actionFeedback.message}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div className="flex items-start gap-3.5">
                 <div
                   className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
@@ -363,7 +406,7 @@ export const SlackHealthPage: React.FC = () => {
                   <Smartphone size={24} />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base font-bold text-slate-900">WhatsApp Gateway Connection</h3>
                     <span
                       className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold uppercase tracking-wide border ${
@@ -381,59 +424,86 @@ export const SlackHealthPage: React.FC = () => {
                         : 'Offline / Not Configured'}
                     </span>
                   </div>
+
                   <p className="text-xs text-slate-500 mt-1">
-                    {waStatus?.connected
-                      ? `Device linked and authorized. Ready to dispatch real-time WhatsApp updates.`
-                      : waStatus?.reachable
-                      ? `Gateway server responded on ${waConfig.gateway_url}, but your phone session is not linked yet.`
-                      : `Enter your Render or local GOWA URL below to activate automated 24/7 WhatsApp messaging.`}
+                    {waStatus?.connected ? (
+                      <span>
+                        Device linked and authorized:{' '}
+                        <strong className="text-slate-800 font-mono">
+                          {waStatus?.active_device?.display_name || 'WhatsApp Account'} (
+                          {waStatus?.active_device?.jid?.replace('@s.whatsapp.net', '') || waStatus?.device_id || 'Active'}
+                          )
+                        </strong>
+                        . Ready to dispatch real-time WhatsApp updates.
+                      </span>
+                    ) : waStatus?.reachable ? (
+                      <span>
+                        Gateway server responded on <span className="font-mono text-slate-700">{waConfig.gateway_url}</span>, but your phone session is not linked yet.
+                      </span>
+                    ) : (
+                      <span>Enter your Render or local GOWA URL below to activate automated 24/7 WhatsApp messaging.</span>
+                    )}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
-                {waStatus?.connected ? (
-                  <>
-                    <button
-                      onClick={handleReconnectWa}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-sm transition-colors cursor-pointer"
-                    >
-                      <RefreshCw size={13} />
-                      <span>Reconnect</span>
-                    </button>
-                    <button
-                      onClick={handleLogoutWa}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <Power size={13} />
-                      <span>Disconnect Device</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => {
-                        setShowPairModal(true);
-                        setPairMode('qr');
-                        handleFetchQr();
-                      }}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors cursor-pointer"
-                    >
-                      <QrCode size={15} />
-                      <span>Scan QR Code</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowPairModal(true);
-                        setPairMode('code');
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg shadow-sm transition-colors cursor-pointer"
-                    >
-                      <Key size={14} />
-                      <span>Pair with Phone Code</span>
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  onClick={checkWaStatus}
+                  disabled={checkingWaStatus}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 rounded-lg shadow-sm transition-colors cursor-pointer"
+                  title="Check live gateway status"
+                >
+                  <RefreshCw size={13} className={checkingWaStatus ? 'animate-spin text-emerald-600' : ''} />
+                  <span>{checkingWaStatus ? 'Checking...' : 'Check Status'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleReconnectWa}
+                  disabled={Boolean(actionLoading)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 rounded-lg shadow-sm transition-colors cursor-pointer"
+                >
+                  <RefreshCw size={13} className={actionLoading === 'reconnecting' ? 'animate-spin text-emerald-600' : ''} />
+                  <span>{actionLoading === 'reconnecting' ? 'Reconnecting...' : 'Reconnect'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLogoutWa}
+                  disabled={Boolean(actionLoading)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  title="Disconnect session and reset device slots"
+                >
+                  <Power size={13} className={actionLoading === 'disconnecting' ? 'animate-spin' : ''} />
+                  <span>{actionLoading === 'disconnecting' ? 'Disconnecting...' : 'Disconnect Device'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPairModal(true);
+                    setPairMode('qr');
+                    handleFetchQr();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors cursor-pointer"
+                >
+                  <QrCode size={14} />
+                  <span>Scan QR Code</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPairModal(true);
+                    setPairMode('code');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg shadow-sm transition-colors cursor-pointer"
+                >
+                  <Key size={13} />
+                  <span>Pair with Phone Code</span>
+                </button>
               </div>
             </div>
           </div>
