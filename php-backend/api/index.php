@@ -603,7 +603,7 @@ function get_whatsapp_config(): array {
     $default = [
         'enabled' => defined('WHATSAPP_ENABLED') ? WHATSAPP_ENABLED : true,
         'gateway_url' => defined('WHATSAPP_GATEWAY_URL') ? WHATSAPP_GATEWAY_URL : '',
-        'device_id' => defined('WHATSAPP_DEVICE_ID') ? WHATSAPP_DEVICE_ID : '',
+        'device_id' => defined('WHATSAPP_DEVICE_ID') && !empty(WHATSAPP_DEVICE_ID) ? WHATSAPP_DEVICE_ID : 'default',
         'basic_auth_user' => '',
         'basic_auth_password' => '',
         'api_key' => defined('WHATSAPP_API_KEY') ? WHATSAPP_API_KEY : '',
@@ -676,9 +676,10 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
             $endpoint = "{$baseUrl}/send/message";
         }
 
-        if (!empty($config['device_id'])) {
+        $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+        if (strpos($endpoint, 'device_id=') === false) {
             $sep = (strpos($endpoint, '?') !== false) ? '&' : '?';
-            $endpoint .= $sep . 'device_id=' . urlencode($config['device_id']);
+            $endpoint .= $sep . 'device_id=' . urlencode($deviceId);
         }
 
         $payload = json_encode([
@@ -691,10 +692,10 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
 
-        $headers = ['Content-Type: application/json'];
-        if (!empty($config['device_id'])) {
-            $headers[] = 'X-Device-Id: ' . $config['device_id'];
-        }
+        $headers = [
+            'Content-Type: application/json',
+            'X-Device-Id: ' . $deviceId
+        ];
         if (!empty($config['basic_auth_user'])) {
             $basicCreds = base64_encode("{$config['basic_auth_user']}:" . ($config['basic_auth_password'] ?? ''));
             $headers[] = 'Authorization: Basic ' . $basicCreds;
@@ -4220,22 +4221,23 @@ function gowa_proxy_request(string $subpath, string $method = 'GET', ?array $bod
 
     $baseUrl = rtrim($config['gateway_url'], '/');
     $url = $baseUrl . '/' . ltrim($subpath, '/');
-    if (!empty($config['device_id']) && strpos($url, 'device_id=') === false) {
+    $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+    if (strpos($url, 'device_id=') === false) {
         $sep = (strpos($url, '?') !== false) ? '&' : '?';
-        $url .= $sep . 'device_id=' . urlencode($config['device_id']);
+        $url .= $sep . 'device_id=' . urlencode($deviceId);
     }
 
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 12);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
-    $headers = ['Accept: application/json'];
-    if (!empty($config['device_id'])) {
-        $headers[] = 'X-Device-Id: ' . $config['device_id'];
-    }
+    $headers = [
+        'Accept: application/json',
+        'X-Device-Id: ' . $deviceId
+    ];
     if (!empty($config['basic_auth_user'])) {
         $basicCreds = base64_encode("{$config['basic_auth_user']}:" . ($config['basic_auth_password'] ?? ''));
         $headers[] = 'Authorization: Basic ' . $basicCreds;
@@ -4293,7 +4295,7 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/config') {
         'config' => [
             'enabled' => !empty($config['enabled']),
             'gateway_url' => $config['gateway_url'] ?? '',
-            'device_id' => $config['device_id'] ?? '',
+            'device_id' => $config['device_id'] ?? 'default',
             'basic_auth_user' => $config['basic_auth_user'] ?? '',
             'has_basic_auth' => !empty($config['basic_auth_password']),
             'admin_phone' => $config['admin_phone'] ?? '+919999999999',
@@ -4322,7 +4324,7 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
     $newConfig = [
         'enabled' => isset($input['enabled']) ? (bool)$input['enabled'] : true,
         'gateway_url' => trim($input['gateway_url'] ?? $current['gateway_url'] ?? ''),
-        'device_id' => trim($input['device_id'] ?? $current['device_id'] ?? ''),
+        'device_id' => trim($input['device_id'] ?? $current['device_id'] ?? 'default'),
         'basic_auth_user' => trim($input['basic_auth_user'] ?? $current['basic_auth_user'] ?? ''),
         'basic_auth_password' => !empty($input['basic_auth_password']) ? trim($input['basic_auth_password']) : ($current['basic_auth_password'] ?? ''),
         'api_key' => !empty($input['api_key']) ? trim($input['api_key']) : ($current['api_key'] ?? ''),
@@ -4396,11 +4398,19 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/login-qr') {
     $user = require_auth();
     require_roles($user, ['super_admin', 'support_manager']);
 
-    $res = gowa_proxy_request('/app/login');
+    $config = get_whatsapp_config();
+    $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+
+    $res = gowa_proxy_request('/app/login?device_id=' . urlencode($deviceId));
+    if (!$res['success'] && in_array($res['http_code'], [404, 405], true)) {
+        $res = gowa_proxy_request('/devices/' . urlencode($deviceId) . '/login');
+    }
+
+    $resData = $res['data']['results'] ?? $res['data']['data'] ?? $res['data'] ?? [];
     json_response([
         'success' => $res['success'],
-        'data' => $res['data'],
-        'error' => $res['error']
+        'data' => $resData,
+        'error' => $res['error'] ?: (!$res['success'] ? ($res['data']['message'] ?? 'Could not generate QR code') : null)
     ]);
 }
 
@@ -4415,11 +4425,32 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/login-code') {
         json_error('Please enter a valid phone number with country code for pairing', 400);
     }
 
-    $res = gowa_proxy_request('/app/login-with-code?phone=' . urlencode($phone));
+    $config = get_whatsapp_config();
+    $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+
+    // 1. Try global /app/login-with-code with device_id
+    $res = gowa_proxy_request('/app/login-with-code?phone=' . urlencode($phone) . '&device_id=' . urlencode($deviceId));
+    
+    // 2. If 404 or 405, try device-scoped route /devices/{device_id}/login/code
+    if (!$res['success'] && in_array($res['http_code'], [404, 405], true)) {
+        $res = gowa_proxy_request('/devices/' . urlencode($deviceId) . '/login/code?phone=' . urlencode($phone), 'POST');
+    }
+
+    $resData = $res['data']['results'] ?? $res['data']['data'] ?? $res['data'] ?? [];
+    $pairCode = null;
+    if (is_array($resData)) {
+        $pairCode = $resData['pair_code'] ?? $resData['code'] ?? null;
+    } elseif (is_string($resData)) {
+        $pairCode = $resData;
+    }
+
     json_response([
         'success' => $res['success'],
-        'data' => $res['data'],
-        'error' => $res['error']
+        'data' => [
+            'pair_code' => $pairCode,
+            'raw' => $res['data']
+        ],
+        'error' => $res['error'] ?: (!$res['success'] ? ($res['data']['message'] ?? 'Could not generate pairing code') : null)
     ]);
 }
 
