@@ -1070,12 +1070,18 @@ export const SlackHealthPage: React.FC = () => {
                             alt="WhatsApp QR Code"
                             className="w-56 h-56 mx-auto rounded-lg shadow-sm border border-slate-300"
                           />
+                        ) : qrData?.qr_link ? (
+                          <img
+                            src={qrData.qr_link}
+                            alt="WhatsApp QR Code"
+                            className="w-56 h-56 mx-auto rounded-lg shadow-sm border border-slate-300 bg-white p-2"
+                          />
                         ) : (
                           <div className="font-mono text-[10px] break-all p-3 bg-white border rounded">
-                            {qrData.qr_link || qrData.qr}
+                            {qrData.qr}
                           </div>
                         )}
-                        <span className="text-[11px] text-slate-400 block">QR refreshes every 20 seconds</span>
+                        <span className="text-[11px] text-slate-400 block">QR refreshes every 30 seconds</span>
                       </div>
                     ) : (
                       <div className="space-y-2">

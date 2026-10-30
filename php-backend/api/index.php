@@ -4364,21 +4364,28 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/status') {
         ]);
     }
 
-    // 1. Check devices list
-    $devicesRes = gowa_proxy_request('/app/devices');
-    // 2. Check general status
-    $statusRes = gowa_proxy_request('/app/status');
-
-    $isReachable = ($devicesRes['http_code'] > 0 || $statusRes['http_code'] > 0);
+    // 1. Query /devices to check registered devices and connection status
+    $devicesRes = gowa_proxy_request('/devices');
     $devices = $devicesRes['data']['results'] ?? $devicesRes['data'] ?? [];
-    $statusData = $statusRes['data']['results'] ?? $statusRes['data'] ?? null;
 
     $isConnected = false;
     $isLoggedIn = false;
-    if ($statusRes['success']) {
-        $isConnected = !empty($statusData['is_connected']) || !empty($statusData['connected']);
-        $isLoggedIn = !empty($statusData['is_logged_in']) || !empty($statusData['logged_in']);
+    $targetDeviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
+    $pairedDevice = null;
+
+    if (is_array($devices)) {
+        foreach ($devices as $d) {
+            $state = strtolower($d['state'] ?? '');
+            if (in_array($state, ['logged_in', 'connected', 'authenticated'], true)) {
+                $isConnected = true;
+                $isLoggedIn = true;
+                $pairedDevice = $d;
+                break;
+            }
+        }
     }
+
+    $isReachable = ($devicesRes['http_code'] === 200 || $devicesRes['http_code'] > 0);
 
     json_response([
         'success' => true,
@@ -4388,8 +4395,8 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/status') {
         'connected' => $isConnected,
         'logged_in' => $isLoggedIn,
         'devices' => $devices,
-        'status_info' => $statusData,
-        'raw_error' => $statusRes['error'] ?? $devicesRes['error'] ?? null
+        'active_device' => $pairedDevice,
+        'raw_error' => $devicesRes['error'] ?? null
     ]);
 }
 
@@ -4401,12 +4408,21 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/login-qr') {
     $config = get_whatsapp_config();
     $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
 
-    $res = gowa_proxy_request('/app/login?device_id=' . urlencode($deviceId));
-    if (!$res['success'] && in_array($res['http_code'], [404, 405], true)) {
-        $res = gowa_proxy_request('/devices/' . urlencode($deviceId) . '/login');
+    // Ensure device is initialized in GOWA
+    gowa_proxy_request('/devices', 'POST', ['device_id' => $deviceId]);
+
+    // Request QR from /devices/{deviceId}/login
+    $res = gowa_proxy_request('/devices/' . urlencode($deviceId) . '/login?device_id=' . urlencode($deviceId));
+    if (!$res['success']) {
+        $res = gowa_proxy_request('/app/login?device_id=' . urlencode($deviceId));
     }
 
     $resData = $res['data']['results'] ?? $res['data']['data'] ?? $res['data'] ?? [];
+    if (is_array($resData) && !empty($resData['qr_link'])) {
+        // Upgrade http:// to https:// so browser doesn't block mixed-content image
+        $resData['qr_link'] = preg_replace('/^http:\/\//i', 'https://', $resData['qr_link']);
+    }
+
     json_response([
         'success' => $res['success'],
         'data' => $resData,
@@ -4428,12 +4444,19 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/login-code') {
     $config = get_whatsapp_config();
     $deviceId = !empty($config['device_id']) ? $config['device_id'] : 'default';
 
-    // 1. Try global /app/login-with-code with device_id
-    $res = gowa_proxy_request('/app/login-with-code?phone=' . urlencode($phone) . '&device_id=' . urlencode($deviceId));
-    
-    // 2. If 404 or 405, try device-scoped route /devices/{device_id}/login/code
-    if (!$res['success'] && in_array($res['http_code'], [404, 405], true)) {
-        $res = gowa_proxy_request('/devices/' . urlencode($deviceId) . '/login/code?phone=' . urlencode($phone), 'POST');
+    // Ensure device is initialized in GOWA
+    gowa_proxy_request('/devices', 'POST', ['device_id' => $deviceId]);
+
+    // 1. Post to /devices/{deviceId}/login/code
+    $res = gowa_proxy_request(
+        '/devices/' . urlencode($deviceId) . '/login/code?phone=' . urlencode($phone) . '&device_id=' . urlencode($deviceId),
+        'POST',
+        ['phone' => $phone]
+    );
+
+    // 2. Fallback to /app/login-with-code
+    if (!$res['success']) {
+        $res = gowa_proxy_request('/app/login-with-code?phone=' . urlencode($phone) . '&device_id=' . urlencode($deviceId), 'POST', ['phone' => $phone]);
     }
 
     $resData = $res['data']['results'] ?? $res['data']['data'] ?? $res['data'] ?? [];
