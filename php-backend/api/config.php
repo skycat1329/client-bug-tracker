@@ -41,11 +41,14 @@ define('SLACK_CHANNEL_RESOLUTIONS', '#ticket-resolutions');
 // Google Sheets Webhook URL (Optional global fallback, or configure dynamically in Web UI)
 define('GOOGLE_SHEETS_WEBHOOK_URL', 'https://script.google.com/macros/s/AKfycbzZt7aTSC6TtNa98NyjIAyD0cZ3zcDkuCW8YAiiN5AaQgArJ6OH0BIrXlCEMUAVvD-rWg/exec');
 
-// WhatsApp Gateway / Webhook Notification Settings
+// WhatsApp Gateway (aldinokemal/go-whatsapp-web-multidevice) Settings
 define('WHATSAPP_ENABLED', true);
 define('WHATSAPP_GATEWAY_URL', '');
+define('WHATSAPP_DEVICE_ID', '');
 define('WHATSAPP_API_KEY', '');
 define('WHATSAPP_DEFAULT_ADMIN_PHONE', '+919999999999');
+define('WHATSAPP_ADMIN_GROUP_JID', '');
+define('WHATSAPP_DEFAULT_COUNTRY_CODE', '91');
 
 // Storage directory for attachments
 define('UPLOAD_DIR', __DIR__ . '/../uploads');

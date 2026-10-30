@@ -603,11 +603,20 @@ function get_whatsapp_config(): array {
     $default = [
         'enabled' => defined('WHATSAPP_ENABLED') ? WHATSAPP_ENABLED : true,
         'gateway_url' => defined('WHATSAPP_GATEWAY_URL') ? WHATSAPP_GATEWAY_URL : '',
+        'device_id' => defined('WHATSAPP_DEVICE_ID') ? WHATSAPP_DEVICE_ID : '',
+        'basic_auth_user' => '',
+        'basic_auth_password' => '',
         'api_key' => defined('WHATSAPP_API_KEY') ? WHATSAPP_API_KEY : '',
         'admin_phone' => defined('WHATSAPP_DEFAULT_ADMIN_PHONE') ? WHATSAPP_DEFAULT_ADMIN_PHONE : '+919999999999',
+        'admin_group_jid' => defined('WHATSAPP_ADMIN_GROUP_JID') ? WHATSAPP_ADMIN_GROUP_JID : '',
+        'default_country_code' => defined('WHATSAPP_DEFAULT_COUNTRY_CODE') ? WHATSAPP_DEFAULT_COUNTRY_CODE : '91',
+        'send_on_punch_in' => true,
+        'send_on_punch_out' => true,
+        'send_on_regularize' => true,
         'send_on_create' => true,
         'send_on_assign' => true,
-        'send_on_status' => true
+        'send_on_status' => true,
+        'attendance_notify_mode' => 'both' // 'both' | 'employee_only' | 'admin_only'
     ];
 
     try {
@@ -623,51 +632,102 @@ function get_whatsapp_config(): array {
     return $default;
 }
 
+function clean_whatsapp_recipient(string $raw, string $defaultCountry = '91'): string {
+    $trimmed = trim($raw);
+    if (empty($trimmed)) return '';
+    // Group JID (120363040656010581@g.us) or direct JID (919876543210@s.whatsapp.net)
+    if (strpos($trimmed, '@g.us') !== false || strpos($trimmed, '@s.whatsapp.net') !== false) {
+        return $trimmed;
+    }
+    // Remove all non-digits
+    $digits = preg_replace('/\D+/', '', $trimmed);
+    if (empty($digits)) return '';
+    // If standard 10-digit Indian mobile starting with 6,7,8,9, prepend default country code
+    if (strlen($digits) === 10 && in_array($digits[0], ['6', '7', '8', '9'], true)) {
+        $digits = $defaultCountry . $digits;
+    }
+    return $digits;
+}
+
 function send_whatsapp_notification(string $toPhone, string $message, array $meta = []): array {
     $config = get_whatsapp_config();
+    $defaultCountry = !empty($config['default_country_code']) ? $config['default_country_code'] : '91';
+
     if (empty($toPhone)) {
-        $toPhone = $config['admin_phone'] ?? '+919999999999';
+        $toPhone = !empty($config['admin_group_jid']) ? $config['admin_group_jid'] : ($config['admin_phone'] ?? '+919999999999');
     }
 
-    $cleanPhone = preg_replace('/[^0-9+]/', '', trim($toPhone));
+    $cleanRecipient = clean_whatsapp_recipient($toPhone, $defaultCountry);
     $encodedText = urlencode($message);
-    $directUrl = "https://api.whatsapp.com/send?phone={$cleanPhone}&text={$encodedText}";
+    $directUrl = "https://api.whatsapp.com/send?phone=" . preg_replace('/\D+/', '', $cleanRecipient) . "&text={$encodedText}";
 
     $delivered = false;
     $error = null;
     $httpCode = 0;
+    $responseJson = null;
 
-    // If an external gateway URL (e.g. UltraMsg, Twilio, Meta Cloud API, or custom webhook) is configured, POST the payload
-    if (!empty($config['enabled']) && !empty($config['gateway_url'])) {
+    // Dispatch via aldinokemal/go-whatsapp-web-multidevice (GOWA) REST API
+    if (!empty($config['enabled']) && !empty($config['gateway_url']) && !empty($cleanRecipient)) {
+        $baseUrl = rtrim($config['gateway_url'], '/');
+        // Ensure path ends with /send/message
+        if (substr($baseUrl, -13) === '/send/message') {
+            $endpoint = $baseUrl;
+        } else {
+            $endpoint = "{$baseUrl}/send/message";
+        }
+
+        if (!empty($config['device_id'])) {
+            $sep = (strpos($endpoint, '?') !== false) ? '&' : '?';
+            $endpoint .= $sep . 'device_id=' . urlencode($config['device_id']);
+        }
+
         $payload = json_encode([
-            'to' => $cleanPhone,
-            'phone' => $cleanPhone,
-            'body' => $message,
-            'message' => $message,
-            'meta' => $meta,
-            'timestamp' => date('c')
+            'phone' => $cleanRecipient,
+            'message' => $message
         ]);
 
-        $ch = curl_init($config['gateway_url']);
+        $ch = curl_init($endpoint);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+
         $headers = ['Content-Type: application/json'];
-        if (!empty($config['api_key'])) {
+        if (!empty($config['device_id'])) {
+            $headers[] = 'X-Device-Id: ' . $config['device_id'];
+        }
+        if (!empty($config['basic_auth_user'])) {
+            $basicCreds = base64_encode("{$config['basic_auth_user']}:" . ($config['basic_auth_password'] ?? ''));
+            $headers[] = 'Authorization: Basic ' . $basicCreds;
+        } elseif (!empty($config['api_key'])) {
             $headers[] = 'Authorization: Bearer ' . $config['api_key'];
             $headers[] = 'X-API-KEY: ' . $config['api_key'];
         }
+
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 8);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 4);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
         $res = curl_exec($ch);
         $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
         curl_close($ch);
 
+        if (!empty($res)) {
+            $responseJson = json_decode($res, true);
+        }
+
         if ($httpCode >= 200 && $httpCode < 300 && empty($err)) {
             $delivered = true;
         } else {
-            $error = $err ?: "HTTP {$httpCode}: {$res}";
+            if (!empty($responseJson['message'])) {
+                $error = "GOWA Error ({$httpCode}): " . $responseJson['message'];
+            } elseif (!empty($err)) {
+                $error = "Network/cURL Error: {$err}";
+            } else {
+                $error = "HTTP {$httpCode}: " . substr((string)$res, 0, 300);
+            }
         }
     } else {
         // Direct click-to-chat URL generated and available for browser / admin dispatch
@@ -682,10 +742,17 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
             [
                 $deliveryId,
                 'whatsapp',
-                $cleanPhone,
+                $cleanRecipient,
                 $meta['event'] ?? 'general_notification',
                 $meta['ticket_id'] ?? null,
-                json_encode(['phone' => $cleanPhone, 'message' => $message, 'url' => $directUrl, 'meta' => $meta]),
+                json_encode([
+                    'phone' => $cleanRecipient,
+                    'message' => $message,
+                    'url' => $directUrl,
+                    'http_code' => $httpCode,
+                    'response' => $responseJson,
+                    'meta' => $meta
+                ]),
                 $delivered ? 'delivered' : 'failed',
                 1,
                 $error
@@ -695,11 +762,144 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
 
     return [
         'success' => $delivered,
-        'phone' => $cleanPhone,
+        'phone' => $cleanRecipient,
         'whatsapp_url' => $directUrl,
-        'error' => $error
+        'whatsapp_web_url' => $directUrl,
+        'http_code' => $httpCode,
+        'error' => $error,
+        'response' => $responseJson
     ];
 }
+
+function notify_attendance_whatsapp(string $eventType, array $record, array $user): void {
+    try {
+        $config = get_whatsapp_config();
+        if (empty($config['enabled'])) return;
+
+        $mode = $config['attendance_notify_mode'] ?? 'both';
+        $userName = $user['name'] ?? 'Team Member';
+        $userPhone = $user['phone'] ?? '';
+        $adminPhone = $config['admin_phone'] ?? '+919999999999';
+        $adminGroup = $config['admin_group_jid'] ?? '';
+        $adminTarget = !empty($adminGroup) ? $adminGroup : $adminPhone;
+
+        $recipients = [];
+        if (($mode === 'both' || $mode === 'employee_only') && !empty($userPhone)) {
+            $recipients[] = ['phone' => $userPhone, 'target' => 'employee'];
+        }
+        if (($mode === 'both' || $mode === 'admin_only') && !empty($adminTarget)) {
+            $recipients[] = ['phone' => $adminTarget, 'target' => 'admin'];
+        }
+        if (empty($recipients) && !empty($adminTarget)) {
+            $recipients[] = ['phone' => $adminTarget, 'target' => 'admin_fallback'];
+        }
+
+        if (empty($recipients)) return;
+
+        $today = $record['attendance_date'] ?? date('Y-m-d');
+        $dateFormatted = date('d M Y', strtotime($today));
+
+        if ($eventType === 'punch_in' && !empty($config['send_on_punch_in'])) {
+            $timeStr = !empty($record['check_in_time']) ? date('h:i:s A', strtotime($record['check_in_time'])) : date('h:i:s A');
+            $workMode = strtoupper($record['work_mode'] ?? 'OFFICE');
+            $distStr = ($record['check_in_distance_meters'] !== null) ? round($record['check_in_distance_meters']) . 'm from office' : 'GPS Verified';
+            $isLate = !empty($record['is_late']) || strtolower($record['check_in_status'] ?? '') === 'late' || strtoupper($record['final_status'] ?? '') === 'LATE';
+            $statusBadge = $isLate ? "🔴 LATE PUNCH (Grace: 10:15 AM)" : "🟢 ON TIME (Shift: 10:00 AM)";
+
+            $msg = "🟢 *ASSURANCE MEDIA | ATTENDANCE PUNCH-IN*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "👤 *Staff:* *{$userName}*\n" .
+                   "⏰ *Punch Time:* *{$timeStr}* (IST)\n" .
+                   "📅 *Date:* {$dateFormatted}\n" .
+                   "📍 *Mode:* {$workMode} ({$distStr})\n" .
+                   "🚦 *Status:* {$statusBadge}\n";
+            if (!empty($record['notes'])) {
+                $msg .= "📝 *Note:* " . trim($record['notes']) . "\n";
+            }
+            $msg .= "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                    "_Assurance Media Workforce Management • Have a productive day! 🚀_";
+
+            foreach ($recipients as $r) {
+                send_whatsapp_notification($r['phone'], $msg, [
+                    'event' => 'attendance_punch_in',
+                    'user_id' => $user['id'],
+                    'user_name' => $userName,
+                    'target_audience' => $r['target']
+                ]);
+            }
+        } elseif ($eventType === 'punch_out' && !empty($config['send_on_punch_out'])) {
+            $timeStr = !empty($record['check_out_time']) ? date('h:i:s A', strtotime($record['check_out_time'])) : date('h:i:s A');
+            $totalMins = (int)($record['total_work_minutes'] ?? 0);
+            $hours = floor($totalMins / 60);
+            $mins = $totalMins % 60;
+            $durationStr = "{$hours}h {$mins}m";
+            $isEarly = !empty($record['is_early_exit']);
+            $finalStatus = strtoupper($record['final_status'] ?? 'PRESENT');
+
+            if ($finalStatus === 'HALF_DAY') {
+                $statusBadge = "⚠️ HALF DAY (< 4 Hours Worked)";
+            } elseif ($isEarly) {
+                $statusBadge = "⚠️ EARLY DEPARTURE (Shift Ends: 07:00 PM)";
+            } else {
+                $statusBadge = "🟢 FULL DAY COMPLETED";
+            }
+
+            $msg = "🔴 *ASSURANCE MEDIA | ATTENDANCE PUNCH-OUT*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "👤 *Staff:* *{$userName}*\n" .
+                   "⏰ *Check-Out Time:* *{$timeStr}* (IST)\n" .
+                   "⏱️ *Shift Duration:* *{$durationStr}*\n" .
+                   "📅 *Date:* {$dateFormatted}\n" .
+                   "🚦 *Status:* {$statusBadge}\n";
+            if (!empty($record['notes'])) {
+                $msg .= "📝 *Notes:* " . trim($record['notes']) . "\n";
+            }
+            $msg .= "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                    "_Assurance Media Workforce Management • Thank you for your dedication! ✨_";
+
+            foreach ($recipients as $r) {
+                send_whatsapp_notification($r['phone'], $msg, [
+                    'event' => 'attendance_punch_out',
+                    'user_id' => $user['id'],
+                    'user_name' => $userName,
+                    'target_audience' => $r['target']
+                ]);
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+function notify_attendance_regularization_whatsapp(array $req, string $newStatus, ?string $reviewerNotes, array $reviewer): void {
+    try {
+        $config = get_whatsapp_config();
+        if (empty($config['enabled']) || empty($config['send_on_regularize'])) return;
+
+        $targetUser = db_query_one("SELECT name, phone, email FROM users WHERE id = ?", [$req['user_id']]);
+        if (!$targetUser || empty($targetUser['phone'])) return;
+
+        $decisionIcon = ($newStatus === 'APPROVED') ? '✅ APPROVED' : '❌ REJECTED';
+        $dateFormatted = date('d M Y', strtotime($req['attendance_date']));
+
+        $msg = "📋 *ASSURANCE MEDIA | REGULARIZATION UPDATE*\n" .
+               "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+               "👤 *Staff:* *{$targetUser['name']}*\n" .
+               "📅 *Attendance Date:* {$dateFormatted}\n" .
+               "⚖️ *Decision:* *{$decisionIcon}*\n" .
+               "👨‍💼 *Reviewed By:* {$reviewer['name']}\n";
+        if (!empty($reviewerNotes)) {
+            $msg .= "💬 *Reviewer Remarks:* " . trim($reviewerNotes) . "\n";
+        }
+        $msg .= "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                "_Assurance Media Workforce Management_";
+
+        send_whatsapp_notification($targetUser['phone'], $msg, [
+            'event' => 'attendance_regularization_' . strtolower($newStatus),
+            'user_id' => $req['user_id'],
+            'status' => $newStatus
+        ]);
+    } catch (Exception $e) {}
+}
+
 
 function get_phase_meta(string $status): array {
     $statusKey = strtoupper(trim(str_replace('_', ' ', $status)));
@@ -4011,6 +4211,63 @@ if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/sheets-url$#'
 // WhatsApp Integration API Routes
 // ==============================================================================
 
+// Helper for GOWA proxy requests
+function gowa_proxy_request(string $subpath, string $method = 'GET', ?array $body = null): array {
+    $config = get_whatsapp_config();
+    if (empty($config['gateway_url'])) {
+        return ['success' => false, 'error' => 'Gateway URL is not configured', 'http_code' => 0];
+    }
+
+    $baseUrl = rtrim($config['gateway_url'], '/');
+    $url = $baseUrl . '/' . ltrim($subpath, '/');
+    if (!empty($config['device_id']) && strpos($url, 'device_id=') === false) {
+        $sep = (strpos($url, '?') !== false) ? '&' : '?';
+        $url .= $sep . 'device_id=' . urlencode($config['device_id']);
+    }
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+    $headers = ['Accept: application/json'];
+    if (!empty($config['device_id'])) {
+        $headers[] = 'X-Device-Id: ' . $config['device_id'];
+    }
+    if (!empty($config['basic_auth_user'])) {
+        $basicCreds = base64_encode("{$config['basic_auth_user']}:" . ($config['basic_auth_password'] ?? ''));
+        $headers[] = 'Authorization: Basic ' . $basicCreds;
+    } elseif (!empty($config['api_key'])) {
+        $headers[] = 'Authorization: Bearer ' . $config['api_key'];
+        $headers[] = 'X-API-KEY: ' . $config['api_key'];
+    }
+
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        if ($body !== null) {
+            $headers[] = 'Content-Type: application/json';
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+        }
+    }
+
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    $res = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    $json = !empty($res) ? json_decode($res, true) : null;
+    return [
+        'success' => ($code >= 200 && $code < 400 && empty($err)),
+        'http_code' => $code,
+        'data' => $json,
+        'raw' => $res,
+        'error' => $err ?: ($code >= 400 ? ($json['message'] ?? "HTTP $code") : null)
+    ];
+}
+
 // GET /api/integrations/whatsapp/config
 if ($method === 'GET' && $path === '/api/integrations/whatsapp/config') {
     $user = require_auth();
@@ -4036,11 +4293,20 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/config') {
         'config' => [
             'enabled' => !empty($config['enabled']),
             'gateway_url' => $config['gateway_url'] ?? '',
+            'device_id' => $config['device_id'] ?? '',
+            'basic_auth_user' => $config['basic_auth_user'] ?? '',
+            'has_basic_auth' => !empty($config['basic_auth_password']),
             'admin_phone' => $config['admin_phone'] ?? '+919999999999',
+            'admin_group_jid' => $config['admin_group_jid'] ?? '',
+            'default_country_code' => $config['default_country_code'] ?? '91',
             'has_api_key' => !empty($config['api_key']),
+            'send_on_punch_in' => isset($config['send_on_punch_in']) ? (bool)$config['send_on_punch_in'] : true,
+            'send_on_punch_out' => isset($config['send_on_punch_out']) ? (bool)$config['send_on_punch_out'] : true,
+            'send_on_regularize' => isset($config['send_on_regularize']) ? (bool)$config['send_on_regularize'] : true,
             'send_on_create' => isset($config['send_on_create']) ? (bool)$config['send_on_create'] : true,
             'send_on_assign' => isset($config['send_on_assign']) ? (bool)$config['send_on_assign'] : true,
-            'send_on_status' => isset($config['send_on_status']) ? (bool)$config['send_on_status'] : true
+            'send_on_status' => isset($config['send_on_status']) ? (bool)$config['send_on_status'] : true,
+            'attendance_notify_mode' => $config['attendance_notify_mode'] ?? 'both'
         ],
         'deliveries' => $deliveries
     ]);
@@ -4056,11 +4322,22 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
     $newConfig = [
         'enabled' => isset($input['enabled']) ? (bool)$input['enabled'] : true,
         'gateway_url' => trim($input['gateway_url'] ?? $current['gateway_url'] ?? ''),
+        'device_id' => trim($input['device_id'] ?? $current['device_id'] ?? ''),
+        'basic_auth_user' => trim($input['basic_auth_user'] ?? $current['basic_auth_user'] ?? ''),
+        'basic_auth_password' => !empty($input['basic_auth_password']) ? trim($input['basic_auth_password']) : ($current['basic_auth_password'] ?? ''),
         'api_key' => !empty($input['api_key']) ? trim($input['api_key']) : ($current['api_key'] ?? ''),
         'admin_phone' => trim($input['admin_phone'] ?? $current['admin_phone'] ?? '+919999999999'),
+        'admin_group_jid' => trim($input['admin_group_jid'] ?? $current['admin_group_jid'] ?? ''),
+        'default_country_code' => trim($input['default_country_code'] ?? $current['default_country_code'] ?? '91'),
+        'send_on_punch_in' => isset($input['send_on_punch_in']) ? (bool)$input['send_on_punch_in'] : true,
+        'send_on_punch_out' => isset($input['send_on_punch_out']) ? (bool)$input['send_on_punch_out'] : true,
+        'send_on_regularize' => isset($input['send_on_regularize']) ? (bool)$input['send_on_regularize'] : true,
         'send_on_create' => isset($input['send_on_create']) ? (bool)$input['send_on_create'] : true,
         'send_on_assign' => isset($input['send_on_assign']) ? (bool)$input['send_on_assign'] : true,
-        'send_on_status' => isset($input['send_on_status']) ? (bool)$input['send_on_status'] : true
+        'send_on_status' => isset($input['send_on_status']) ? (bool)$input['send_on_status'] : true,
+        'attendance_notify_mode' => in_array($input['attendance_notify_mode'] ?? '', ['both', 'employee_only', 'admin_only'], true)
+            ? $input['attendance_notify_mode']
+            : ($current['attendance_notify_mode'] ?? 'both')
     ];
 
     db_execute(
@@ -4071,6 +4348,107 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
     json_response(['success' => true, 'config' => $newConfig, 'message' => 'WhatsApp configuration updated successfully']);
 }
 
+// GET /api/integrations/whatsapp/status (Check live GOWA status)
+if ($method === 'GET' && $path === '/api/integrations/whatsapp/status') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $config = get_whatsapp_config();
+    if (empty($config['gateway_url'])) {
+        json_response([
+            'success' => false,
+            'configured' => false,
+            'message' => 'WhatsApp Gateway URL is not configured yet. Run the standalone GOWA binary and enter the URL.'
+        ]);
+    }
+
+    // 1. Check devices list
+    $devicesRes = gowa_proxy_request('/app/devices');
+    // 2. Check general status
+    $statusRes = gowa_proxy_request('/app/status');
+
+    $isReachable = ($devicesRes['http_code'] > 0 || $statusRes['http_code'] > 0);
+    $devices = $devicesRes['data']['results'] ?? $devicesRes['data'] ?? [];
+    $statusData = $statusRes['data']['results'] ?? $statusRes['data'] ?? null;
+
+    $isConnected = false;
+    $isLoggedIn = false;
+    if ($statusRes['success']) {
+        $isConnected = !empty($statusData['is_connected']) || !empty($statusData['connected']);
+        $isLoggedIn = !empty($statusData['is_logged_in']) || !empty($statusData['logged_in']);
+    }
+
+    json_response([
+        'success' => true,
+        'configured' => true,
+        'gateway_url' => $config['gateway_url'],
+        'reachable' => $isReachable,
+        'connected' => $isConnected,
+        'logged_in' => $isLoggedIn,
+        'devices' => $devices,
+        'status_info' => $statusData,
+        'raw_error' => $statusRes['error'] ?? $devicesRes['error'] ?? null
+    ]);
+}
+
+// GET /api/integrations/whatsapp/login-qr (Fetch QR code for pairing)
+if ($method === 'GET' && $path === '/api/integrations/whatsapp/login-qr') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $res = gowa_proxy_request('/app/login');
+    json_response([
+        'success' => $res['success'],
+        'data' => $res['data'],
+        'error' => $res['error']
+    ]);
+}
+
+// POST /api/integrations/whatsapp/login-code (Request phone pairing code)
+if ($method === 'POST' && $path === '/api/integrations/whatsapp/login-code') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+    $input = get_json_input();
+    $phone = clean_whatsapp_recipient($input['phone'] ?? '');
+
+    if (empty($phone)) {
+        json_error('Please enter a valid phone number with country code for pairing', 400);
+    }
+
+    $res = gowa_proxy_request('/app/login-with-code?phone=' . urlencode($phone));
+    json_response([
+        'success' => $res['success'],
+        'data' => $res['data'],
+        'error' => $res['error']
+    ]);
+}
+
+// POST /api/integrations/whatsapp/logout
+if ($method === 'POST' && $path === '/api/integrations/whatsapp/logout') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $res = gowa_proxy_request('/app/logout');
+    json_response([
+        'success' => $res['success'],
+        'data' => $res['data'],
+        'error' => $res['error']
+    ]);
+}
+
+// POST /api/integrations/whatsapp/reconnect
+if ($method === 'POST' && $path === '/api/integrations/whatsapp/reconnect') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $res = gowa_proxy_request('/app/reconnect');
+    json_response([
+        'success' => $res['success'],
+        'data' => $res['data'],
+        'error' => $res['error']
+    ]);
+}
+
 // POST /api/integrations/whatsapp/test
 if ($method === 'POST' && $path === '/api/integrations/whatsapp/test') {
     $user = require_auth();
@@ -4078,10 +4456,18 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/test') {
     $input = get_json_input();
 
     $targetPhone = !empty($input['phone']) ? trim($input['phone']) : null;
-    $msg = "🧪 *Assurance Media | WhatsApp Integration Test*\n" .
-           "Test triggered by: {$user['name']} ({$user['email']})\n" .
-           "Time: " . date('Y-m-d H:i:s') . "\n" .
-           "Status: WhatsApp gateway connectivity active & functional! 🚀";
+    $customMsg = !empty($input['message']) ? trim($input['message']) : null;
+
+    $msg = $customMsg ?: (
+        "🧪 *Assurance Media | WhatsApp Gateway Test*\n" .
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+        "👤 *Triggered By:* {$user['name']} ({$user['email']})\n" .
+        "⏰ *Timestamp:* " . date('Y-m-d h:i:s A') . " (IST)\n" .
+        "⚡ *Engine:* `aldinokemal/go-whatsapp-web-multidevice`\n" .
+        "🚀 *Status:* Multi-Device REST Gateway is active & connected!\n" .
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+        "_Assurance Media Bug Tracker & Workforce System_"
+    );
 
     $result = send_whatsapp_notification($targetPhone, $msg, [
         'event' => 'test_verification',
@@ -4093,9 +4479,11 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/test') {
         'phone' => $result['phone'],
         'whatsapp_web_url' => $result['whatsapp_web_url'],
         'http_code' => $result['http_code'],
+        'error' => $result['error'],
+        'gateway_response' => $result['response'],
         'message' => $result['success']
-            ? "Test notification dispatched to {$result['phone']} successfully!"
-            : "WhatsApp message logged to database. Direct click-to-send link generated."
+            ? "Test notification dispatched to {$result['phone']} via GOWA successfully!"
+            : ($result['error'] ? "Gateway error: " . $result['error'] : "WhatsApp message logged to database.")
     ]);
 }
 
@@ -6310,6 +6698,9 @@ if ($method === 'POST' && ($path === '/api/attendance/check-in' || $path === '/a
     // Google Sheets Real-time Sync
     sync_attendance_to_google_sheet($record, 'CHECK_IN', $user['name']);
 
+    // WhatsApp Instant Punch-In Notification
+    notify_attendance_whatsapp('punch_in', $record, $user);
+
     $ip = get_client_ip();
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
     try {
@@ -6389,6 +6780,9 @@ if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/
 
     // Google Sheets Real-time Sync
     sync_attendance_to_google_sheet($updatedRec, 'CHECK_OUT', $user['name']);
+
+    // WhatsApp Instant Punch-Out Notification
+    notify_attendance_whatsapp('punch_out', $updatedRec, $user);
 
     $ip = get_client_ip();
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
@@ -6698,6 +7092,9 @@ if ($method === 'POST' && preg_match('#^/api/admin/attendance/regularization/([^
             sync_attendance_to_google_sheet($record, 'REGULARIZATION', $user['name']);
         }
     }
+
+    // WhatsApp Notification to employee on regularization decision
+    notify_attendance_regularization_whatsapp($req, $newStatus, $reviewerNotes, $user);
 
     json_response([
         'success' => true,

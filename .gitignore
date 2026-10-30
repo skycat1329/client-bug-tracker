@@ -15,3 +15,6 @@ hostinger-deploy/
 .DS_Store
 Thumbs.db
 extracted_pdf_assets/
+*.exe
+whatsapp-gateway/*.exe
+whatsapp-gateway/storages/

@@ -11,53 +11,221 @@ import {
   Mail,
   Smartphone,
   MessageCircle,
+  QrCode,
+  Key,
+  Globe,
+  Power,
+  Copy,
+  Check,
+  Radio,
+  X,
+  ShieldCheck,
 } from 'lucide-react';
 
 export const SlackHealthPage: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'whatsapp' | 'slack' | 'email' | 'audit'>('whatsapp');
   const [health, setHealth] = useState<any>(null);
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<any>(null);
+
+  // WhatsApp Configuration & Gateway Status
+  const [waConfig, setWaConfig] = useState<any>({
+    enabled: true,
+    gateway_url: '',
+    device_id: '',
+    basic_auth_user: '',
+    basic_auth_password: '',
+    admin_phone: '+919999999999',
+    admin_group_jid: '',
+    default_country_code: '91',
+    send_on_punch_in: true,
+    send_on_punch_out: true,
+    send_on_regularize: true,
+    send_on_create: true,
+    send_on_assign: true,
+    send_on_status: true,
+    attendance_notify_mode: 'both',
+  });
+  const [waStatus, setWaStatus] = useState<any>(null);
+  const [checkingWaStatus, setCheckingWaStatus] = useState(false);
+  const [savingWa, setSavingWa] = useState(false);
+  const [saveWaSuccess, setSaveWaSuccess] = useState(false);
+  const [saveWaError, setSaveWaError] = useState<string | null>(null);
+
+  // WhatsApp Testing
+  const [targetPhone, setTargetPhone] = useState('+919999999999');
+  const [customMsg, setCustomMsg] = useState('');
+  const [testingWa, setTestingWa] = useState(false);
+  const [testWaResult, setTestWaResult] = useState<any>(null);
+
+  // WhatsApp Pairing Modal (QR / Code)
+  const [showPairModal, setShowPairModal] = useState(false);
+  const [pairMode, setPairMode] = useState<'qr' | 'code'>('qr');
+  const [qrData, setQrData] = useState<any>(null);
+  const [loadingQr, setLoadingQr] = useState(false);
+  const [pairPhone, setPairPhone] = useState('');
+  const [pairCode, setPairCode] = useState<string | null>(null);
+  const [requestingPairCode, setRequestingPairCode] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  // Slack Testing
+  const [testingSlack, setTestingSlack] = useState(false);
+  const [testSlackResult, setTestSlackResult] = useState<any>(null);
+
+  // Email Testing
   const [targetEmail, setTargetEmail] = useState('tools.assurance@gmail.com');
   const [testingEmail, setTestingEmail] = useState(false);
   const [testEmailResult, setTestEmailResult] = useState<any>(null);
 
-  // WhatsApp Testing
-  const [targetPhone, setTargetPhone] = useState('+919999999999');
-  const [testingWa, setTestingWa] = useState(false);
-  const [testWaResult, setTestWaResult] = useState<any>(null);
-
   const loadData = async () => {
     try {
-      const [healthRes, deliveriesRes] = await Promise.all([
-        api.get<any>('/integrations/slack/health'),
-        api.get<any>('/audit/notifications'),
+      const [healthRes, deliveriesRes, waConfigRes] = await Promise.all([
+        api.get<any>('/integrations/slack/health').catch(() => null),
+        api.get<any>('/audit/notifications').catch(() => ({ deliveries: [] })),
+        api.get<any>('/integrations/whatsapp/config').catch(() => null),
       ]);
-      setHealth(healthRes);
-      setDeliveries(deliveriesRes.deliveries || []);
+      if (healthRes) setHealth(healthRes);
+      setDeliveries(deliveriesRes?.deliveries || []);
+      if (waConfigRes?.config) {
+        setWaConfig((prev: any) => ({ ...prev, ...waConfigRes.config }));
+        if (waConfigRes.config.admin_phone) {
+          setTargetPhone(waConfigRes.config.admin_phone);
+        }
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Error loading notification settings:', err);
     } finally {
       setLoading(false);
     }
   };
 
+  const checkWaStatus = async () => {
+    setCheckingWaStatus(true);
+    try {
+      const res = await api.get<any>('/integrations/whatsapp/status');
+      setWaStatus(res);
+    } catch (err: any) {
+      setWaStatus({
+        success: false,
+        configured: Boolean(waConfig.gateway_url),
+        reachable: false,
+        raw_error: err?.message || 'Failed to reach WhatsApp Gateway',
+      });
+    } finally {
+      setCheckingWaStatus(false);
+    }
+  };
+
   useEffect(() => {
-    loadData();
+    loadData().then(() => {
+      checkWaStatus();
+    });
   }, []);
 
-  const handleTestSlack = async () => {
-    setTesting(true);
-    setTestResult(null);
+  const handleSaveWaConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingWa(true);
+    setSaveWaSuccess(false);
+    setSaveWaError(null);
     try {
-      const res = await api.post<any>('/integrations/slack/test');
-      setTestResult(res);
+      const res = await api.post<any>('/integrations/whatsapp/config', waConfig);
+      if (res.success) {
+        setSaveWaSuccess(true);
+        setTimeout(() => setSaveWaSuccess(false), 4000);
+        await checkWaStatus();
+      }
+    } catch (err: any) {
+      setSaveWaError(err?.message || 'Failed to save WhatsApp configuration');
+    } finally {
+      setSavingWa(false);
+    }
+  };
+
+  const handleTestWhatsApp = async () => {
+    setTestingWa(true);
+    setTestWaResult(null);
+    try {
+      const res = await api.post<any>('/integrations/whatsapp/test', {
+        phone: targetPhone.trim() || undefined,
+        message: customMsg.trim() || undefined,
+      });
+      setTestWaResult(res);
       await loadData();
     } catch (err: any) {
-      setTestResult({ success: false, message: err.message });
+      setTestWaResult({ success: false, message: err.message });
     } finally {
-      setTesting(false);
+      setTestingWa(false);
+    }
+  };
+
+  const handleFetchQr = async () => {
+    setLoadingQr(true);
+    setPairError(null);
+    try {
+      const res = await api.get<any>('/integrations/whatsapp/login-qr');
+      setQrData(res.data);
+    } catch (err: any) {
+      setPairError(err?.message || 'Failed to fetch QR code from WhatsApp gateway');
+    } finally {
+      setLoadingQr(false);
+    }
+  };
+
+  const handleRequestPairCode = async () => {
+    if (!pairPhone.trim()) {
+      setPairError('Please enter your phone number with country code (e.g. 919876543210)');
+      return;
+    }
+    setRequestingPairCode(true);
+    setPairError(null);
+    setPairCode(null);
+    try {
+      const res = await api.post<any>('/integrations/whatsapp/login-code', {
+        phone: pairPhone.trim(),
+      });
+      if (res.success && res.data) {
+        setPairCode(res.data.pair_code || res.data.code || JSON.stringify(res.data));
+      } else {
+        setPairError(res.error || 'Gateway did not return a pairing code');
+      }
+    } catch (err: any) {
+      setPairError(err?.message || 'Failed to request pairing code');
+    } finally {
+      setRequestingPairCode(false);
+    }
+  };
+
+  const handleLogoutWa = async () => {
+    if (!confirm('Are you sure you want to disconnect this WhatsApp session from the gateway?')) return;
+    try {
+      await api.post('/integrations/whatsapp/logout', {});
+      await checkWaStatus();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleReconnectWa = async () => {
+    try {
+      await api.post('/integrations/whatsapp/reconnect', {});
+      await checkWaStatus();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleTestSlack = async () => {
+    setTestingSlack(true);
+    setTestSlackResult(null);
+    try {
+      const res = await api.post<any>('/integrations/slack/test');
+      setTestSlackResult(res);
+      await loadData();
+    } catch (err: any) {
+      setTestSlackResult({ success: false, message: err.message });
+    } finally {
+      setTestingSlack(false);
     }
   };
 
@@ -77,66 +245,104 @@ export const SlackHealthPage: React.FC = () => {
     }
   };
 
-  const handleTestWhatsApp = async () => {
-    setTestingWa(true);
-    setTestWaResult(null);
-    try {
-      const res = await api.post<any>('/integrations/whatsapp/test', {
-        phone: targetPhone.trim() || undefined,
-      });
-      setTestWaResult(res);
-      await loadData();
-    } catch (err: any) {
-      setTestWaResult({ success: false, message: err.message });
-    } finally {
-      setTestingWa(false);
-    }
-  };
-
   return (
     <div className="py-6 px-4 sm:px-6 max-w-7xl mx-auto space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
-            <Hash className="text-[#4A154B]" size={28} />
-            Slack Integration & Notification Health
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase font-extrabold tracking-wider text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+              Notification &amp; Dispatcher Hub
+            </span>
+          </div>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight mt-1 flex items-center gap-2.5">
+            <MessageCircle className="text-emerald-600" size={28} />
+            Integrations &amp; Real-Time Alerts
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Incoming Webhooks dispatcher, multi-channel dynamic routing, and delivery audit log.
+            WhatsApp Multi-Device REST Gateway (<span className="font-mono text-emerald-700 font-semibold">aldinokemal/go-whatsapp-web-multidevice</span>), Slack Webhooks, and Automated SMTP Deliveries.
           </p>
         </div>
 
         <button
-          disabled={testing}
-          onClick={handleTestSlack}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-[#4A154B] hover:bg-[#3d113e] disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+          onClick={() => {
+            loadData();
+            checkWaStatus();
+          }}
+          title="Refresh All Integrations"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-sm transition-colors cursor-pointer self-start sm:self-auto"
         >
-          <Send size={13} />
-          {testing ? 'Testing Webhook...' : 'Send Test Notification'}
+          <RefreshCw size={13} className={loading || checkingWaStatus ? 'animate-spin' : ''} />
+          <span>Refresh Status</span>
         </button>
       </div>
 
-      {testResult && (
-        <div
-          className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${
-            testResult.success
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : 'bg-rose-50 border-rose-200 text-rose-800'
+      {/* Tab Navigation */}
+      <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto pb-px">
+        <button
+          onClick={() => setActiveTab('whatsapp')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'whatsapp'
+              ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
           }`}
         >
-          {testResult.success ? (
-            <CheckCircle2 size={18} className="flex-shrink-0 mt-0.5 text-emerald-600" />
-          ) : (
-            <AlertTriangle size={18} className="flex-shrink-0 mt-0.5 text-rose-600" />
+          <Smartphone size={16} />
+          <span>WhatsApp Gateway (GOWA)</span>
+          <span
+            className={`w-2 h-2 rounded-full ${
+              waStatus?.connected
+                ? 'bg-emerald-500'
+                : waStatus?.reachable
+                ? 'bg-amber-400'
+                : 'bg-slate-300'
+            }`}
+          />
+        </button>
+
+        <button
+          onClick={() => setActiveTab('slack')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'slack'
+              ? 'border-[#4A154B] text-[#4A154B] bg-[#4A154B]/5'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+          }`}
+        >
+          <Hash size={16} />
+          <span>Slack Webhooks</span>
+          {health?.configured && (
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
           )}
-          <div>
-            <div className="font-bold">
-              {testResult.success ? 'Slack Test Succeeded' : 'Slack Test Result'}
-            </div>
-            <div className="text-xs mt-0.5">{testResult.message}</div>
-          </div>
-        </div>
-      )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('email')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'email'
+              ? 'border-blue-600 text-blue-700 bg-blue-50/50'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+          }`}
+        >
+          <Mail size={16} />
+          <span>Email (SMTP Relay)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('audit')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'audit'
+              ? 'border-purple-600 text-purple-700 bg-purple-50/50'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+          }`}
+        >
+          <Radio size={16} />
+          <span>Delivery Audit Logs</span>
+          <span className="px-1.5 py-0.2 bg-slate-200 text-slate-700 rounded-full text-[10px] font-mono">
+            {deliveries.length}
+          </span>
+        </button>
+      </div>
+
 
       {/* Integration Status & Channel Mapping */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

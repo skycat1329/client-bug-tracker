@@ -17,6 +17,7 @@ import {
   CheckSquare,
   FileSignature,
   Clock,
+  MessageCircle,
 } from 'lucide-react';
 
 interface NavItem {
@@ -68,7 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           { id: 'sheets', label: 'Google Sheets Sync', icon: FileSpreadsheet },
         ]
       : []),
-    { id: 'slack', label: 'Slack Integration', icon: Hash },
+    { id: 'slack', label: 'Integrations & WhatsApp', icon: MessageCircle },
     { id: 'audit', label: 'Audit & Deliveries', icon: History },
   ];
 
