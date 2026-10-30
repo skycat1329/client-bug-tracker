@@ -7133,6 +7133,26 @@ function ensure_attendance_schema() {
             INDEX `idx_audit_created` (`created_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+        db_execute("CREATE TABLE IF NOT EXISTS `leave_requests` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` VARCHAR(64) NOT NULL,
+            `leave_type` ENUM('casual', 'sick', 'paid', 'unpaid', 'emergency', 'other') NOT NULL DEFAULT 'casual',
+            `start_date` DATE NOT NULL,
+            `end_date` DATE NOT NULL,
+            `total_days` DECIMAL(4, 1) NOT NULL DEFAULT 1.0,
+            `day_fraction` ENUM('full', 'first_half', 'second_half') NOT NULL DEFAULT 'full',
+            `reason` TEXT NOT NULL,
+            `status` ENUM('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED') NOT NULL DEFAULT 'PENDING',
+            `reviewed_by` VARCHAR(64) NULL,
+            `reviewed_at` DATETIME NULL,
+            `review_remarks` TEXT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_leave_user` (`user_id`),
+            INDEX `idx_leave_dates` (`start_date`, `end_date`),
+            INDEX `idx_leave_status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
         // Migration: Ensure new Darwinbox columns exist on existing attendance table
         $attCols = db_query("SHOW COLUMNS FROM `attendance`");
         $existingCols = array_column($attCols, 'Field');
@@ -7667,6 +7687,14 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
     }
 
     $holidays = db_query("SELECT * FROM company_holidays WHERE holiday_date LIKE ? ORDER BY holiday_date ASC", ["{$month}%"]);
+    $approvedLeaves = db_query(
+        "SELECT * FROM leave_requests 
+         WHERE user_id = ? 
+           AND status = 'APPROVED' 
+           AND ((start_date LIKE ?) OR (end_date LIKE ?) OR (start_date <= ? AND end_date >= ?))
+         ORDER BY start_date ASC",
+        [$user['id'], "{$month}%", "{$month}%", "{$month}-01", date('Y-m-t', strtotime("{$month}-01"))]
+    );
 
     $totalPunchedDays = count($records);
     $totalHours = round($totalMinutes / 60, 1);
@@ -7677,6 +7705,7 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
         'month' => $month,
         'records' => $records,
         'holidays' => $holidays,
+        'approved_leaves' => $approvedLeaves,
         'stats' => [
             'total_punched_days' => $totalPunchedDays,
             'present_count' => $presentCount,
@@ -7766,7 +7795,7 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
     }
 
     $search = trim($_GET['search'] ?? '');
-    $params = [$targetDate];
+    $params = [$targetDate, $targetDate, $targetDate];
     $searchClause = "";
     if (!empty($search)) {
         $searchClause = " AND (u.name LIKE ? OR u.email LIKE ?) ";
@@ -7780,12 +7809,15 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
         a.check_in_time, a.check_in_lat, a.check_in_lng, a.check_in_distance_meters, a.check_in_status,
         a.check_out_time, a.check_out_lat, a.check_out_lng, a.check_out_distance_meters,
         a.total_work_minutes, a.final_status, a.is_regularized, a.is_early_exit, a.notes,
+        l.leave_type, l.day_fraction,
         CASE 
             WHEN a.id IS NOT NULL THEN COALESCE(a.final_status, 'PRESENT')
+            WHEN l.id IS NOT NULL THEN CONCAT('ON_LEAVE_', UPPER(l.leave_type))
             ELSE 'NOT_PUNCHED'
         END as status
     FROM users u
     LEFT JOIN attendance a ON a.user_id = u.id AND a.attendance_date = ?
+    LEFT JOIN leave_requests l ON l.user_id = u.id AND l.status = 'APPROVED' AND l.start_date <= ? AND l.end_date >= ?
     WHERE u.role != 'client' {$searchClause}
     ORDER BY (a.check_in_time IS NULL) ASC, a.check_in_time DESC, u.name ASC", $params);
 
@@ -7793,6 +7825,7 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
     $wfhCount = 0;
     $onDutyCount = 0;
     $notPunchedCount = 0;
+    $onLeaveCount = 0;
     $lateCount = 0;
 
     foreach ($roster as &$row) {
@@ -7802,7 +7835,11 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
         if ($row['total_work_minutes'] !== null) $row['total_work_minutes'] = (int)$row['total_work_minutes'];
 
         if ($row['attendance_id'] === null) {
-            $notPunchedCount++;
+            if (!empty($row['leave_type'])) {
+                $onLeaveCount++;
+            } else {
+                $notPunchedCount++;
+            }
         } else {
             $mode = $row['work_mode'] ?? 'office';
             if ($mode === 'wfh') $wfhCount++;
@@ -7823,6 +7860,7 @@ if ($method === 'GET' && ($path === '/api/admin/attendance/roster' || $path === 
             'present_office' => $presentOfficeCount,
             'wfh' => $wfhCount,
             'on_duty' => $onDutyCount,
+            'on_leave' => $onLeaveCount,
             'not_punched' => $notPunchedCount,
             'late' => $lateCount
         ],
@@ -8264,6 +8302,319 @@ if ($method === 'POST' && ($path === '/api/attendance/sync-sheets' || $path === 
         'failed_count' => $failed,
         'details' => $details,
         'message' => "Successfully synced {$synced} attendance record(s) to Google Sheets for {$targetDate}."
+    ]);
+}
+
+// ==============================================================================
+// LEAVE MANAGEMENT SYSTEM (APPLY, MY LEAVES, ADMIN QUEUE, APPROVE/REJECT)
+// ==============================================================================
+
+// POST /api/leaves/apply or POST /api/attendance/leaves
+if ($method === 'POST' && ($path === '/api/leaves/apply' || $path === '/api/attendance/leaves')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Leave applications are only accessible to internal team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $input = get_json_input();
+    $leaveType = strtolower(trim($input['leave_type'] ?? 'casual'));
+    $startDate = trim($input['start_date'] ?? '');
+    $endDate = trim($input['end_date'] ?? '');
+    $dayFraction = strtolower(trim($input['day_fraction'] ?? 'full'));
+    $reason = trim($input['reason'] ?? '');
+
+    $allowedTypes = ['casual', 'sick', 'paid', 'unpaid', 'emergency', 'other'];
+    if (!in_array($leaveType, $allowedTypes, true)) {
+        json_error('Invalid leave type. Allowed: Casual, Sick, Paid, Unpaid, Emergency, Other', 400);
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) {
+        json_error('Valid start date (YYYY-MM-DD) is required', 400);
+    }
+    if (empty($endDate)) {
+        $endDate = $startDate;
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) {
+        json_error('Valid end date (YYYY-MM-DD) is required', 400);
+    }
+    if (strtotime($endDate) < strtotime($startDate)) {
+        json_error('End date cannot precede start date', 400);
+    }
+    if (empty($reason)) {
+        json_error('Please specify a valid reason for your leave request', 400);
+    }
+
+    if (!in_array($dayFraction, ['full', 'first_half', 'second_half'], true)) {
+        $dayFraction = 'full';
+    }
+
+    // Calculate total days
+    if ($startDate === $endDate && $dayFraction !== 'full') {
+        $totalDays = 0.5;
+    } else {
+        $startTs = strtotime($startDate);
+        $endTs = strtotime($endDate);
+        $diffDays = (int)round(($endTs - $startTs) / 86400) + 1;
+        $totalDays = (float)max(1, $diffDays);
+    }
+
+    // Overlap check with existing PENDING or APPROVED requests
+    $overlap = db_query_one(
+        "SELECT id, start_date, end_date, status FROM leave_requests 
+         WHERE user_id = ? 
+           AND status IN ('PENDING', 'APPROVED') 
+           AND ((start_date <= ? AND end_date >= ?) OR (start_date <= ? AND end_date >= ?))
+         LIMIT 1",
+        [$user['id'], $endDate, $startDate, $startDate, $endDate]
+    );
+
+    if ($overlap) {
+        json_error("You already have a " . strtolower($overlap['status']) . " leave request spanning {$overlap['start_date']} to {$overlap['end_date']}", 409);
+    }
+
+    db_execute(
+        "INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, total_days, day_fraction, reason, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')",
+        [$user['id'], $leaveType, $startDate, $endDate, $totalDays, $dayFraction, $reason]
+    );
+
+    $idRow = db_query_one("SELECT LAST_INSERT_ID() as id");
+    $created = db_query_one("SELECT * FROM leave_requests WHERE id = ?", [$idRow['id']]);
+
+    // Send WhatsApp notification to Admin/HR on new leave application
+    try {
+        $config = get_whatsapp_config();
+        $adminPhone = $config['admin_phone'] ?? '';
+        if (!empty($adminPhone) && !empty($config['enabled'])) {
+            $typeLabel = ucfirst($leaveType) . ' Leave';
+            $daysText = $totalDays == 1 ? "1 Day" : ($totalDays == 0.5 ? "Half Day (" . ($dayFraction === 'first_half' ? 'First Half' : 'Second Half') . ")" : "{$totalDays} Days");
+            $dateText = ($startDate === $endDate) ? date('d M Y', strtotime($startDate)) : date('d M', strtotime($startDate)) . ' - ' . date('d M Y', strtotime($endDate));
+
+            $msg = "🏖️ *Assurance Media | New Leave Request*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "👤 *Staff:* *{$user['name']}*\n" .
+                   "📋 *Type:* {$typeLabel}\n" .
+                   "📅 *Duration:* {$dateText} ({$daysText})\n" .
+                   "💬 *Reason:* {$reason}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "👉 _Please review and approve/reject in Staff Portal_";
+
+            send_whatsapp_notification($adminPhone, $msg, [
+                'event' => 'leave_requested',
+                'user_id' => $user['id'],
+                'leave_id' => $idRow['id']
+            ]);
+        }
+    } catch (Exception $e) {}
+
+    json_response([
+        'success' => true,
+        'message' => 'Leave request submitted successfully. Awaiting HR/Admin approval.',
+        'data' => $created
+    ], 201);
+}
+
+// GET /api/leaves/my or GET /api/attendance/leaves/my
+if ($method === 'GET' && ($path === '/api/leaves/my' || $path === '/api/attendance/leaves/my')) {
+    $user = require_auth();
+    ensure_attendance_schema();
+
+    $requests = db_query(
+        "SELECT l.*, rev.name as reviewer_name 
+         FROM leave_requests l 
+         LEFT JOIN users rev ON rev.id = l.reviewed_by 
+         WHERE l.user_id = ? 
+         ORDER BY l.created_at DESC",
+        [$user['id']]
+    );
+
+    $pendingCount = 0;
+    $approvedCount = 0;
+    $approvedDays = 0.0;
+    $rejectedCount = 0;
+
+    foreach ($requests as &$r) {
+        $r['id'] = (int)$r['id'];
+        $r['total_days'] = (float)$r['total_days'];
+        if ($r['status'] === 'PENDING') $pendingCount++;
+        elseif ($r['status'] === 'APPROVED') {
+            $approvedCount++;
+            $approvedDays += $r['total_days'];
+        }
+        elseif ($r['status'] === 'REJECTED') $rejectedCount++;
+    }
+
+    json_response([
+        'success' => true,
+        'summary' => [
+            'total_requests' => count($requests),
+            'pending_count' => $pendingCount,
+            'approved_count' => $approvedCount,
+            'approved_days' => round($approvedDays, 1),
+            'rejected_count' => $rejectedCount
+        ],
+        'data' => $requests
+    ]);
+}
+
+// POST /api/leaves/{id}/cancel
+if ($method === 'POST' && preg_match('#^/api/leaves/(\d+)/cancel$#', $path, $m)) {
+    $user = require_auth();
+    ensure_attendance_schema();
+
+    $leaveId = (int)$m[1];
+    $leave = db_query_one("SELECT * FROM leave_requests WHERE id = ? AND user_id = ?", [$leaveId, $user['id']]);
+    if (!$leave) {
+        json_error('Leave request not found or unauthorized', 404);
+    }
+    if ($leave['status'] !== 'PENDING') {
+        json_error("Cannot cancel leave request that is already {$leave['status']}", 400);
+    }
+
+    db_execute("UPDATE leave_requests SET status = 'CANCELLED' WHERE id = ?", [$leaveId]);
+
+    json_response([
+        'success' => true,
+        'message' => 'Leave request cancelled successfully'
+    ]);
+}
+
+// GET /api/admin/leaves
+if ($method === 'GET' && $path === '/api/admin/leaves') {
+    $user = require_attendance_access();
+    ensure_attendance_schema();
+
+    $statusFilter = strtoupper(trim($_GET['status'] ?? 'ALL'));
+    $search = trim($_GET['search'] ?? '');
+
+    $where = ["1=1"];
+    $params = [];
+
+    if ($statusFilter !== 'ALL' && in_array($statusFilter, ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'], true)) {
+        $where[] = "l.status = ?";
+        $params[] = $statusFilter;
+    }
+
+    if (!empty($search)) {
+        $where[] = "(u.name LIKE ? OR u.email LIKE ?)";
+        $params[] = "%{$search}%";
+        $params[] = "%{$search}%";
+    }
+
+    $whereSql = implode(' AND ', $where);
+
+    $leaves = db_query(
+        "SELECT l.*, u.name as user_name, u.email as user_email, u.role as user_role, u.avatar_url,
+                rev.name as reviewer_name 
+         FROM leave_requests l 
+         JOIN users u ON u.id = l.user_id 
+         LEFT JOIN users rev ON rev.id = l.reviewed_by 
+         WHERE {$whereSql} 
+         ORDER BY (l.status = 'PENDING') DESC, l.created_at DESC",
+        $params
+    );
+
+    // Summary counts
+    $counts = db_query_one(
+        "SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN status = 'APPROVED' THEN 1 ELSE 0 END) as approved,
+            SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) as rejected
+         FROM leave_requests"
+    );
+
+    foreach ($leaves as &$l) {
+        $l['id'] = (int)$l['id'];
+        $l['total_days'] = (float)$l['total_days'];
+    }
+
+    json_response([
+        'success' => true,
+        'summary' => [
+            'total' => (int)($counts['total'] ?? 0),
+            'pending' => (int)($counts['pending'] ?? 0),
+            'approved' => (int)($counts['approved'] ?? 0),
+            'rejected' => (int)($counts['rejected'] ?? 0),
+        ],
+        'data' => $leaves
+    ]);
+}
+
+// POST /api/admin/leaves/{id}/review
+if ($method === 'POST' && preg_match('#^/api/admin/leaves/(\d+)/review$#', $path, $m)) {
+    $user = require_attendance_access();
+    ensure_attendance_schema();
+
+    $leaveId = (int)$m[1];
+    $input = get_json_input();
+    $action = strtolower(trim($input['action'] ?? ''));
+    $remarks = trim($input['remarks'] ?? '');
+
+    if (!in_array($action, ['approve', 'reject'], true)) {
+        json_error("Action must be 'approve' or 'reject'", 400);
+    }
+
+    $leave = db_query_one("SELECT l.*, u.name as user_name, u.email as user_email, u.phone as user_phone 
+                           FROM leave_requests l 
+                           JOIN users u ON u.id = l.user_id 
+                           WHERE l.id = ?", [$leaveId]);
+    if (!$leave) {
+        json_error('Leave request not found', 404);
+    }
+
+    $newStatus = ($action === 'approve') ? 'APPROVED' : 'REJECTED';
+    db_execute(
+        "UPDATE leave_requests 
+         SET status = ?, reviewed_by = ?, reviewed_at = NOW(), review_remarks = ? 
+         WHERE id = ?",
+        [$newStatus, $user['id'], $remarks ?: null, $leaveId]
+    );
+
+    // Send WhatsApp notification to employee on decision
+    try {
+        $config = get_whatsapp_config();
+        $targetPhone = !empty($leave['user_phone']) ? $leave['user_phone'] : '';
+        if (!empty($targetPhone) && !empty($config['enabled'])) {
+            $emoji = ($newStatus === 'APPROVED') ? '✅' : '❌';
+            $statusWord = ($newStatus === 'APPROVED') ? 'APPROVED' : 'REJECTED';
+            $typeLabel = ucfirst($leave['leave_type']) . ' Leave';
+            $dateText = ($leave['start_date'] === $leave['end_date']) ? date('d M Y', strtotime($leave['start_date'])) : date('d M', strtotime($leave['start_date'])) . ' - ' . date('d M Y', strtotime($leave['end_date']));
+
+            $empMsg = "{$emoji} *Assurance Media | Leave Request {$statusWord}*\n" .
+                      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                      "👤 *Staff:* *{$leave['user_name']}*\n" .
+                      "📋 *Type:* {$typeLabel}\n" .
+                      "📅 *Duration:* {$dateText} ({$leave['total_days']} days)\n" .
+                      "⚖️ *Status:* *{$statusWord}*\n" .
+                      "✍️ *Reviewer:* {$user['name']}\n" .
+                      (!empty($remarks) ? "💬 *Remarks:* {$remarks}\n" : "") .
+                      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                      "_Assurance Media Workforce Command_";
+
+            send_whatsapp_notification($targetPhone, $empMsg, [
+                'event' => 'leave_review_decision',
+                'user_id' => $leave['user_id'],
+                'leave_id' => $leaveId,
+                'status' => $newStatus
+            ]);
+        }
+    } catch (Exception $e) {}
+
+    // Audit log
+    $ip = get_client_ip();
+    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    try {
+        db_execute(
+            "INSERT INTO attendance_audit_logs (actor_user_id, action, target_user_id, payload, ip_address, user_agent) VALUES (?, 'leave_review', ?, ?, ?, ?)",
+            [$user['id'], $leave['user_id'], json_encode(['leave_id' => $leaveId, 'status' => $newStatus, 'remarks' => $remarks]), $ip, $ua]
+        );
+    } catch (Exception $e) {}
+
+    json_response([
+        'success' => true,
+        'message' => "Leave request " . strtolower($newStatus) . " successfully",
+        'status' => $newStatus
     ]);
 }
 

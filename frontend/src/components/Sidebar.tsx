@@ -55,7 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const internalNav: NavItem[] = [
     { id: 'overview', label: 'Agency Overview', icon: LayoutDashboard },
-    { id: 'attendance', label: 'Attendance & Geofence', icon: Clock },
+    { id: 'attendance', label: 'Attendance & Leaves', icon: Clock },
     { id: 'tickets', label: 'All Tickets', icon: Ticket },
     ...(isDev || isManagerOrAdmin ? [{ id: 'my-tickets', label: 'My Assigned Tickets', icon: UserCheck }] : []),
     { id: 'tasks', label: 'Team Tasks & Deadlines', icon: CheckSquare },

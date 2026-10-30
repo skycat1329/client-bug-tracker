@@ -37,6 +37,8 @@ import {
   List,
   Grid
 } from 'lucide-react';
+import { MyLeavesTab } from './attendance/MyLeavesTab.js';
+import { AdminLeavesTab } from './attendance/AdminLeavesTab.js';
 
 interface OfficeGeofence {
   id?: number;
@@ -168,8 +170,23 @@ export const AttendancePage: React.FC = () => {
   // Core State
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<
-    'punch' | 'calendar' | 'admin-roster' | 'admin-regularize' | 'admin-holidays' | 'admin-permissions' | 'admin-settings'
+    'punch' | 'leaves' | 'calendar' | 'admin-leaves' | 'admin-roster' | 'admin-regularize' | 'admin-holidays' | 'admin-permissions' | 'admin-settings'
   >('punch');
+  const [pendingLeavesCount, setPendingLeavesCount] = useState(0);
+
+  const fetchPendingLeavesCount = async () => {
+    if (!canManageAttendance) return;
+    try {
+      const res: any = await api.get('/admin/leaves?status=PENDING');
+      if (res.success && res.summary) {
+        setPendingLeavesCount(res.summary.pending || 0);
+      }
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    fetchPendingLeavesCount();
+  }, [canManageAttendance]);
 
   const [office, setOffice] = useState<OfficeGeofence>({
     name: 'Assurance Media HQ',
@@ -212,6 +229,7 @@ export const AttendancePage: React.FC = () => {
   const [monthRecords, setMonthRecords] = useState<AttendanceRecord[]>([]);
   const [monthStats, setMonthStats] = useState<MonthlyStats | null>(null);
   const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
+  const [monthLeaves, setMonthLeaves] = useState<any[]>([]);
   const [selectedDayRecord, setSelectedDayRecord] = useState<AttendanceRecord | null>(null);
   const [selectedDayHoliday, setSelectedDayHoliday] = useState<CompanyHoliday | null>(null);
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
@@ -382,6 +400,9 @@ export const AttendancePage: React.FC = () => {
         setMonthStats(res.stats || null);
         if (res.holidays) {
           setHolidays(res.holidays);
+        }
+        if (res.approved_leaves) {
+          setMonthLeaves(res.approved_leaves);
         }
       }
     } catch (err: any) {
@@ -763,6 +784,18 @@ export const AttendancePage: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab('leaves')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'leaves'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
+                : 'text-slate-300 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <CalendarIcon size={16} />
+            <span>My Leaves & Apply</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('calendar')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
               activeTab === 'calendar'
@@ -770,12 +803,29 @@ export const AttendancePage: React.FC = () => {
                 : 'text-slate-300 hover:text-white hover:bg-white/10'
             }`}
           >
-            <CalendarIcon size={16} />
+            <Compass size={16} />
             <span>Visual Calendar & Stats</span>
           </button>
 
           {canManageAttendance && (
             <>
+              <button
+                onClick={() => setActiveTab('admin-leaves')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
+                  activeTab === 'admin-leaves'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/30'
+                    : 'text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <ShieldCheck size={16} />
+                <span>Leave Approvals</span>
+                {pendingLeavesCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-900 animate-pulse">
+                    {pendingLeavesCount}
+                  </span>
+                )}
+              </button>
+
               <button
                 onClick={() => setActiveTab('admin-roster')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
@@ -1185,6 +1235,11 @@ export const AttendancePage: React.FC = () => {
       )}
 
       {/* ==========================================================================
+          TAB: MY LEAVES & APPLY
+      ========================================================================== */}
+      {activeTab === 'leaves' && <MyLeavesTab />}
+
+      {/* ==========================================================================
           TAB 2: DARWINBOX 7-COLUMN VISUAL CALENDAR & SUMMARY STATS
       ========================================================================== */}
       {activeTab === 'calendar' && (
@@ -1359,6 +1414,7 @@ export const AttendancePage: React.FC = () => {
                   const dayDateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
                   const dayRecord = monthRecords.find((r) => r.attendance_date === dayDateStr);
                   const holiday = holidays.find((h) => h.holiday_date === dayDateStr);
+                  const dayLeave = monthLeaves.find((l) => dayDateStr >= l.start_date && dayDateStr <= l.end_date);
 
                   const dayOfWeek = new Date(calYear, calMonth, dayNum).getDay();
                   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -1383,6 +1439,8 @@ export const AttendancePage: React.FC = () => {
                           ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/10'
                           : holiday
                           ? 'border-purple-200 bg-purple-50/30'
+                          : dayLeave
+                          ? 'border-purple-300 bg-purple-50/30'
                           : isLate || isEarlyExit
                           ? 'border-red-200 bg-red-50/20'
                           : dayRecord
@@ -1455,6 +1513,10 @@ export const AttendancePage: React.FC = () => {
                               </div>
                             )}
                           </>
+                        ) : dayLeave ? (
+                          <div className="text-[10px] font-extrabold text-purple-700 bg-purple-100/90 border border-purple-200 px-1.5 py-0.5 rounded-lg truncate">
+                            🌴 {dayLeave.leave_type.toUpperCase()} LEAVE
+                          </div>
                         ) : !holiday && isWeekend ? (
                           <div className="text-[10px] font-semibold text-slate-400">Weekly Off</div>
                         ) : !holiday && isPast ? (
@@ -1604,6 +1666,11 @@ export const AttendancePage: React.FC = () => {
       )}
 
       {/* ==========================================================================
+          TAB: HR / ADMIN LEAVE APPROVALS QUEUE
+      ========================================================================== */}
+      {activeTab === 'admin-leaves' && canManageAttendance && <AdminLeavesTab />}
+
+      {/* ==========================================================================
           TAB 3: ADMIN LIVE ROSTER DASHBOARD
       ========================================================================== */}
       {activeTab === 'admin-roster' && canManageAttendance && (
@@ -1664,7 +1731,7 @@ export const AttendancePage: React.FC = () => {
 
           {/* Metric Summary Cards */}
           {adminSummary && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 sm:gap-4">
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Staff</div>
                 <div className="text-2xl font-black text-slate-900 mt-1">{adminSummary.total_staff}</div>
@@ -1687,6 +1754,12 @@ export const AttendancePage: React.FC = () => {
                 <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">On-Duty / Field</div>
                 <div className="text-2xl font-black text-indigo-700 mt-1">{adminSummary.on_duty}</div>
                 <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">Client Location</div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-purple-200/80 bg-purple-50/20 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700">Approved Leave</div>
+                <div className="text-2xl font-black text-purple-700 mt-1">{adminSummary.on_leave || 0}</div>
+                <div className="text-[10px] text-purple-600 font-semibold mt-0.5">Authorized Off</div>
               </div>
 
               <div className="bg-white p-4 rounded-xl border border-amber-200/80 bg-amber-50/20 shadow-sm">
@@ -1754,12 +1827,16 @@ export const AttendancePage: React.FC = () => {
                                 ? 'bg-red-100 text-red-800'
                                 : s.status === 'HALF_DAY'
                                 ? 'bg-amber-100 text-amber-800'
+                                : s.status?.startsWith('ON_LEAVE_')
+                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
                                 : s.status === 'NOT_PUNCHED'
                                 ? 'bg-slate-100 text-slate-600'
                                 : 'bg-blue-100 text-blue-800'
                             }`}
                           >
-                            {s.status}
+                            {s.status?.startsWith('ON_LEAVE_')
+                              ? `🌴 ON LEAVE (${s.status.replace('ON_LEAVE_', '')})`
+                              : s.status}
                           </span>
                         </td>
                         <td className="py-3 px-4">
