@@ -48,6 +48,7 @@ define('WHATSAPP_DEVICE_ID', '');
 define('WHATSAPP_API_KEY', '');
 define('WHATSAPP_DEFAULT_ADMIN_PHONE', '+919999999999');
 define('WHATSAPP_ADMIN_GROUP_JID', '');
+define('WHATSAPP_ATTENDANCE_GROUP_JID', '');
 define('WHATSAPP_DEFAULT_COUNTRY_CODE', '91');
 
 // Storage directory for attachments

@@ -609,6 +609,7 @@ function get_whatsapp_config(): array {
         'api_key' => defined('WHATSAPP_API_KEY') ? WHATSAPP_API_KEY : '',
         'admin_phone' => defined('WHATSAPP_DEFAULT_ADMIN_PHONE') ? WHATSAPP_DEFAULT_ADMIN_PHONE : '+919999999999',
         'admin_group_jid' => defined('WHATSAPP_ADMIN_GROUP_JID') ? WHATSAPP_ADMIN_GROUP_JID : '',
+        'attendance_group_jid' => defined('WHATSAPP_ATTENDANCE_GROUP_JID') ? WHATSAPP_ATTENDANCE_GROUP_JID : '',
         'default_country_code' => defined('WHATSAPP_DEFAULT_COUNTRY_CODE') ? WHATSAPP_DEFAULT_COUNTRY_CODE : '91',
         'send_on_punch_in' => true,
         'send_on_punch_out' => true,
@@ -645,6 +646,10 @@ function clean_whatsapp_recipient(string $raw, string $defaultCountry = '91'): s
     // Group JID (120363040656010581@g.us) or direct JID (919876543210@s.whatsapp.net)
     if (strpos($trimmed, '@g.us') !== false || strpos($trimmed, '@s.whatsapp.net') !== false) {
         return $trimmed;
+    }
+    // Auto-detect group ID without @g.us suffix (e.g. 120363040656010581)
+    if (strpos($trimmed, '120363') === 0 && strlen($trimmed) >= 15) {
+        return $trimmed . '@g.us';
     }
     // Remove all non-digits
     $digits = preg_replace('/\D+/', '', $trimmed);
@@ -1124,19 +1129,33 @@ function notify_attendance_whatsapp(string $eventType, array $record, array $use
         $mode = $config['attendance_notify_mode'] ?? 'both';
         $userName = $user['name'] ?? 'Team Member';
         $userPhone = $user['phone'] ?? '';
-        $adminPhone = $config['admin_phone'] ?? '+919999999999';
+        $adminPhone = $config['admin_phone'] ?? '+918369406363';
         $adminGroup = $config['admin_group_jid'] ?? '';
-        $adminTarget = !empty($adminGroup) ? $adminGroup : $adminPhone;
+        $attendanceGroup = !empty($config['attendance_group_jid']) ? $config['attendance_group_jid'] : $adminGroup;
 
         $recipients = [];
-        if (($mode === 'both' || $mode === 'employee_only') && !empty($userPhone)) {
+        $addedTargets = [];
+
+        // 1. WhatsApp Attendance Announcement Group (All users member group)
+        if (!empty($attendanceGroup)) {
+            $recipients[] = ['phone' => $attendanceGroup, 'target' => 'attendance_group'];
+            $addedTargets[$attendanceGroup] = true;
+        }
+
+        // 2. Direct individual message to Employee phone
+        if (($mode === 'both' || $mode === 'employee_only') && !empty($userPhone) && !isset($addedTargets[$userPhone])) {
             $recipients[] = ['phone' => $userPhone, 'target' => 'employee'];
+            $addedTargets[$userPhone] = true;
         }
-        if (($mode === 'both' || $mode === 'admin_only') && !empty($adminTarget)) {
-            $recipients[] = ['phone' => $adminTarget, 'target' => 'admin'];
+
+        // 3. Direct individual message to Admin phone (if no group configured, or admin_only)
+        if (($mode === 'both' || $mode === 'admin_only') && !empty($adminPhone) && !isset($addedTargets[$adminPhone])) {
+            $recipients[] = ['phone' => $adminPhone, 'target' => 'admin'];
+            $addedTargets[$adminPhone] = true;
         }
-        if (empty($recipients) && !empty($adminTarget)) {
-            $recipients[] = ['phone' => $adminTarget, 'target' => 'admin_fallback'];
+
+        if (empty($recipients) && !empty($adminPhone)) {
+            $recipients[] = ['phone' => $adminPhone, 'target' => 'admin_fallback'];
         }
 
         if (empty($recipients)) return;
@@ -1147,28 +1166,92 @@ function notify_attendance_whatsapp(string $eventType, array $record, array $use
         if ($eventType === 'punch_in' && !empty($config['send_on_punch_in'])) {
             $timeStr = !empty($record['check_in_time']) ? date('h:i:s A', strtotime($record['check_in_time'])) : date('h:i:s A');
             $workMode = strtoupper($record['work_mode'] ?? 'OFFICE');
-            $distStr = ($record['check_in_distance_meters'] !== null) ? round($record['check_in_distance_meters']) . 'm from office' : 'GPS Verified';
-            $isLate = !empty($record['is_late']) || strtolower($record['check_in_status'] ?? '') === 'late' || strtoupper($record['final_status'] ?? '') === 'LATE';
-            $statusBadge = $isLate ? "🔴 LATE PUNCH (Grace: 10:15 AM)" : "🟢 ON TIME (Shift: 10:00 AM)";
 
-            $msg = "🟢 *ASSURANCE MEDIA | ATTENDANCE PUNCH-IN*\n" .
-                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
-                   "👤 *Staff:* *{$userName}*\n" .
-                   "⏰ *Punch Time:* *{$timeStr}* (IST)\n" .
-                   "📅 *Date:* {$dateFormatted}\n" .
-                   "📍 *Mode:* {$workMode} ({$distStr})\n" .
-                   "🚦 *Status:* {$statusBadge}\n";
-            if (!empty($record['notes'])) {
-                $msg .= "📝 *Note:* " . trim($record['notes']) . "\n";
+            // Shift and Punctuality calculation
+            $shiftStartStr = $record['shift_start'] ?? '10:00:00';
+            $graceMins = 15;
+            $shiftDeadlineTs = strtotime($today . ' ' . $shiftStartStr) + ($graceMins * 60);
+            $checkInTs = !empty($record['check_in_time']) ? strtotime($record['check_in_time']) : time();
+            $shiftStartFormatted = date('h:i A', strtotime($today . ' ' . $shiftStartStr));
+            $graceFormatted = date('h:i A', $shiftDeadlineTs);
+
+            $isLate = ($checkInTs > $shiftDeadlineTs)
+                || !empty($record['is_late'])
+                || strtolower($record['check_in_status'] ?? '') === 'late'
+                || strtoupper($record['final_status'] ?? '') === 'LATE';
+
+            $lateMinutes = 0;
+            if ($isLate) {
+                $lateMinutes = max(1, round(($checkInTs - strtotime($today . ' ' . $shiftStartStr)) / 60));
             }
-            $msg .= "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
-                    "_Assurance Media Workforce Management • Have a productive day! 🚀_";
+
+            // Location details & GPS Google Maps Link
+            $lat = isset($record['check_in_lat']) && is_numeric($record['check_in_lat']) ? (float)$record['check_in_lat'] : null;
+            $lng = isset($record['check_in_lng']) && is_numeric($record['check_in_lng']) ? (float)$record['check_in_lng'] : null;
+            $dist = isset($record['check_in_distance_meters']) && is_numeric($record['check_in_distance_meters']) ? round((float)$record['check_in_distance_meters']) : null;
+
+            $locDesc = '';
+            if ($workMode === 'OFFICE') {
+                $locDesc = '🏢 Assurance Media HQ';
+                if ($dist !== null) {
+                    $locDesc .= " ({$dist}m from office geofence)";
+                }
+            } elseif ($workMode === 'WFH') {
+                $locDesc = '🏠 Work From Home (Remote)';
+            } elseif ($workMode === 'ON_DUTY') {
+                $locDesc = '💼 On-Duty (Client Site / Field)';
+            } else {
+                $locDesc = '📍 ' . $workMode;
+            }
+
+            $mapUrl = '';
+            if ($lat !== null && $lng !== null && ($lat != 0 || $lng != 0)) {
+                $mapUrl = "https://maps.google.com/?q={$lat},{$lng}";
+            }
+
+            // Late (Red color alert) vs On Time (Normal / Green color)
+            if ($isLate) {
+                $msg = "🔴 *LATE PUNCH-IN ALERT* 🔴\n" .
+                       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                       "👤 *Name:* *{$userName}*\n" .
+                       "⏰ *Punch Time:* *{$timeStr}* (IST)\n" .
+                       "📅 *Date:* {$dateFormatted}\n" .
+                       "📍 *Location:* {$locDesc}\n";
+                if (!empty($mapUrl)) {
+                    $msg .= "🗺️ *GPS Map:* {$mapUrl}\n";
+                }
+                $msg .= "🚨 *Status:* 🔴 *LATE ARRIVAL* ({$lateMinutes} mins late)\n" .
+                        "⏳ *Shift Standard:* {$shiftStartFormatted} (Grace: {$graceFormatted})\n";
+                if (!empty($record['notes'])) {
+                    $msg .= "📝 *Note/Reason:* " . trim($record['notes']) . "\n";
+                }
+                $msg .= "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                        "⚠️ _Notice: Punctuality is strictly monitored. Please ensure on-time arrival._";
+            } else {
+                $msg = "🟢 *ATTENDANCE PUNCH-IN* 🟢\n" .
+                       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                       "👤 *Name:* *{$userName}*\n" .
+                       "⏰ *Punch Time:* *{$timeStr}* (IST)\n" .
+                       "📅 *Date:* {$dateFormatted}\n" .
+                       "📍 *Location:* {$locDesc}\n";
+                if (!empty($mapUrl)) {
+                    $msg .= "🗺️ *GPS Map:* {$mapUrl}\n";
+                }
+                $msg .= "🚦 *Status:* 🟢 *ON TIME*\n" .
+                        "⏳ *Shift Start:* {$shiftStartFormatted}\n";
+                if (!empty($record['notes'])) {
+                    $msg .= "📝 *Note:* " . trim($record['notes']) . "\n";
+                }
+                $msg .= "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                        "✨ _Assurance Media Workforce Management • Have a productive day!_";
+            }
 
             foreach ($recipients as $r) {
                 send_whatsapp_notification($r['phone'], $msg, [
                     'event' => 'attendance_punch_in',
                     'user_id' => $user['id'],
                     'user_name' => $userName,
+                    'is_late' => $isLate,
                     'target_audience' => $r['target']
                 ]);
             }
@@ -4769,6 +4852,7 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/config') {
             'has_basic_auth' => !empty($config['basic_auth_password']),
             'admin_phone' => $config['admin_phone'] ?? '+919999999999',
             'admin_group_jid' => $config['admin_group_jid'] ?? '',
+            'attendance_group_jid' => $config['attendance_group_jid'] ?? '',
             'default_country_code' => $config['default_country_code'] ?? '91',
             'has_api_key' => !empty($config['api_key']),
             'send_on_punch_in' => isset($config['send_on_punch_in']) ? (bool)$config['send_on_punch_in'] : true,
@@ -4806,6 +4890,7 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
         'api_key' => !empty($input['api_key']) ? trim($input['api_key']) : ($current['api_key'] ?? ''),
         'admin_phone' => trim($input['admin_phone'] ?? $current['admin_phone'] ?? '+919999999999'),
         'admin_group_jid' => trim($input['admin_group_jid'] ?? $current['admin_group_jid'] ?? ''),
+        'attendance_group_jid' => trim($input['attendance_group_jid'] ?? $current['attendance_group_jid'] ?? ''),
         'default_country_code' => trim($input['default_country_code'] ?? $current['default_country_code'] ?? '91'),
         'send_on_punch_in' => isset($input['send_on_punch_in']) ? (bool)$input['send_on_punch_in'] : true,
         'send_on_punch_out' => isset($input['send_on_punch_out']) ? (bool)$input['send_on_punch_out'] : true,
@@ -4831,6 +4916,41 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
     );
 
     json_response(['success' => true, 'config' => $newConfig, 'message' => 'WhatsApp configuration updated successfully']);
+}
+
+// GET /api/integrations/whatsapp/groups (Fetch WhatsApp groups from connected session)
+if ($method === 'GET' && $path === '/api/integrations/whatsapp/groups') {
+    $user = require_auth();
+    require_roles($user, ['super_admin', 'support_manager']);
+
+    $res = gowa_proxy_request('/user/my/groups');
+    if (empty($res['success']) || empty($res['data'])) {
+        $res = gowa_proxy_request('/groups');
+    }
+
+    $rawList = $res['data']['results'] ?? $res['data']['data'] ?? $res['data'] ?? [];
+    $groups = [];
+    if (is_array($rawList)) {
+        foreach ($rawList as $g) {
+            $jid = $g['jid'] ?? $g['id'] ?? '';
+            $name = $g['name'] ?? $g['subject'] ?? $jid;
+            if (!empty($jid)) {
+                $groups[] = [
+                    'jid' => $jid,
+                    'name' => $name,
+                    'participants_count' => isset($g['participants']) && is_array($g['participants']) ? count($g['participants']) : null,
+                    'is_admin' => !empty($g['is_admin']) || !empty($g['is_owner']),
+                    'is_announcement' => !empty($g['is_read_only']) || !empty($g['announce'])
+                ];
+            }
+        }
+    }
+
+    json_response([
+        'success' => true,
+        'groups' => $groups,
+        'count' => count($groups)
+    ]);
 }
 
 // GET /api/integrations/whatsapp/status (Check live GOWA status)

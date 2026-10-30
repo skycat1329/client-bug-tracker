@@ -21,6 +21,8 @@ import {
   Settings,
   Server,
   Lock,
+  Users,
+  MapPin,
 } from 'lucide-react';
 
 export const SlackHealthPage: React.FC = () => {
@@ -38,6 +40,7 @@ export const SlackHealthPage: React.FC = () => {
     basic_auth_password: '',
     admin_phone: '+919999999999',
     admin_group_jid: '',
+    attendance_group_jid: '',
     default_country_code: '91',
     send_on_punch_in: true,
     send_on_punch_out: true,
@@ -54,6 +57,10 @@ export const SlackHealthPage: React.FC = () => {
     send_on_payslip: true,
     attendance_notify_mode: 'both',
   });
+  const [waGroups, setWaGroups] = useState<any[]>([]);
+  const [fetchingGroups, setFetchingGroups] = useState(false);
+  const [fetchGroupsError, setFetchGroupsError] = useState<string | null>(null);
+  const [previewTab, setPreviewTab] = useState<'late' | 'ontime'>('late');
   const [waStatus, setWaStatus] = useState<any>(null);
   const [checkingWaStatus, setCheckingWaStatus] = useState(false);
   const [savingWa, setSavingWa] = useState(false);
@@ -166,6 +173,24 @@ export const SlackHealthPage: React.FC = () => {
       setTestWaResult({ success: false, message: err?.message || 'Failed to dispatch' });
     } finally {
       setTestingWa(false);
+    }
+  };
+
+  const handleFetchGroups = async () => {
+    setFetchingGroups(true);
+    setFetchGroupsError(null);
+    try {
+      const res = await api.get<{ success: boolean; groups: any[]; count: number }>('/integrations/whatsapp/groups');
+      if (res && res.groups) {
+        setWaGroups(res.groups);
+        if (res.groups.length === 0) {
+          setFetchGroupsError('No groups found on the paired WhatsApp session. Please ensure this number has joined your company group.');
+        }
+      }
+    } catch (err: any) {
+      setFetchGroupsError(err?.message || 'Failed to fetch WhatsApp groups from gateway.');
+    } finally {
+      setFetchingGroups(false);
     }
   };
 
@@ -613,7 +638,7 @@ export const SlackHealthPage: React.FC = () => {
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                   <Hash size={13} className="text-slate-500" />
-                  Admin Group JID (Optional)
+                  General Admin Group JID (Optional)
                 </label>
                 <input
                   type="text"
@@ -623,8 +648,168 @@ export const SlackHealthPage: React.FC = () => {
                   className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
                 <p className="text-[11px] text-slate-400">
-                  WhatsApp Group JID to broadcast team punches or incident alerts into a company group.
+                  Optional WhatsApp group for internal leadership & engineering alerts.
                 </p>
+              </div>
+            </div>
+
+            {/* Attendance Announcement Group (All Users) */}
+            <div className="p-4 bg-emerald-50/50 rounded-xl border border-emerald-200/80 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold">
+                    <Users size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-800">
+                      Attendance Announcement Group (All Users)
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      All-employee broadcast group where punch-in events are automatically announced.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleFetchGroups}
+                  disabled={fetchingGroups}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-medium transition shadow-sm disabled:opacity-60"
+                >
+                  <RefreshCw size={13} className={fetchingGroups ? 'animate-spin text-emerald-600' : 'text-slate-500'} />
+                  {fetchingGroups ? 'Fetching Groups...' : 'Fetch Connected Groups'}
+                </button>
+              </div>
+
+              {/* Group JID input & Dropdown selector */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Hash size={13} className="text-emerald-700" />
+                    Attendance Group JID *
+                  </label>
+                  <input
+                    type="text"
+                    value={waConfig.attendance_group_jid || ''}
+                    onChange={(e) => setWaConfig({ ...waConfig, attendance_group_jid: e.target.value })}
+                    placeholder="120363040656010581@g.us"
+                    className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Enter the WhatsApp Group JID ending in <code className="text-emerald-700 font-mono">@g.us</code>.
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Users size={13} className="text-emerald-700" />
+                    Select From WhatsApp Groups
+                  </label>
+                  <select
+                    className="w-full px-3.5 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setWaConfig({ ...waConfig, attendance_group_jid: e.target.value });
+                      }
+                    }}
+                    value={waConfig.attendance_group_jid || ''}
+                  >
+                    <option value="">-- Choose a Group --</option>
+                    {waGroups.map((g) => (
+                      <option key={g.jid} value={g.jid}>
+                        {g.name} ({g.participants_count ? `${g.participants_count} members` : g.jid.slice(0, 15) + '...'})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-500">
+                    {waGroups.length > 0
+                      ? `${waGroups.length} groups loaded from WhatsApp session`
+                      : 'Click "Fetch Connected Groups" to populate your WhatsApp groups'}
+                  </p>
+                </div>
+              </div>
+
+              {fetchGroupsError && (
+                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                  {fetchGroupsError}
+                </div>
+              )}
+
+              {/* Crucial Announcement Group Instructions */}
+              <div className="p-3 bg-white/90 rounded-lg border border-emerald-200 text-xs text-slate-700 space-y-1">
+                <span className="font-bold text-emerald-800 flex items-center gap-1.5">
+                  💡 How to make this group Announcement-Only (Prevent Member Chat):
+                </span>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  1. Open the group on your phone in WhatsApp.<br />
+                  2. Tap the group header → select <b>Group permissions</b> (or <b>Group settings</b>).<br />
+                  3. Turn <b>Send messages</b> to <b>&quot;Only admins&quot;</b>.<br />
+                  4. Make sure your paired WhatsApp Business number (<code className="font-mono text-emerald-700">+918369406363</code>) is an Admin.
+                  Now employees cannot type messages, but automated punch-in notifications will be posted instantly!
+                </p>
+              </div>
+
+              {/* Visual Message Preview (Red vs Green) */}
+              <div className="pt-2 border-t border-emerald-200/60">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-700">Live WhatsApp Message Format Preview:</span>
+                  <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-white text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewTab('late')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition flex items-center gap-1 ${
+                        previewTab === 'late'
+                          ? 'bg-rose-500 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      🔴 Late Punch-In (Red Alert)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewTab('ontime')}
+                      className={`px-2.5 py-1 rounded-md font-bold transition flex items-center gap-1 ${
+                        previewTab === 'ontime'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      🟢 On-Time (Normal)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-slate-900 text-slate-100 rounded-xl font-mono text-xs leading-relaxed border border-slate-800">
+                  {previewTab === 'late' ? (
+                    <div>
+                      <div className="text-rose-400 font-bold">🔴 *LATE PUNCH-IN ALERT* 🔴</div>
+                      <div className="text-slate-500">━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                      <div>👤 *Staff:* <span className="text-amber-300 font-bold">Faizan Khan</span></div>
+                      <div>⏰ *Punch Time:* <span className="text-rose-300 font-bold">10:24:18 AM</span> (IST)</div>
+                      <div>📅 *Date:* 30 Oct 2026</div>
+                      <div>📍 *Location:* 🏢 Assurance Media HQ (14m from office geofence)</div>
+                      <div>🗺️ *GPS Map:* <span className="text-sky-400 underline">https://maps.google.com/?q=19.0825,72.8967</span></div>
+                      <div className="text-rose-400 font-bold">🚨 *Status:* 🔴 *LATE ARRIVAL* (24 mins late)</div>
+                      <div>⏳ *Shift Standard:* 10:00 AM (Grace: 10:15 AM)</div>
+                      <div className="text-slate-500">━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                      <div className="text-slate-400 italic">⚠️ _Notice: Punctuality is strictly monitored. Please ensure on-time arrival._</div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-emerald-400 font-bold">🟢 *ATTENDANCE PUNCH-IN* 🟢</div>
+                      <div className="text-slate-500">━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                      <div>👤 *Staff:* <span className="text-emerald-300 font-bold">Jane Doe</span></div>
+                      <div>⏰ *Punch Time:* <span className="text-emerald-300 font-bold">09:55:02 AM</span> (IST)</div>
+                      <div>📅 *Date:* 30 Oct 2026</div>
+                      <div>📍 *Location:* 🏢 Assurance Media HQ (18m from office geofence)</div>
+                      <div>🗺️ *GPS Map:* <span className="text-sky-400 underline">https://maps.google.com/?q=19.0825,72.8967</span></div>
+                      <div className="text-emerald-400 font-bold">🚦 *Status:* 🟢 *ON TIME*</div>
+                      <div>⏳ *Shift Start:* 10:00 AM</div>
+                      <div className="text-slate-500">━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                      <div className="text-slate-400 italic">✨ _Assurance Media Workforce Management • Have a productive day!_</div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
