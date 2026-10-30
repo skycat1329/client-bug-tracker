@@ -4928,19 +4928,25 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/groups') {
         $res = gowa_proxy_request('/groups');
     }
 
-    $rawList = $res['data']['results'] ?? $res['data']['data'] ?? $res['data'] ?? [];
+    $rawList = $res['data']['results']['data'] 
+        ?? $res['data']['data'] 
+        ?? $res['data']['results'] 
+        ?? $res['data'] 
+        ?? [];
+
     $groups = [];
     if (is_array($rawList)) {
         foreach ($rawList as $g) {
-            $jid = $g['jid'] ?? $g['id'] ?? '';
-            $name = $g['name'] ?? $g['subject'] ?? $jid;
+            $jid = $g['JID'] ?? $g['jid'] ?? $g['id'] ?? '';
+            $name = $g['Name'] ?? $g['name'] ?? $g['subject'] ?? $jid;
+            $parts = $g['Participants'] ?? $g['participants'] ?? [];
             if (!empty($jid)) {
                 $groups[] = [
                     'jid' => $jid,
                     'name' => $name,
-                    'participants_count' => isset($g['participants']) && is_array($g['participants']) ? count($g['participants']) : null,
-                    'is_admin' => !empty($g['is_admin']) || !empty($g['is_owner']),
-                    'is_announcement' => !empty($g['is_read_only']) || !empty($g['announce'])
+                    'participants_count' => is_array($parts) ? count($parts) : null,
+                    'is_admin' => !empty($g['IsAdmin']) || !empty($g['is_admin']) || !empty($g['is_owner']),
+                    'is_announcement' => !empty($g['IsAnnounce']) || !empty($g['is_read_only']) || !empty($g['announce'])
                 ];
             }
         }
@@ -4949,7 +4955,8 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/groups') {
     json_response([
         'success' => true,
         'groups' => $groups,
-        'count' => count($groups)
+        'count' => count($groups),
+        'raw_gateway_response' => $res
     ]);
 }
 
