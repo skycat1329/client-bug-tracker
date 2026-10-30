@@ -261,6 +261,7 @@ export interface PaySlip {
   employee_id: string;
   employee_name: string;
   employee_email: string;
+  employee_phone?: string | null;
   designation: string;
   department: string;
   date_of_joining?: string | null;

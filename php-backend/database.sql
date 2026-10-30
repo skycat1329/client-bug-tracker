@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS `pay_slips` (
     `employee_id` VARCHAR(50) NOT NULL,
     `employee_name` VARCHAR(255) NOT NULL,
     `employee_email` VARCHAR(191) NOT NULL,
+    `employee_phone` VARCHAR(50) NULL,
     `designation` VARCHAR(255) NOT NULL,
     `department` VARCHAR(100) NOT NULL DEFAULT 'Tech',
     `date_of_joining` DATE NULL,

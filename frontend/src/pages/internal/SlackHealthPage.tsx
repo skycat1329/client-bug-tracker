@@ -45,6 +45,13 @@ export const SlackHealthPage: React.FC = () => {
     send_on_create: true,
     send_on_assign: true,
     send_on_status: true,
+    send_on_ticket_comment: true,
+    send_on_task_create: true,
+    send_on_task_assign: true,
+    send_on_task_status: true,
+    send_on_credentials: true,
+    send_on_offer_letter: true,
+    send_on_payslip: true,
     attendance_notify_mode: 'both',
   });
   const [waStatus, setWaStatus] = useState<any>(null);
@@ -628,6 +635,7 @@ export const SlackHealthPage: React.FC = () => {
               </h3>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {/* Attendance */}
                 <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
                   <input
                     type="checkbox"
@@ -637,7 +645,7 @@ export const SlackHealthPage: React.FC = () => {
                   />
                   <div className="text-xs">
                     <span className="font-bold text-slate-800 block">Punch In Alerts</span>
-                    <span className="text-[11px] text-slate-500">Notify admin when employee clocks in</span>
+                    <span className="text-[11px] text-slate-500">Notify admin/employee on clock in</span>
                   </div>
                 </label>
 
@@ -650,7 +658,7 @@ export const SlackHealthPage: React.FC = () => {
                   />
                   <div className="text-xs">
                     <span className="font-bold text-slate-800 block">Punch Out Alerts</span>
-                    <span className="text-[11px] text-slate-500">Notify admin when employee clocks out</span>
+                    <span className="text-[11px] text-slate-500">Notify on day end & work summary</span>
                   </div>
                 </label>
 
@@ -662,11 +670,12 @@ export const SlackHealthPage: React.FC = () => {
                     className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
                   />
                   <div className="text-xs">
-                    <span className="font-bold text-slate-800 block">Regularization Requests</span>
-                    <span className="text-[11px] text-slate-500">Alerts on submission &amp; approvals</span>
+                    <span className="font-bold text-slate-800 block">Attendance Regularization</span>
+                    <span className="text-[11px] text-slate-500">Alerts on submission & approvals</span>
                   </div>
                 </label>
 
+                {/* Tickets */}
                 <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
                   <input
                     type="checkbox"
@@ -676,7 +685,7 @@ export const SlackHealthPage: React.FC = () => {
                   />
                   <div className="text-xs">
                     <span className="font-bold text-slate-800 block">New Bug Tickets</span>
-                    <span className="text-[11px] text-slate-500">Acknowledge brand &amp; alert triage</span>
+                    <span className="text-[11px] text-slate-500">Acknowledge brand & alert triage</span>
                   </div>
                 </label>
 
@@ -688,7 +697,7 @@ export const SlackHealthPage: React.FC = () => {
                     className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
                   />
                   <div className="text-xs">
-                    <span className="font-bold text-slate-800 block">Specialist Assigned</span>
+                    <span className="font-bold text-slate-800 block">Ticket Assignment</span>
                     <span className="text-[11px] text-slate-500">Notify developer with SLA target</span>
                   </div>
                 </label>
@@ -702,7 +711,88 @@ export const SlackHealthPage: React.FC = () => {
                   />
                   <div className="text-xs">
                     <span className="font-bold text-slate-800 block">Ticket Status Updates</span>
-                    <span className="text-[11px] text-slate-500">Notify brand on fix ready/resolution</span>
+                    <span className="text-[11px] text-slate-500">Phase updates sent to Brand</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_ticket_comment)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_ticket_comment: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Ticket Comments & Notes</span>
+                    <span className="text-[11px] text-slate-500">Public messages between brand & team</span>
+                  </div>
+                </label>
+
+                {/* Tasks */}
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_task_assign)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_task_assign: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Task Assignment</span>
+                    <span className="text-[11px] text-slate-500">Notify engineer with deadline</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_task_status)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_task_status: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Task Status & Approvals</span>
+                    <span className="text-[11px] text-slate-500">Alerts on approve, reject, complete</span>
+                  </div>
+                </label>
+
+                {/* Credentials */}
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_credentials)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_credentials: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Credentials & Password Resets</span>
+                    <span className="text-[11px] text-slate-500">Auto-send login details to users</span>
+                  </div>
+                </label>
+
+                {/* Payroll */}
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_offer_letter)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_offer_letter: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Official Offer Letters</span>
+                    <span className="text-[11px] text-slate-500">Send contract view & accept link</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_payslip)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_payslip: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Monthly Salary Slips</span>
+                    <span className="text-[11px] text-slate-500">Send net pay & official PDF link</span>
                   </div>
                 </label>
               </div>

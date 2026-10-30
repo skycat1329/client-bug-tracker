@@ -187,6 +187,7 @@ export const PayrollDocumentsPage: React.FC = () => {
     employee_name: '',
     employee_id: 'AM' + String(Date.now()).slice(-6),
     employee_email: '',
+    employee_phone: '',
     designation: 'Web Developer',
     department: 'Tech',
     date_of_joining: '',
@@ -434,9 +435,13 @@ export const PayrollDocumentsPage: React.FC = () => {
   };
 
   const handleSendOfferEmail = async (offer: OfferLetter) => {
+    const hasPhone = Boolean(offer.candidate_phone);
     if (
       !window.confirm(
-        `Send official Offer Letter to ${offer.candidate_name} (${offer.candidate_email})?\n\nZero emails will be sent to other users.`
+        `Dispatch official Offer Letter to ${offer.candidate_name}?\n` +
+        `• Email: ${offer.candidate_email}\n` +
+        (hasPhone ? `• WhatsApp: ${offer.candidate_phone}\n` : '') +
+        `\nProceed with dispatch?`
       )
     ) {
       return;
@@ -446,7 +451,7 @@ export const PayrollDocumentsPage: React.FC = () => {
     setSuccess(null);
 
     try {
-      const res = await api.post<{ success: boolean; delivered: boolean; message: string }>(
+      const res = await api.post<{ success: boolean; delivered: boolean; whatsapp_delivered?: boolean; message: string }>(
         `/payroll/offer-letters/${offer.id}/send-email`,
         {}
       );
@@ -457,7 +462,7 @@ export const PayrollDocumentsPage: React.FC = () => {
             : o
         )
       );
-      setSuccess(res.message || 'Offer Letter dispatched via email successfully!');
+      setSuccess(res.message || 'Offer Letter dispatched via WhatsApp and Email successfully!');
     } catch (err: any) {
       setError(err?.message || 'Failed to send offer letter email.');
     } finally {
@@ -531,6 +536,7 @@ export const PayrollDocumentsPage: React.FC = () => {
       employee_name: '',
       employee_id: 'AM' + String(Date.now()).slice(-6),
       employee_email: '',
+      employee_phone: '',
       designation: 'Web Developer',
       department: 'Tech',
       date_of_joining: '',
@@ -561,6 +567,7 @@ export const PayrollDocumentsPage: React.FC = () => {
       employee_name: sl.employee_name,
       employee_id: sl.employee_id,
       employee_email: sl.employee_email,
+      employee_phone: sl.employee_phone || '',
       designation: sl.designation,
       department: sl.department,
       date_of_joining: sl.date_of_joining || '',
@@ -585,6 +592,7 @@ export const PayrollDocumentsPage: React.FC = () => {
       ...slipForm,
       employee_name: selected.name,
       employee_email: selected.email,
+      employee_phone: (selected as any).phone || '',
       designation: selected.custom_role || (selected.role === 'developer' ? 'Web Developer' : selected.role),
       employee_id: 'AM' + selected.id.replace(/\D/g, '').slice(-6) || ('AM' + String(Date.now()).slice(-6)),
     });
@@ -690,9 +698,13 @@ export const PayrollDocumentsPage: React.FC = () => {
   };
 
   const handleSendSlipEmail = async (slip: PaySlip) => {
+    const hasPhone = Boolean(slip.employee_phone);
     if (
       !window.confirm(
-        `Send official Salary Slip for ${slip.month} ${slip.year} to ${slip.employee_name} (${slip.employee_email})?\n\nZero emails will be sent to other users.`
+        `Dispatch official Salary Slip for ${slip.month} ${slip.year} to ${slip.employee_name}?\n` +
+        `• Email: ${slip.employee_email}\n` +
+        (hasPhone ? `• WhatsApp: ${slip.employee_phone}\n` : '') +
+        `\nProceed with dispatch?`
       )
     ) {
       return;
@@ -702,7 +714,7 @@ export const PayrollDocumentsPage: React.FC = () => {
     setSuccess(null);
 
     try {
-      const res = await api.post<{ success: boolean; delivered: boolean; message: string }>(
+      const res = await api.post<{ success: boolean; delivered: boolean; whatsapp_delivered?: boolean; message: string }>(
         `/payroll/pay-slips/${slip.id}/send-email`,
         {}
       );
@@ -713,7 +725,7 @@ export const PayrollDocumentsPage: React.FC = () => {
             : s
         )
       );
-      setSuccess(res.message || 'Salary Slip dispatched via email successfully!');
+      setSuccess(res.message || 'Salary Slip dispatched via WhatsApp and Email successfully!');
     } catch (err: any) {
       setError(err?.message || 'Failed to send salary slip email.');
     } finally {
@@ -1585,6 +1597,16 @@ export const PayrollDocumentsPage: React.FC = () => {
                       value={slipForm.employee_email}
                       onChange={(e) => setSlipForm({ ...slipForm, employee_email: e.target.value })}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">WhatsApp Phone Number</label>
+                    <input
+                      type="tel"
+                      placeholder="e.g. +91 8369406363"
+                      value={slipForm.employee_phone}
+                      onChange={(e) => setSlipForm({ ...slipForm, employee_phone: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                     />
                   </div>
                   <div>

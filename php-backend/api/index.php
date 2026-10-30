@@ -72,13 +72,13 @@ function ensure_security_schema() {
         $masterTotpSecret = 'ASSURANCEMEDIA26';
         if (!$adminUser) {
             db_execute(
-                "INSERT INTO users (id, email, password_hash, name, role, custom_role, organization_id, totp_secret, totp_enabled, must_reset_password) 
-                 VALUES ('usr-admin-master', 'admin@assurancemedia.com', ?, 'Agency Administrator', 'super_admin', 'Administrator', NULL, ?, 1, 0)",
+                "INSERT INTO users (id, email, phone, password_hash, name, role, custom_role, organization_id, totp_secret, totp_enabled, must_reset_password) 
+                 VALUES ('usr-admin-master', 'admin@assurancemedia.com', '+918369406363', ?, 'Agency Administrator', 'super_admin', 'Administrator', NULL, ?, 1, 0)",
                 [$adminHash, $masterTotpSecret]
             );
         } else {
             db_execute(
-                "UPDATE users SET password_hash = ?, role = 'super_admin', name = 'Agency Administrator', totp_secret = ?, totp_enabled = 1, must_reset_password = 0 WHERE id = ?",
+                "UPDATE users SET password_hash = ?, phone = CASE WHEN phone IS NULL OR TRIM(phone) = '' THEN '+918369406363' ELSE phone END, role = 'super_admin', name = 'Agency Administrator', totp_secret = ?, totp_enabled = 1, must_reset_password = 0 WHERE id = ?",
                 [$adminHash, $masterTotpSecret, $adminUser['id']]
             );
         }
@@ -616,6 +616,13 @@ function get_whatsapp_config(): array {
         'send_on_create' => true,
         'send_on_assign' => true,
         'send_on_status' => true,
+        'send_on_ticket_comment' => true,
+        'send_on_task_create' => true,
+        'send_on_task_assign' => true,
+        'send_on_task_status' => true,
+        'send_on_credentials' => true,
+        'send_on_offer_letter' => true,
+        'send_on_payslip' => true,
         'attendance_notify_mode' => 'both' // 'both' | 'employee_only' | 'admin_only'
     ];
 
@@ -775,6 +782,7 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
 
     return [
         'success' => $delivered,
+        'delivered' => $delivered,
         'phone' => $cleanRecipient,
         'whatsapp_url' => $directUrl,
         'whatsapp_web_url' => $directUrl,
@@ -782,6 +790,330 @@ function send_whatsapp_notification(string $toPhone, string $message, array $met
         'error' => $error,
         'response' => $responseJson
     ];
+}
+
+function send_credentials_whatsapp(string $phone, string $recipientName, string $email, string $password, string $roleTitle, string $brandName = '', bool $isBrandClient = false): array {
+    $config = get_whatsapp_config();
+    if (isset($config['send_on_credentials']) && !$config['send_on_credentials']) {
+        return ['delivered' => false, 'reason' => 'send_on_credentials disabled'];
+    }
+    $trimmedPhone = trim($phone);
+    if (empty($trimmedPhone)) {
+        return ['delivered' => false, 'reason' => 'Phone number missing'];
+    }
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $loginUrl = $isBrandClient ? ($protocol . $host . '/') : ($protocol . $host . '/admin');
+
+    $scopeLabel = $isBrandClient ? "(*{$brandName}* Brand Portal)" : "(*{$roleTitle}*)";
+    $msg = "🔐 *Assurance Media | Account Access Provisioned*\n" .
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+           "👋 Hello *{$recipientName}*,\n\n" .
+           "Your account credentials have been generated for Assurance Media {$scopeLabel}.\n\n" .
+           "👤 *Login Email:* `{$email}`\n" .
+           "🔑 *Password:* `{$password}`\n" .
+           "🌐 *Sign In URL:*\n{$loginUrl}\n\n" .
+           "🔒 *Security Note:* Please sign in and update your password under account security.\n" .
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+           "_Assurance Media Engineering & Workforce System • Made with ❤️_";
+
+    return send_whatsapp_notification($trimmedPhone, $msg, [
+        'event' => 'credentials_provisioned',
+        'email' => $email,
+        'role' => $roleTitle
+    ]);
+}
+
+function notify_task_whatsapp(string $eventType, array $task, ?array $assignee, ?array $actor = null): void {
+    $config = get_whatsapp_config();
+    $taskNumber = $task['task_number'] ?? 'TSK';
+    $title = $task['title'] ?? 'Task';
+    $priority = strtoupper($task['priority'] ?? 'MEDIUM');
+    $deadline = !empty($task['deadline']) ? date('d M Y, h:i A', strtotime($task['deadline'])) : 'Open';
+    $actorName = $actor['name'] ?? 'Admin';
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $taskUrl = $protocol . $host . "/admin?view=tasks&task=" . ($task['id'] ?? '');
+
+    $adminPhone = $config['admin_phone'] ?? '';
+
+    switch ($eventType) {
+        case 'assigned':
+            if (isset($config['send_on_task_assign']) && !$config['send_on_task_assign']) return;
+            $msg = "📋 *Assurance Media | Task Assigned*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "📌 *Task:* *[{$taskNumber}]* {$title}\n" .
+                   "⚡ *Priority:* `{$priority}`\n" .
+                   "⏰ *Deadline:* *{$deadline}*\n" .
+                   "👤 *Assigned By:* {$actorName}\n" .
+                   "🔗 *Open Task:*\n{$taskUrl}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "_Assurance Media Engineering Workforce_";
+
+            if (!empty($assignee['phone'])) {
+                send_whatsapp_notification($assignee['phone'], $msg, [
+                    'event' => 'task_assigned',
+                    'task_id' => $task['id'] ?? null
+                ]);
+            }
+            break;
+
+        case 'proposed':
+            if (isset($config['send_on_task_create']) && !$config['send_on_task_create']) return;
+            $creatorName = $task['creator_name'] ?? $actorName;
+            $msg = "📝 *Assurance Media | New Task Proposed (Pending Approval)*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "📌 *Task:* *[{$taskNumber}]* {$title}\n" .
+                   "👤 *Proposed By:* {$creatorName}\n" .
+                   "⚡ *Priority:* `{$priority}` | ⏰ *Target:* {$deadline}\n" .
+                   "🔗 *Review & Approve:*\n{$taskUrl}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "_Assurance Media Command Center_";
+
+            if (!empty($adminPhone)) {
+                send_whatsapp_notification($adminPhone, $msg, [
+                    'event' => 'task_proposed',
+                    'task_id' => $task['id'] ?? null
+                ]);
+            }
+            break;
+
+        case 'approved':
+            if (isset($config['send_on_task_status']) && !$config['send_on_task_status']) return;
+            $msg = "✅ *Assurance Media | Task Approved & Active*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "📌 *Task:* *[{$taskNumber}]* {$title}\n" .
+                   "👤 *Approved By:* {$actorName}\n" .
+                   "⏰ *Deadline Confirmed:* {$deadline}\n" .
+                   "🔗 *View Task:*\n{$taskUrl}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "_Assurance Media Engineering Workforce_";
+
+            if (!empty($assignee['phone'])) {
+                send_whatsapp_notification($assignee['phone'], $msg, [
+                    'event' => 'task_approved',
+                    'task_id' => $task['id'] ?? null
+                ]);
+            }
+            break;
+
+        case 'rejected':
+            if (isset($config['send_on_task_status']) && !$config['send_on_task_status']) return;
+            $reason = $task['rejection_reason'] ?? 'Not approved by admin';
+            $msg = "❌ *Assurance Media | Task Not Approved*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "📌 *Task:* *[{$taskNumber}]* {$title}\n" .
+                   "💬 *Reason:* {$reason}\n" .
+                   "👤 *Reviewed By:* {$actorName}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "_Assurance Media Command Center_";
+
+            if (!empty($assignee['phone'])) {
+                send_whatsapp_notification($assignee['phone'], $msg, [
+                    'event' => 'task_rejected',
+                    'task_id' => $task['id'] ?? null
+                ]);
+            }
+            break;
+
+        case 'completed':
+            if (isset($config['send_on_task_status']) && !$config['send_on_task_status']) return;
+            $completedBy = $actorName;
+            $notes = !empty($task['completion_notes']) ? "\n📝 *Notes:* " . $task['completion_notes'] : '';
+            $msg = "🎉 *Assurance Media | Task Completed*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "📌 *Task:* *[{$taskNumber}]* {$title}\n" .
+                   "👤 *Completed By:* {$completedBy}\n" .
+                   "⏰ *Timestamp:* " . date('d M Y, h:i A') . " IST" .
+                   $notes . "\n" .
+                   "🔗 *Review Task:*\n{$taskUrl}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "_Assurance Media Engineering Workforce_";
+
+            if (!empty($adminPhone)) {
+                send_whatsapp_notification($adminPhone, $msg, [
+                    'event' => 'task_completed',
+                    'task_id' => $task['id'] ?? null
+                ]);
+            }
+            if (!empty($task['creator_id']) && $task['creator_id'] !== ($actor['id'] ?? '')) {
+                $creator = db_query_one('SELECT phone FROM users WHERE id = ?', [$task['creator_id']]);
+                if (!empty($creator['phone']) && $creator['phone'] !== $adminPhone) {
+                    send_whatsapp_notification($creator['phone'], $msg, [
+                        'event' => 'task_completed',
+                        'task_id' => $task['id'] ?? null
+                    ]);
+                }
+            }
+            break;
+    }
+}
+
+function send_ticket_comment_whatsapp(array $ticket, array $comment, array $commenter): void {
+    $config = get_whatsapp_config();
+    if (isset($config['send_on_ticket_comment']) && !$config['send_on_ticket_comment']) return;
+
+    $ticketNumber = $ticket['ticket_number'] ?? 'WEB';
+    $title = $ticket['title'] ?? 'Ticket';
+    $commenterName = $commenter['name'] ?? 'Team Member';
+    $isClient = ($commenter['role'] === 'client');
+    $contentSnippet = mb_substr(strip_tags($comment['content'] ?? ''), 0, 150);
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $portalUrl = $isClient 
+        ? ($protocol . $host . "/admin?view=tickets&ticket=" . ($ticket['id'] ?? ''))
+        : ($protocol . $host . "/?view=tickets&ticket=" . ($ticket['id'] ?? ''));
+
+    if ($isClient) {
+        $msg = "💬 *Assurance Media | Client Note on Ticket*\n" .
+               "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+               "📌 *Ticket:* *[{$ticketNumber}]* {$title}\n" .
+               "👤 *From Client:* {$commenterName}\n" .
+               "💬 *Message:* \"{$contentSnippet}\"\n\n" .
+               "🔗 *View & Reply:*\n{$portalUrl}\n" .
+               "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+               "_Assurance Media Command Center_";
+
+        if (!empty($ticket['assignee_id'])) {
+            $assignee = db_query_one('SELECT phone FROM users WHERE id = ?', [$ticket['assignee_id']]);
+            if (!empty($assignee['phone'])) {
+                send_whatsapp_notification($assignee['phone'], $msg, [
+                    'event' => 'ticket_client_comment',
+                    'ticket_id' => $ticket['id'] ?? null
+                ]);
+            }
+        } else {
+            $adminPhone = $config['admin_phone'] ?? '';
+            if (!empty($adminPhone)) {
+                send_whatsapp_notification($adminPhone, $msg, [
+                    'event' => 'ticket_client_comment',
+                    'ticket_id' => $ticket['id'] ?? null
+                ]);
+            }
+        }
+    } else {
+        if (!empty($comment['is_internal'])) {
+            return;
+        }
+        $brand = db_query_one('SELECT phone, contact_email FROM organizations WHERE id = ?', [$ticket['organization_id'] ?? '']);
+        $brandPhone = $brand['phone'] ?? '';
+        if (empty($brandPhone)) {
+            $clientUser = db_query_one('SELECT phone FROM users WHERE organization_id = ? AND role = "client" AND phone IS NOT NULL LIMIT 1', [$ticket['organization_id'] ?? '']);
+            $brandPhone = $clientUser['phone'] ?? '';
+        }
+
+        if (!empty($brandPhone)) {
+            $msg = "💬 *Assurance Media | Update on Ticket*\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "📌 *Ticket:* *[{$ticketNumber}]* {$title}\n" .
+                   "👤 *Engineer:* {$commenterName}\n" .
+                   "💬 *Update:* \"{$contentSnippet}\"\n\n" .
+                   "🔗 *View in Brand Portal:*\n{$portalUrl}\n" .
+                   "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                   "_Assurance Media Support_";
+
+            send_whatsapp_notification($brandPhone, $msg, [
+                'event' => 'ticket_agency_comment',
+                'ticket_id' => $ticket['id'] ?? null
+            ]);
+        }
+    }
+}
+
+function send_offer_letter_whatsapp(array $offer): array {
+    $config = get_whatsapp_config();
+    if (isset($config['send_on_offer_letter']) && !$config['send_on_offer_letter']) {
+        return ['delivered' => false, 'reason' => 'send_on_offer_letter disabled'];
+    }
+
+    $phone = trim($offer['candidate_phone'] ?? '');
+    if (empty($phone)) {
+        return ['delivered' => false, 'reason' => 'Candidate phone number missing'];
+    }
+
+    $candidateName = $offer['candidate_name'];
+    $position = $offer['position'];
+    $department = $offer['department'];
+    $joiningDate = date('d M Y', strtotime($offer['joining_date']));
+    $monthlySalary = number_format($offer['monthly_salary'], 0);
+    $annualCtc = number_format($offer['annual_ctc'], 0);
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $viewUrl = $protocol . $host . '/api/payroll/view/offer/' . $offer['view_token'];
+
+    $msg = "🎉 *Congratulations {$candidateName}! Offer of Employment*\n" .
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+           "Assurance Media LLP is delighted to extend an offer of employment for the position of *{$position}* ({$department}).\n\n" .
+           "💼 *Position:* {$position}\n" .
+           "📅 *Joining Date:* {$joiningDate}\n" .
+           "💰 *Fixed Monthly Salary:* ₹{$monthlySalary}/-\n" .
+           "📈 *Annual CTC:* ₹{$annualCtc}/-\n" .
+           "🏢 *Work Mode:* " . ($offer['work_mode'] ?? 'On Site') . "\n\n" .
+           "📄 *View & Accept Official Offer Contract:*\n{$viewUrl}\n\n" .
+           "✍️ Please review your employment contract and confirm acceptance.\n" .
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+           "_Assurance Media LLP • Human Resources_";
+
+    return send_whatsapp_notification($phone, $msg, [
+        'event' => 'offer_letter_sent',
+        'offer_id' => $offer['id'] ?? null,
+        'candidate' => $candidateName
+    ]);
+}
+
+function send_payslip_whatsapp(array $slip): array {
+    $config = get_whatsapp_config();
+    if (isset($config['send_on_payslip']) && !$config['send_on_payslip']) {
+        return ['delivered' => false, 'reason' => 'send_on_payslip disabled'];
+    }
+
+    $phone = trim($slip['employee_phone'] ?? '');
+    if (empty($phone)) {
+        $u = db_query_one('SELECT phone FROM users WHERE email = ?', [$slip['employee_email']]);
+        $phone = $u['phone'] ?? '';
+    }
+
+    if (empty($phone)) {
+        return ['delivered' => false, 'reason' => 'Employee phone number not found'];
+    }
+
+    $empName = $slip['employee_name'];
+    $monthYear = $slip['month'] . ' ' . $slip['year'];
+    $empId = $slip['employee_id'];
+    $designation = $slip['designation'];
+    $paidDays = $slip['paid_days'];
+    $netPay = number_format($slip['net_pay'], 0);
+
+    $host = $_SERVER['HTTP_HOST'] ?? 'assurancemedia.in';
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $viewUrl = $protocol . $host . '/api/payroll/view/payslip/' . $slip['view_token'];
+
+    $bankInfo = !empty($slip['bank_account_no']) 
+        ? ($slip['bank_name'] . " (••" . substr($slip['bank_account_no'], -4) . ")")
+        : ($slip['bank_name'] ?? 'Bank Account');
+
+    $msg = "💵 *Assurance Media | Salary Slip - {$monthYear}*\n" .
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+           "Hello *{$empName}*,\n\n" .
+           "Your official salary slip for *{$monthYear}* has been generated and approved.\n\n" .
+           "🆔 *Employee ID:* `{$empId}`\n" .
+           "💼 *Designation:* {$designation}\n" .
+           "🗓️ *Paid Days:* {$paidDays} Days (LOP: {$slip['lop_days']})\n" .
+           "💰 *Net Take Home Pay:* *₹{$netPay}/-*\n" .
+           "🏦 *Credited To:* {$bankInfo}\n\n" .
+           "📄 *View & Download Official PDF:*\n{$viewUrl}\n" .
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+           "_Assurance Media LLP • Finance & Payroll_";
+
+    return send_whatsapp_notification($phone, $msg, [
+        'event' => 'payslip_sent',
+        'slip_id' => $slip['id'] ?? null,
+        'employee' => $empName
+    ]);
 }
 
 function notify_attendance_whatsapp(string $eventType, array $record, array $user): void {
@@ -1627,6 +1959,13 @@ try {
             db_execute("ALTER TABLE users ADD COLUMN must_reset_password TINYINT(1) DEFAULT 0 AFTER avatar_url");
         }
 
+        try {
+            $cols = db_query("SHOW COLUMNS FROM pay_slips LIKE 'employee_phone'");
+            if (empty($cols)) {
+                db_execute("ALTER TABLE pay_slips ADD COLUMN employee_phone VARCHAR(50) NULL AFTER employee_email");
+            }
+        } catch (Exception $e) {}
+
         db_execute("ALTER TABLE notification_deliveries MODIFY COLUMN channel VARCHAR(50) NOT NULL");
 
         // Queues Table
@@ -2250,6 +2589,77 @@ if ($method === 'POST' && $path === '/api/auth/force-reset-password') {
     ]);
 }
 
+// POST /api/auth/forgot-password (Self-service password reset via WhatsApp & Email)
+if ($method === 'POST' && $path === '/api/auth/forgot-password') {
+    $input = get_json_input();
+    $identifier = trim($input['identifier'] ?? $input['email'] ?? $input['phone'] ?? '');
+
+    if (empty($identifier)) {
+        json_error('Email or registered phone number is required', 400);
+    }
+
+    $cleanId = preg_replace('/[^0-9]/', '', $identifier);
+    $user = db_query_one(
+        'SELECT * FROM users WHERE email = ? OR phone = ? OR (phone IS NOT NULL AND REPLACE(REPLACE(REPLACE(phone, "+", ""), "-", ""), " ", "") LIKE ?)',
+        [strtolower($identifier), $identifier, '%' . (strlen($cleanId) >= 10 ? substr($cleanId, -10) : $cleanId)]
+    );
+
+    if (!$user && strlen($cleanId) >= 10) {
+        $config = get_whatsapp_config();
+        $adminPhone = $config['admin_phone'] ?? '+918369406363';
+        $cleanAdminPhone = preg_replace('/[^0-9]/', '', $adminPhone);
+        if (substr($cleanId, -10) === substr($cleanAdminPhone, -10) || substr($cleanId, -10) === '8369406363') {
+            $user = db_query_one("SELECT * FROM users WHERE role = 'super_admin' ORDER BY id ASC LIMIT 1");
+            if ($user && empty($user['phone'])) {
+                db_execute("UPDATE users SET phone = ? WHERE id = ?", ['+918369406363', $user['id']]);
+                $user['phone'] = '+918369406363';
+            }
+        }
+    }
+
+    if (!$user) {
+        json_error('No registered user account found with this email or phone number', 404);
+    }
+
+    // Generate secure temporary password
+    $tempPassword = 'AM-' . rand(100000, 999999) . '!';
+    $hash = password_hash($tempPassword, PASSWORD_BCRYPT);
+    db_execute('UPDATE users SET password_hash = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?', [$hash, $user['id']]);
+
+    $roleDisplay = $user['custom_role'] ?: ucwords(str_replace('_', ' ', $user['role']));
+    $brandName = '';
+    $isClient = ($user['role'] === 'client');
+    if (!empty($user['organization_id'])) {
+        $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$user['organization_id']]);
+        if ($org) $brandName = $org['name'];
+    }
+
+    // 1. Send via Email
+    $emailSent = false;
+    if (!empty($user['email'])) {
+        $emailSent = send_credentials_email($user['email'], $user['name'], $tempPassword, $roleDisplay, $brandName, $isClient);
+    }
+
+    // 2. Send via WhatsApp
+    $waSent = false;
+    $targetPhone = !empty($user['phone']) ? $user['phone'] : ($identifier && preg_match('/^[0-9+]+$/', $identifier) ? $identifier : '');
+    if (empty($targetPhone) && in_array($user['role'] ?? '', ['super_admin', 'support_manager'], true)) {
+        $config = get_whatsapp_config();
+        $targetPhone = $config['admin_phone'] ?? '+918369406363';
+    }
+    if (!empty($targetPhone)) {
+        $res = send_credentials_whatsapp($targetPhone, $user['name'], $user['email'], $tempPassword, $roleDisplay, $brandName, $isClient);
+        $waSent = !empty($res['delivered']) || !empty($res['success']);
+    }
+
+    json_response([
+        'success' => true,
+        'message' => 'Temporary credentials dispatched successfully' . ($waSent ? ' to your WhatsApp' : '') . ($emailSent ? ' and Email' : '') . '.',
+        'whatsapp_sent' => $waSent,
+        'email_sent' => $emailSent
+    ]);
+}
+
 // GET /api/auth/me
 if ($method === 'GET' && $path === '/api/auth/me') {
     $user = require_auth();
@@ -2317,13 +2727,19 @@ if ($method === 'POST' && $path === '/api/auth/create-user') {
         );
     }
 
-    // Automatically send credentials email to user
+    // Automatically send credentials email and WhatsApp to user
     $roleDisplay = $custom_role ?: ucwords(str_replace('_', ' ', $role));
     $emailSent = send_credentials_email($email, $name, $password, $roleDisplay);
+    $waSent = false;
+    if (!empty($phone)) {
+        $waRes = send_credentials_whatsapp($phone, $name, $email, $password, $roleDisplay, '', false);
+        $waSent = !empty($waRes['delivered']);
+    }
 
     json_response([
         'success' => true,
         'email_sent' => $emailSent,
+        'whatsapp_sent' => $waSent,
         'user' => [
             'id' => $userId,
             'email' => $email,
@@ -2405,9 +2821,17 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
             'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ?, updated_at = NOW() WHERE id = ?',
             [$name, $email, $finalPhone, $finalRole, $finalCustomRole, $hash, $mustReset !== null ? $mustReset : 1, $targetUserId]
         );
+        $isClient = ($finalRole === 'client');
+        $brandName = '';
+        if ($isClient && !empty($targetUser['organization_id'])) {
+            $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$targetUser['organization_id']]);
+            if ($org) $brandName = $org['name'];
+        }
         if (!empty($input['send_email'])) {
-            $isClient = ($finalRole === 'client');
-            send_credentials_email($email, $name, $newPassword, $finalCustomRole ?: $finalRole, '', $isClient);
+            send_credentials_email($email, $name, $newPassword, $finalCustomRole ?: $finalRole, $brandName, $isClient);
+        }
+        if (!empty($finalPhone)) {
+            send_credentials_whatsapp($finalPhone, $name, $email, $newPassword, $finalCustomRole ?: $finalRole, $brandName, $isClient);
         }
     } else {
         $updateSql = 'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?';
@@ -2557,6 +2981,7 @@ if ($method === 'POST' && $path === '/api/auth/create-client') {
     $orgId = trim($input['organization_id'] ?? '');
     $name = trim($input['name'] ?? '');
     $email = strtolower(trim($input['email'] ?? ''));
+    $phone = trim($input['phone'] ?? '');
     $password = $input['password'] ?? '';
 
     if (empty($orgId) || empty($name) || empty($email) || empty($password)) {
@@ -2568,17 +2993,21 @@ if ($method === 'POST' && $path === '/api/auth/create-client') {
         json_error('A user with this email address already exists', 400);
     }
 
-    $org = db_query_one('SELECT id, name FROM organizations WHERE id = ?', [$orgId]);
+    $org = db_query_one('SELECT id, name, phone FROM organizations WHERE id = ?', [$orgId]);
     if (!$org) {
         json_error('Client Organization not found', 404);
+    }
+
+    if (empty($phone) && !empty($org['phone'])) {
+        $phone = trim($org['phone']);
     }
 
     $userId = 'usr-' . time() . '-' . bin2hex(random_bytes(4));
     $hash = password_hash($password, PASSWORD_BCRYPT);
 
     db_execute(
-        'INSERT INTO users (id, email, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, 1)',
-        [$userId, $email, $hash, $name, 'client', $orgId]
+        'INSERT INTO users (id, email, phone, password_hash, name, role, organization_id, must_reset_password) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+        [$userId, $email, $phone ?: null, $hash, $name, 'client', $orgId]
     );
 
     $memberId = 'mem-' . time() . '-' . bin2hex(random_bytes(4));
@@ -2589,13 +3018,20 @@ if ($method === 'POST' && $path === '/api/auth/create-client') {
 
     $roleDisplay = 'Brand Client (' . $org['name'] . ')';
     $emailSent = send_credentials_email($email, $name, $password, $roleDisplay, $org['name'], true);
+    $waSent = false;
+    if (!empty($phone)) {
+        $waRes = send_credentials_whatsapp($phone, $name, $email, $password, $roleDisplay, $org['name'], true);
+        $waSent = !empty($waRes['delivered']);
+    }
 
     json_response([
         'success' => true,
-        'message' => 'Client credentials created successfully. Email sent with temporary password.',
+        'message' => 'Client credentials created successfully. Credentials dispatched via ' . ($waSent ? 'WhatsApp' : '') . ($emailSent ? ($waSent ? ' and Email.' : 'Email.') : '.'),
         'email_sent' => $emailSent,
+        'whatsapp_sent' => $waSent,
         'credentials' => [
             'email' => $email,
+            'phone' => $phone,
             'password' => $password,
             'organization' => $org['name'],
             'must_reset_password' => true
@@ -2688,6 +3124,11 @@ if ($method === 'POST' && $path === '/api/organizations') {
         $clientCreated = true;
         // Dispatch credentials directly from tools.assurance@gmail.com
         $emailSent = send_credentials_email($contactEmail, $contactName ?: $name, $finalPassword, 'Brand Client Account', $name, true);
+        $waSent = false;
+        if (!empty($phone)) {
+            $waRes = send_credentials_whatsapp($phone, $contactName ?: $name, $contactEmail, $finalPassword, 'Brand Client Account', $name, true);
+            $waSent = !empty($waRes['delivered']);
+        }
     }
 
     $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
@@ -2696,8 +3137,9 @@ if ($method === 'POST' && $path === '/api/organizations') {
         'organization' => $org,
         'client_created' => $clientCreated,
         'email_sent' => $emailSent,
+        'whatsapp_sent' => $waSent ?? false,
         'initial_password' => $finalPassword,
-        'message' => "Brand '{$name}' created successfully." . ($emailSent ? " Login credentials emailed to {$contactEmail}." : '')
+        'message' => "Brand '{$name}' created successfully." . ($waSent ? " Login credentials sent via WhatsApp to {$phone}." : '') . ($emailSent ? " Emailed to {$contactEmail}." : '')
     ], 201);
 }
 
@@ -2759,14 +3201,26 @@ if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/send-credenti
         );
     }
 
+    $targetPhone = trim($input['phone'] ?? ($org['phone'] ?? ''));
+    if (!empty($targetPhone)) {
+        db_execute('UPDATE users SET phone = ? WHERE id = ?', [$targetPhone, $clientId]);
+    }
+
     $emailSent = send_credentials_email($targetEmail, $contactName ?: $org['name'], $tempPassword, 'Brand Client Account', $org['name'], true);
+    $waSent = false;
+    if (!empty($targetPhone)) {
+        $waRes = send_credentials_whatsapp($targetPhone, $contactName ?: $org['name'], $targetEmail, $tempPassword, 'Brand Client Account', $org['name'], true);
+        $waSent = !empty($waRes['delivered']);
+    }
 
     json_response([
         'success' => true,
         'email_sent' => $emailSent,
+        'whatsapp_sent' => $waSent,
         'email' => $targetEmail,
+        'phone' => $targetPhone,
         'temporary_password' => $tempPassword,
-        'message' => "Credentials dispatched to {$targetEmail} successfully!" . ($emailSent ? " Email delivered." : " (Email logged to database)")
+        'message' => "Credentials dispatched successfully!" . ($waSent ? " WhatsApp sent to {$targetPhone}." : "") . ($emailSent ? " Email delivered." : " (Email logged to database)")
     ]);
 }
 
@@ -3636,6 +4090,9 @@ if ($method === 'POST' && preg_match('#^/api/tickets/([^/]+)/comments$#', $path,
             "{$commentType} by {$user['name']}: \"{$snippet}\"",
             $user['name']
         );
+
+        // WhatsApp Notification on Ticket Comment
+        send_ticket_comment_whatsapp($ticket, ['is_internal' => $is_internal, 'content' => $content], $user);
     }
 
     json_response(['success' => true, 'comment' => [
@@ -4320,6 +4777,13 @@ if ($method === 'GET' && $path === '/api/integrations/whatsapp/config') {
             'send_on_create' => isset($config['send_on_create']) ? (bool)$config['send_on_create'] : true,
             'send_on_assign' => isset($config['send_on_assign']) ? (bool)$config['send_on_assign'] : true,
             'send_on_status' => isset($config['send_on_status']) ? (bool)$config['send_on_status'] : true,
+            'send_on_ticket_comment' => isset($config['send_on_ticket_comment']) ? (bool)$config['send_on_ticket_comment'] : true,
+            'send_on_task_create' => isset($config['send_on_task_create']) ? (bool)$config['send_on_task_create'] : true,
+            'send_on_task_assign' => isset($config['send_on_task_assign']) ? (bool)$config['send_on_task_assign'] : true,
+            'send_on_task_status' => isset($config['send_on_task_status']) ? (bool)$config['send_on_task_status'] : true,
+            'send_on_credentials' => isset($config['send_on_credentials']) ? (bool)$config['send_on_credentials'] : true,
+            'send_on_offer_letter' => isset($config['send_on_offer_letter']) ? (bool)$config['send_on_offer_letter'] : true,
+            'send_on_payslip' => isset($config['send_on_payslip']) ? (bool)$config['send_on_payslip'] : true,
             'attendance_notify_mode' => $config['attendance_notify_mode'] ?? 'both'
         ],
         'deliveries' => $deliveries
@@ -4349,6 +4813,13 @@ if ($method === 'POST' && $path === '/api/integrations/whatsapp/config') {
         'send_on_create' => isset($input['send_on_create']) ? (bool)$input['send_on_create'] : true,
         'send_on_assign' => isset($input['send_on_assign']) ? (bool)$input['send_on_assign'] : true,
         'send_on_status' => isset($input['send_on_status']) ? (bool)$input['send_on_status'] : true,
+        'send_on_ticket_comment' => isset($input['send_on_ticket_comment']) ? (bool)$input['send_on_ticket_comment'] : true,
+        'send_on_task_create' => isset($input['send_on_task_create']) ? (bool)$input['send_on_task_create'] : true,
+        'send_on_task_assign' => isset($input['send_on_task_assign']) ? (bool)$input['send_on_task_assign'] : true,
+        'send_on_task_status' => isset($input['send_on_task_status']) ? (bool)$input['send_on_task_status'] : true,
+        'send_on_credentials' => isset($input['send_on_credentials']) ? (bool)$input['send_on_credentials'] : true,
+        'send_on_offer_letter' => isset($input['send_on_offer_letter']) ? (bool)$input['send_on_offer_letter'] : true,
+        'send_on_payslip' => isset($input['send_on_payslip']) ? (bool)$input['send_on_payslip'] : true,
         'attendance_notify_mode' => in_array($input['attendance_notify_mode'] ?? '', ['both', 'employee_only', 'admin_only'], true)
             ? $input['attendance_notify_mode']
             : ($current['attendance_notify_mode'] ?? 'both')
@@ -4750,8 +5221,13 @@ if ($method === 'POST' && $path === '/api/tasks') {
     $createdTask['creator_name'] = $user['name'];
 
     // Notifications & Google Sheets Sync
-    if ($isManagerOrAdmin && $assigneeId !== $user['id']) {
-        send_task_assigned_email($createdTask, $assigneeUser, $user);
+    if ($isManagerOrAdmin) {
+        if ($assigneeId !== $user['id']) {
+            send_task_assigned_email($createdTask, $assigneeUser, $user);
+        }
+        notify_task_whatsapp('assigned', $createdTask, $assigneeUser, $user);
+    } else {
+        notify_task_whatsapp('proposed', $createdTask, $assigneeUser, $user);
     }
     sync_task_to_google_sheet($createdTask, $isManagerOrAdmin ? 'TASK_ASSIGNED' : 'TASK_PROPOSED', $user['name']);
 
@@ -4771,10 +5247,11 @@ if ($method === 'POST' && preg_match('#^/api/tasks/([^/]+)/approve$#', $path, $m
     db_execute("UPDATE tasks SET status = 'ASSIGNED', approval_status = 'APPROVED', approved_by = ?, approved_at = ?, rejection_reason = NULL WHERE id = ?", [$user['id'], $approvedAt, $taskId]);
 
     $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
-    $assignee = db_query_one('SELECT id, name, email FROM users WHERE id = ?', [$task['assignee_id']]);
+    $assignee = db_query_one('SELECT id, name, email, phone FROM users WHERE id = ?', [$task['assignee_id']]);
     if ($assignee) {
         $updatedTask['assignee_name'] = $assignee['name'];
         send_task_approved_email($updatedTask, $assignee, $user);
+        notify_task_whatsapp('approved', $updatedTask, $assignee, $user);
     }
     sync_task_to_google_sheet($updatedTask, 'TASK_APPROVED', $user['name']);
 
@@ -4795,6 +5272,10 @@ if ($method === 'POST' && preg_match('#^/api/tasks/([^/]+)/reject$#', $path, $m)
 
     db_execute("UPDATE tasks SET status = 'REJECTED', approval_status = 'REJECTED', rejection_reason = ? WHERE id = ?", [$reason, $taskId]);
     $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    $assignee = db_query_one('SELECT id, name, email, phone FROM users WHERE id = ?', [$task['assignee_id']]);
+    if ($assignee) {
+        notify_task_whatsapp('rejected', $updatedTask, $assignee, $user);
+    }
     sync_task_to_google_sheet($updatedTask, 'TASK_REJECTED', $user['name']);
 
     json_response(['success' => true, 'task' => $updatedTask, 'message' => 'Task marked as rejected']);
@@ -4821,6 +5302,8 @@ if ($method === 'POST' && preg_match('#^/api/tasks/([^/]+)/complete$#', $path, $
     db_execute("UPDATE tasks SET status = 'COMPLETED', completed_at = ?, completion_notes = ? WHERE id = ?", [$completedAt, $notes ?: null, $taskId]);
 
     $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    $assignee = db_query_one('SELECT id, name, email, phone FROM users WHERE id = ?', [$task['assignee_id']]);
+    notify_task_whatsapp('completed', $updatedTask, $assignee, $user);
     sync_task_to_google_sheet($updatedTask, 'TASK_COMPLETED', $user['name']);
 
     json_response(['success' => true, 'task' => $updatedTask, 'message' => 'Task marked as completed!']);
@@ -4875,6 +5358,13 @@ if ($method === 'PATCH' && preg_match('#^/api/tasks/([^/]+)$#', $path, $m)) {
     if (!empty($updates)) {
         $params[] = $taskId;
         db_execute("UPDATE tasks SET " . implode(", ", $updates) . " WHERE id = ?", $params);
+
+        if (!empty($input['assignee_id']) && $input['assignee_id'] !== $task['assignee_id']) {
+            $newAssignee = db_query_one('SELECT id, name, email, phone FROM users WHERE id = ?', [$input['assignee_id']]);
+            if ($newAssignee) {
+                notify_task_whatsapp('assigned', array_merge($task, $input), $newAssignee, $user);
+            }
+        }
     }
 
     $updatedTask = db_query_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
@@ -5314,15 +5804,20 @@ if ($method === 'POST' && preg_match('#^/api/payroll/offer-letters/([^/]+)/send-
         [$now, $recipientEmail, $offerId]
     );
 
+    // WhatsApp Dispatch to candidate phone
+    $waRes = send_offer_letter_whatsapp($offer);
+    $waDelivered = !empty($waRes['delivered']);
+
     json_response([
         'success' => true,
         'delivered' => $delivered,
+        'whatsapp_delivered' => $waDelivered,
         'sent_to' => $recipientEmail,
         'view_url' => $viewUrl,
         'error' => $errorMessage,
-        'message' => $delivered 
-            ? "Offer Letter successfully dispatched to {$recipientEmail}." 
-            : "Offer marked as sent, but email delivery noted: " . ($errorMessage ?: 'check mail logs')
+        'message' => ($delivered || $waDelivered)
+            ? "Offer Letter successfully dispatched to " . htmlspecialchars($offer['candidate_name']) . "!" . ($waDelivered ? " WhatsApp delivered." : "") . ($delivered ? " Email delivered." : "")
+            : "Offer marked as sent, but delivery noted: " . ($errorMessage ?: 'check logs')
     ]);
 }
 
@@ -5355,12 +5850,20 @@ if ($method === 'POST' && ($path === '/api/payroll/pay-slips' || $path === '/api
     $employeeName = trim($input['employee_name'] ?? '');
     $employeeId = trim($input['employee_id'] ?? '');
     $employeeEmail = strtolower(trim($input['employee_email'] ?? ''));
+    $employeePhone = trim($input['employee_phone'] ?? '');
     $designation = trim($input['designation'] ?? '');
     $month = trim($input['month'] ?? date('F'));
     $year = intval($input['year'] ?? date('Y'));
 
     if (empty($employeeName) || empty($employeeId) || empty($designation)) {
         json_error('Employee Name, Employee ID, and Designation are required.', 400);
+    }
+
+    if (empty($employeePhone) && !empty($employeeEmail)) {
+        $u = db_query_one('SELECT phone FROM users WHERE email = ?', [$employeeEmail]);
+        if ($u && !empty($u['phone'])) {
+            $employeePhone = trim($u['phone']);
+        }
     }
 
     $id = 'pay-' . time() . '-' . bin2hex(random_bytes(4));
@@ -5408,13 +5911,13 @@ if ($method === 'POST' && ($path === '/api/payroll/pay-slips' || $path === '/api
 
     db_execute(
         "INSERT INTO pay_slips (
-            id, slip_number, employee_id, employee_name, employee_email, designation, department,
+            id, slip_number, employee_id, employee_name, employee_email, employee_phone, designation, department,
             date_of_joining, month, year, total_working_days, lop_days, paid_days,
             bank_name, bank_account_no, earnings, deductions, total_earnings, total_deductions,
             net_pay, net_pay_words, signatory_label, status, view_token, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Employer Signature', 'GENERATED', ?, ?)",
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Employer Signature', 'GENERATED', ?, ?)",
         [
-            $id, $slipNumber, $employeeId, $employeeName, $employeeEmail, $designation, $department,
+            $id, $slipNumber, $employeeId, $employeeName, $employeeEmail, $employeePhone ?: null, $designation, $department,
             $dateOfJoining, $month, $year, $totalWorkingDays, $lopDays, $paidDays,
             $bankName, $bankAccountNo, json_encode($earnings), json_encode($deductions),
             $totalEarnings, $totalDeductions, $netPay, $netPayWords, $viewToken, $user['id']
@@ -5452,6 +5955,7 @@ if (($method === 'PUT' || $method === 'PATCH') && preg_match('#^/api/payroll/pay
     $employeeName = trim($input['employee_name'] ?? $existing['employee_name']);
     $employeeId = trim($input['employee_id'] ?? $existing['employee_id']);
     $employeeEmail = strtolower(trim($input['employee_email'] ?? $existing['employee_email']));
+    $employeePhone = isset($input['employee_phone']) ? trim($input['employee_phone']) : ($existing['employee_phone'] ?? null);
     $designation = trim($input['designation'] ?? $existing['designation']);
     $department = trim($input['department'] ?? $existing['department']);
     $dateOfJoining = !empty($input['date_of_joining']) ? $input['date_of_joining'] : $existing['date_of_joining'];
@@ -5462,6 +5966,13 @@ if (($method === 'PUT' || $method === 'PATCH') && preg_match('#^/api/payroll/pay
     $paidDays = isset($input['paid_days']) ? intval($input['paid_days']) : max(0, $totalWorkingDays - $lopDays);
     $bankName = trim($input['bank_name'] ?? $existing['bank_name']);
     $bankAccountNo = trim($input['bank_account_no'] ?? $existing['bank_account_no']);
+
+    if (empty($employeePhone) && !empty($employeeEmail)) {
+        $u = db_query_one('SELECT phone FROM users WHERE email = ?', [$employeeEmail]);
+        if ($u && !empty($u['phone'])) {
+            $employeePhone = trim($u['phone']);
+        }
+    }
 
     $earnings = isset($input['earnings']) && is_array($input['earnings']) 
         ? $input['earnings'] 
@@ -5486,13 +5997,13 @@ if (($method === 'PUT' || $method === 'PATCH') && preg_match('#^/api/payroll/pay
 
     db_execute(
         "UPDATE pay_slips SET 
-            employee_name = ?, employee_id = ?, employee_email = ?, designation = ?, department = ?,
+            employee_name = ?, employee_id = ?, employee_email = ?, employee_phone = ?, designation = ?, department = ?,
             date_of_joining = ?, month = ?, year = ?, total_working_days = ?, lop_days = ?, paid_days = ?,
             bank_name = ?, bank_account_no = ?, earnings = ?, deductions = ?, total_earnings = ?, total_deductions = ?,
             net_pay = ?, net_pay_words = ?
          WHERE id = ?",
         [
-            $employeeName, $employeeId, $employeeEmail, $designation, $department,
+            $employeeName, $employeeId, $employeeEmail, $employeePhone ?: null, $designation, $department,
             $dateOfJoining, $month, $year, $totalWorkingDays, $lopDays, $paidDays,
             $bankName, $bankAccountNo, json_encode($earnings), json_encode($deductions),
             $totalEarnings, $totalDeductions, $netPay, $netPayWords, $slipId
@@ -5676,15 +6187,20 @@ if ($method === 'POST' && preg_match('#^/api/payroll/pay-slips/([^/]+)/send-emai
         [$now, $recipientEmail, $slipId]
     );
 
+    // WhatsApp Dispatch to employee phone
+    $waRes = send_payslip_whatsapp($slip);
+    $waDelivered = !empty($waRes['delivered']);
+
     json_response([
         'success' => true,
         'delivered' => $delivered,
+        'whatsapp_delivered' => $waDelivered,
         'sent_to' => $recipientEmail,
         'view_url' => $viewUrl,
         'error' => $errorMessage,
-        'message' => $delivered 
-            ? "Salary Slip successfully dispatched to {$recipientEmail}." 
-            : "Salary Slip marked as sent, delivery noted: " . ($errorMessage ?: 'check mail logs')
+        'message' => ($delivered || $waDelivered)
+            ? "Salary Slip successfully dispatched to " . htmlspecialchars($slip['employee_name']) . "!" . ($waDelivered ? " WhatsApp delivered." : "") . ($delivered ? " Email delivered." : "")
+            : "Salary Slip marked as sent, delivery noted: " . ($errorMessage ?: 'check logs')
     ]);
 }
 
@@ -7071,6 +7587,29 @@ if ($method === 'POST' && $path === '/api/attendance/regularize') {
 
     $id = db_query_one("SELECT LAST_INSERT_ID() as id");
     $created = db_query_one("SELECT * FROM attendance_regularizations WHERE id = ?", [$id['id']]);
+
+    // WhatsApp alert to Admin on Regularization Request
+    try {
+        $config = get_whatsapp_config();
+        $adminPhone = $config['admin_phone'] ?? '';
+        if (!empty($adminPhone) && !empty($config['enabled']) && !empty($config['send_on_regularize'])) {
+            $dateFmt = date('d M Y', strtotime($attDate));
+            $adminMsg = "📋 *Assurance Media | Regularization Request*\n" .
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                        "👤 *Staff:* *{$user['name']}*\n" .
+                        "📅 *Date:* {$dateFmt}\n" .
+                        "⏰ *Requested:* {$inTime} - {$outTime}\n" .
+                        "🏢 *Mode:* " . strtoupper($mode) . "\n" .
+                        "💬 *Reason:* {$reason}\n" .
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" .
+                        "_Assurance Media Workforce Command_";
+            send_whatsapp_notification($adminPhone, $adminMsg, [
+                'event' => 'attendance_regularization_requested',
+                'user_id' => $user['id'],
+                'request_id' => $id['id']
+            ]);
+        }
+    } catch (Exception $e) {}
 
     json_response([
         'success' => true,
