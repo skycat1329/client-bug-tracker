@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   Send,
   RefreshCw,
-  Bell,
   ExternalLink,
   Mail,
   Smartphone,
@@ -19,7 +18,9 @@ import {
   Check,
   Radio,
   X,
-  ShieldCheck,
+  Settings,
+  Server,
+  Lock,
 } from 'lucide-react';
 
 export const SlackHealthPage: React.FC = () => {
@@ -153,7 +154,7 @@ export const SlackHealthPage: React.FC = () => {
       setTestWaResult(res);
       await loadData();
     } catch (err: any) {
-      setTestWaResult({ success: false, message: err.message });
+      setTestWaResult({ success: false, message: err?.message || 'Failed to dispatch' });
     } finally {
       setTestingWa(false);
     }
@@ -164,7 +165,7 @@ export const SlackHealthPage: React.FC = () => {
     setPairError(null);
     try {
       const res = await api.get<any>('/integrations/whatsapp/login-qr');
-      setQrData(res.data);
+      setQrData(res.data || res);
     } catch (err: any) {
       setPairError(err?.message || 'Failed to fetch QR code from WhatsApp gateway');
     } finally {
@@ -223,7 +224,7 @@ export const SlackHealthPage: React.FC = () => {
       setTestSlackResult(res);
       await loadData();
     } catch (err: any) {
-      setTestSlackResult({ success: false, message: err.message });
+      setTestSlackResult({ success: false, message: err?.message || 'Failed to dispatch Slack test' });
     } finally {
       setTestingSlack(false);
     }
@@ -239,7 +240,7 @@ export const SlackHealthPage: React.FC = () => {
       setTestEmailResult(res);
       await loadData();
     } catch (err: any) {
-      setTestEmailResult({ success: false, message: err.message });
+      setTestEmailResult({ success: false, message: err?.message || 'Failed to dispatch email test' });
     } finally {
       setTestingEmail(false);
     }
@@ -290,9 +291,9 @@ export const SlackHealthPage: React.FC = () => {
           <Smartphone size={16} />
           <span>WhatsApp Gateway (GOWA)</span>
           <span
-            className={`w-2 h-2 rounded-full ${
+            className={`w-2.5 h-2.5 rounded-full ${
               waStatus?.connected
-                ? 'bg-emerald-500'
+                ? 'bg-emerald-500 ring-2 ring-emerald-200 animate-pulse'
                 : waStatus?.reachable
                 ? 'bg-amber-400'
                 : 'bg-slate-300'
@@ -310,9 +311,7 @@ export const SlackHealthPage: React.FC = () => {
         >
           <Hash size={16} />
           <span>Slack Webhooks</span>
-          {health?.configured && (
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-          )}
+          {health?.configured && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
         </button>
 
         <button
@@ -343,333 +342,847 @@ export const SlackHealthPage: React.FC = () => {
         </button>
       </div>
 
-
-      {/* Integration Status & Channel Mapping */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Status Card */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-3">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Integration State
-          </div>
-          <div className="flex items-center gap-2">
-            <div
-              className={`w-3 h-3 rounded-full ${
-                health?.configured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
-              }`}
-            />
-            <span className="font-bold text-slate-900 text-base">
-              {health?.configured ? 'Live Webhook Connected' : 'Mock Mode (Safe Local)'}
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            {health?.configured
-              ? 'Real-time JSON Block Kit payloads are dispatched to your Slack workspace webhook with retry & backoff.'
-              : 'No SLACK_WEBHOOK_URL is set in backend .env. Notifications are logged safely to the delivery ledger without crashing.'}
-          </p>
-
-          <div className="pt-3 border-t border-slate-100 text-xs">
-            <span className="font-semibold text-slate-700">Setup Guide:</span>{' '}
-            <span className="text-blue-600 font-mono">docs/SLACK_SETUP.md</span>
-          </div>
-        </div>
-
-        {/* Dynamic Channel Routing */}
-        <div className="md:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Dynamic Channel Routing Configuration
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs space-y-1">
-              <div className="font-bold text-slate-800 flex items-center justify-between">
-                <span>#client-bug-reports</span>
-                <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-semibold">
-                  Standard
-                </span>
+      {/* ========================================================================= */}
+      {/* TAB 1: WHATSAPP GATEWAY (GOWA) CONFIGURATION & STATUS                     */}
+      {/* ========================================================================= */}
+      {activeTab === 'whatsapp' && (
+        <div className="space-y-6">
+          {/* Status Banner */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div
+                  className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    waStatus?.connected
+                      ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : waStatus?.reachable
+                      ? 'bg-amber-100 text-amber-700 border border-amber-300'
+                      : 'bg-slate-100 text-slate-500 border border-slate-200'
+                  }`}
+                >
+                  <Smartphone size={24} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-slate-900">WhatsApp Gateway Connection</h3>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold uppercase tracking-wide border ${
+                        waStatus?.connected
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : waStatus?.reachable
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-slate-100 text-slate-600 border-slate-300'
+                      }`}
+                    >
+                      {waStatus?.connected
+                        ? 'Connected & Active'
+                        : waStatus?.reachable
+                        ? 'Gateway Reachable (Not Paired)'
+                        : 'Offline / Not Configured'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {waStatus?.connected
+                      ? `Device linked and authorized. Ready to dispatch real-time WhatsApp updates.`
+                      : waStatus?.reachable
+                      ? `Gateway server responded on ${waConfig.gateway_url}, but your phone session is not linked yet.`
+                      : `Enter your Render or local GOWA URL below to activate automated 24/7 WhatsApp messaging.`}
+                  </p>
+                </div>
               </div>
-              <p className="text-slate-500 text-[11px]">
-                Triggered when standard bug reports (P2–P4) are submitted by clients.
-              </p>
-            </div>
 
-            <div className="p-3 rounded-lg border border-rose-200 bg-rose-50/50 text-xs space-y-1">
-              <div className="font-bold text-rose-900 flex items-center justify-between">
-                <span>#production-incidents</span>
-                <span className="text-[10px] bg-rose-200 text-rose-900 px-1.5 py-0.2 rounded font-semibold">
-                  High Alert
-                </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {waStatus?.connected ? (
+                  <>
+                    <button
+                      onClick={handleReconnectWa}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-sm transition-colors cursor-pointer"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Reconnect</span>
+                    </button>
+                    <button
+                      onClick={handleLogoutWa}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Power size={13} />
+                      <span>Disconnect Device</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        setShowPairModal(true);
+                        setPairMode('qr');
+                        handleFetchQr();
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors cursor-pointer"
+                    >
+                      <QrCode size={15} />
+                      <span>Scan QR Code</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowPairModal(true);
+                        setPairMode('code');
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg shadow-sm transition-colors cursor-pointer"
+                    >
+                      <Key size={14} />
+                      <span>Pair with Phone Code</span>
+                    </button>
+                  </>
+                )}
               </div>
-              <p className="text-rose-700 text-[11px]">
-                Triggered immediately for P1 Critical outages and major blockers.
-              </p>
-            </div>
-
-            <div className="p-3 rounded-lg border border-purple-200 bg-purple-50/50 text-xs space-y-1">
-              <div className="font-bold text-purple-900 flex items-center justify-between">
-                <span>#dev-triage</span>
-                <span className="text-[10px] bg-purple-200 text-purple-900 px-1.5 py-0.2 rounded font-semibold">
-                  Assignment
-                </span>
-              </div>
-              <p className="text-purple-700 text-[11px]">
-                Triggered when a ticket is assigned, claimed, or triaged by staff.
-              </p>
-            </div>
-
-            <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50/50 text-xs space-y-1">
-              <div className="font-bold text-emerald-900 flex items-center justify-between">
-                <span>#ticket-resolutions</span>
-                <span className="text-[10px] bg-emerald-200 text-emerald-900 px-1.5 py-0.2 rounded font-semibold">
-                  Resolved
-                </span>
-              </div>
-              <p className="text-emerald-700 text-[11px]">
-                Triggered when a ticket is marked RESOLVED with root-cause analysis.
-              </p>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Email Notification Health & Live Test Card */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 flex-shrink-0">
-              <Mail size={20} />
-            </div>
-            <div>
+          {/* Configuration Form */}
+          <form onSubmit={handleSaveWaConfig} className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
+            <div className="border-b border-slate-100 pb-4">
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                Automated Email Dispatcher (Google Workspace / SMTP)
-                <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
-                  Active Sender
-                </span>
+                <Settings size={18} className="text-emerald-600" />
+                WhatsApp Multi-Device Gateway Settings
               </h2>
-              <p className="text-xs text-slate-500">
-                Sends credentials to newly created team members and client bug updates directly via{' '}
-                <strong className="text-slate-800">tools.assurance@gmail.com</strong>.
+              <p className="text-xs text-slate-500 mt-0.5">
+                Connect your 24/7 Render cloud deployment or local standalone GOWA runner (<span className="font-mono text-emerald-700">aldinokemal/go-whatsapp-web-multidevice</span>).
               </p>
             </div>
-          </div>
 
-          <div className="flex items-center gap-2">
-            <input
-              type="email"
-              value={targetEmail}
-              onChange={(e) => setTargetEmail(e.target.value)}
-              placeholder="Recipient email address"
-              className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-            />
-            <button
-              disabled={testingEmail}
-              onClick={handleTestEmail}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors whitespace-nowrap"
-            >
-              <Send size={12} />
-              {testingEmail ? 'Sending...' : 'Send Test Email'}
-            </button>
-          </div>
-        </div>
-
-        {testEmailResult && (
-          <div
-            className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
-              testEmailResult.success
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                : 'bg-rose-50 border-rose-200 text-rose-800'
-            }`}
-          >
-            {testEmailResult.success ? (
-              <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
-            ) : (
-              <AlertTriangle size={16} className="flex-shrink-0 mt-0.5 text-rose-600" />
+            {saveWaSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                <span>WhatsApp configuration saved successfully!</span>
+              </div>
             )}
-            <div>
-              <div className="font-bold">
-                {testEmailResult.success ? 'Email Delivered Successfully!' : 'Email Delivery Status'}
+
+            {saveWaError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-semibold flex items-center gap-2">
+                <AlertTriangle size={16} className="text-rose-600 flex-shrink-0" />
+                <span>{saveWaError}</span>
               </div>
-              <div className="mt-0.5">{testEmailResult.message}</div>
-              {testEmailResult.error && (
-                <div className="mt-1 font-mono text-[11px] bg-rose-100/70 p-1.5 rounded text-rose-900">
-                  {testEmailResult.error}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+            )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-            <span className="text-slate-400 font-bold block text-[10px] uppercase">Sender Account</span>
-            <span className="font-mono text-slate-800 font-semibold">tools.assurance@gmail.com</span>
-          </div>
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-            <span className="text-slate-400 font-bold block text-[10px] uppercase">SMTP Relay</span>
-            <span className="font-mono text-slate-800 font-semibold">smtp.gmail.com : 465 (SSL)</span>
-          </div>
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-            <span className="text-slate-400 font-bold block text-[10px] uppercase">Email Triggers</span>
-            <span className="text-slate-700 font-medium">New Team Members, Client Tickets & Replies</span>
-          </div>
-        </div>
-      </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* Gateway URL */}
+              <div className="space-y-1 md:col-span-2">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Globe size={13} className="text-emerald-600" />
+                  Gateway Base URL <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={waConfig.gateway_url || ''}
+                  onChange={(e) => setWaConfig({ ...waConfig, gateway_url: e.target.value })}
+                  placeholder="https://assurance-whatsapp-xxxx.onrender.com or http://localhost:3000"
+                  className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-slate-50 focus:bg-white transition-all"
+                  required
+                />
+                <p className="text-[11px] text-slate-400">
+                  Your Render HTTPS URL (e.g. <span className="font-mono text-slate-600">https://assurance-whatsapp.onrender.com</span>) or Cloudflare tunnel URL.
+                </p>
+              </div>
 
-      {/* WhatsApp Notification Health & Live Test Card */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
-              <MessageCircle size={20} />
+              {/* Basic Auth User */}
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Server size={13} className="text-slate-500" />
+                  Basic Auth Username
+                </label>
+                <input
+                  type="text"
+                  value={waConfig.basic_auth_user || ''}
+                  onChange={(e) => setWaConfig({ ...waConfig, basic_auth_user: e.target.value })}
+                  placeholder="admin"
+                  className="w-full px-3.5 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Basic Auth Password */}
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Lock size={13} className="text-slate-500" />
+                  Basic Auth Password
+                </label>
+                <input
+                  type="password"
+                  value={waConfig.basic_auth_password || ''}
+                  onChange={(e) => setWaConfig({ ...waConfig, basic_auth_password: e.target.value })}
+                  placeholder="••••••••••••"
+                  className="w-full px-3.5 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Admin Phone */}
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Smartphone size={13} className="text-slate-500" />
+                  Default Admin Alert Phone
+                </label>
+                <input
+                  type="tel"
+                  value={waConfig.admin_phone || ''}
+                  onChange={(e) => setWaConfig({ ...waConfig, admin_phone: e.target.value })}
+                  placeholder="+919999999999"
+                  className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="text-[11px] text-slate-400">
+                  Recipient of admin alerts when punch-ins or high-severity tickets occur.
+                </p>
+              </div>
+
+              {/* Admin WhatsApp Group JID */}
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Hash size={13} className="text-slate-500" />
+                  Admin Group JID (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={waConfig.admin_group_jid || ''}
+                  onChange={(e) => setWaConfig({ ...waConfig, admin_group_jid: e.target.value })}
+                  placeholder="120363025555555555@g.us"
+                  className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="text-[11px] text-slate-400">
+                  WhatsApp Group JID to broadcast team punches or incident alerts into a company group.
+                </p>
+              </div>
             </div>
+
+            {/* Notification Triggers */}
+            <div className="pt-4 border-t border-slate-100 space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Automated Trigger Preferences
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_punch_in)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_punch_in: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Punch In Alerts</span>
+                    <span className="text-[11px] text-slate-500">Notify admin when employee clocks in</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_punch_out)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_punch_out: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Punch Out Alerts</span>
+                    <span className="text-[11px] text-slate-500">Notify admin when employee clocks out</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_regularize)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_regularize: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Regularization Requests</span>
+                    <span className="text-[11px] text-slate-500">Alerts on submission &amp; approvals</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_create)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_create: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">New Bug Tickets</span>
+                    <span className="text-[11px] text-slate-500">Acknowledge brand &amp; alert triage</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_assign)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_assign: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Specialist Assigned</span>
+                    <span className="text-[11px] text-slate-500">Notify developer with SLA target</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/60 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(waConfig.send_on_status)}
+                    onChange={(e) => setWaConfig({ ...waConfig, send_on_status: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 block">Ticket Status Updates</span>
+                    <span className="text-[11px] text-slate-500">Notify brand on fix ready/resolution</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end">
+              <button
+                type="submit"
+                disabled={savingWa}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors cursor-pointer"
+              >
+                <Check size={14} />
+                <span>{savingWa ? 'Saving Configuration...' : 'Save Configuration'}</span>
+              </button>
+            </div>
+          </form>
+
+          {/* WhatsApp Live Test Dispatcher */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                WhatsApp Dispatcher & Real-Time Alerts
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
-                  Active Gateway & Direct Web Link
-                </span>
-              </h2>
-              <p className="text-xs text-slate-500">
-                Instant alerts for ticket creation, assignments to specialists, and status updates to client brands.
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Send size={16} className="text-emerald-600" />
+                Live WhatsApp Dispatcher Test
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Send a real test message to any WhatsApp number to verify your gateway connection.
               </p>
             </div>
-          </div>
 
-          <div className="flex items-center gap-2">
-            <input
-              type="tel"
-              value={targetPhone}
-              onChange={(e) => setTargetPhone(e.target.value)}
-              placeholder="+919876543210"
-              className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 w-44 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-            <button
-              disabled={testingWa}
-              onClick={handleTestWhatsApp}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors cursor-pointer"
-            >
-              <Send size={13} />
-              <span>{testingWa ? 'Dispatching...' : 'Send Test WhatsApp'}</span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  Recipient Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={targetPhone}
+                  onChange={(e) => setTargetPhone(e.target.value)}
+                  placeholder="+919876543210"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  Custom Message (Optional)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={customMsg}
+                    onChange={(e) => setCustomMsg(e.target.value)}
+                    placeholder="Hello! This is a test alert from Assurance Media Command Center."
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={testingWa}
+                    onClick={handleTestWhatsApp}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    <Send size={13} />
+                    <span>{testingWa ? 'Dispatching...' : 'Send Test'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {testWaResult && (
+              <div
+                className={`p-3.5 rounded-lg border text-xs flex items-start gap-2.5 ${
+                  testWaResult.success
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}
+              >
+                <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold">{testWaResult.message}</div>
+                  {testWaResult.whatsapp_web_url && (
+                    <div className="pt-1">
+                      <a
+                        href={testWaResult.whatsapp_web_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[11px] transition-colors"
+                      >
+                        <span>Open in WhatsApp Web / App</span>
+                        <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
+      )}
 
-        {testWaResult && (
-          <div
-            className={`p-3.5 rounded-lg border text-xs flex items-start gap-2.5 ${
-              testWaResult.success
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : 'bg-amber-50 border-amber-200 text-amber-900'
-            }`}
-          >
-            <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <div className="font-bold">
-                {testWaResult.message}
+      {/* ========================================================================= */}
+      {/* TAB 2: SLACK WEBHOOKS                                                     */}
+      {/* ========================================================================= */}
+      {activeTab === 'slack' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-3">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Integration State
               </div>
-              {testWaResult.whatsapp_web_url && (
-                <div className="pt-1">
-                  <a
-                    href={testWaResult.whatsapp_web_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[11px] transition-colors"
-                  >
-                    <span>Open in WhatsApp Web / App</span>
-                    <ExternalLink size={11} />
-                  </a>
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-3 h-3 rounded-full ${
+                    health?.configured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
+                  }`}
+                />
+                <span className="font-bold text-slate-900 text-base">
+                  {health?.configured ? 'Live Webhook Connected' : 'Mock Mode (Safe Local)'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                {health?.configured
+                  ? 'Real-time JSON Block Kit payloads are dispatched to your Slack workspace webhook with retry & backoff.'
+                  : 'No SLACK_WEBHOOK_URL is set in backend .env. Notifications are logged safely to the delivery ledger without crashing.'}
+              </p>
+              <div className="pt-3 border-t border-slate-100 text-xs">
+                <button
+                  disabled={testingSlack}
+                  onClick={handleTestSlack}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#4A154B] hover:bg-[#3b113c] text-white rounded-lg text-xs font-bold shadow-sm transition-colors cursor-pointer"
+                >
+                  <Send size={12} />
+                  <span>{testingSlack ? 'Sending...' : 'Test Slack Dispatch'}</span>
+                </button>
+              </div>
+              {testSlackResult && (
+                <div className="text-xs p-2.5 rounded bg-slate-50 border border-slate-200">
+                  {testSlackResult.message}
+                </div>
+              )}
+            </div>
+
+            <div className="md:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Dynamic Channel Routing Configuration
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs space-y-1">
+                  <div className="font-bold text-slate-800 flex items-center justify-between">
+                    <span>#client-bug-reports</span>
+                    <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-semibold">
+                      Standard
+                    </span>
+                  </div>
+                  <p className="text-slate-500 text-[11px]">
+                    Triggered when standard bug reports (P2–P4) are submitted by clients.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg border border-rose-200 bg-rose-50/50 text-xs space-y-1">
+                  <div className="font-bold text-rose-900 flex items-center justify-between">
+                    <span>#production-incidents</span>
+                    <span className="text-[10px] bg-rose-200 text-rose-900 px-1.5 py-0.2 rounded font-semibold">
+                      High Alert
+                    </span>
+                  </div>
+                  <p className="text-rose-700 text-[11px]">
+                    Triggered immediately for P1 Critical outages and major blockers.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg border border-purple-200 bg-purple-50/50 text-xs space-y-1">
+                  <div className="font-bold text-purple-900 flex items-center justify-between">
+                    <span>#dev-triage</span>
+                    <span className="text-[10px] bg-purple-200 text-purple-900 px-1.5 py-0.2 rounded font-semibold">
+                      Assignment
+                    </span>
+                  </div>
+                  <p className="text-purple-700 text-[11px]">
+                    Triggered when a ticket is assigned, claimed, or triaged by staff.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50/50 text-xs space-y-1">
+                  <div className="font-bold text-emerald-900 flex items-center justify-between">
+                    <span>#ticket-resolutions</span>
+                    <span className="text-[10px] bg-emerald-200 text-emerald-900 px-1.5 py-0.2 rounded font-semibold">
+                      Resolved
+                    </span>
+                  </div>
+                  <p className="text-emerald-700 text-[11px]">
+                    Triggered when a ticket is marked RESOLVED with root-cause analysis.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 3: EMAIL (SMTP)                                                       */}
+      {/* ========================================================================= */}
+      {activeTab === 'email' && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 flex-shrink-0">
+                <Mail size={20} />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  Automated Email Dispatcher (Google Workspace / SMTP)
+                  <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
+                    Active Sender
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Sends credentials to newly created team members and client bug updates directly via{' '}
+                  <strong className="text-slate-800">tools.assurance@gmail.com</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="email"
+                value={targetEmail}
+                onChange={(e) => setTargetEmail(e.target.value)}
+                placeholder="Recipient email address"
+                className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+              />
+              <button
+                disabled={testingEmail}
+                onClick={handleTestEmail}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <Send size={12} />
+                <span>{testingEmail ? 'Sending...' : 'Send Test Email'}</span>
+              </button>
+            </div>
+          </div>
+
+          {testEmailResult && (
+            <div
+              className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+                testEmailResult.success
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}
+            >
+              {testEmailResult.success ? (
+                <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
+              ) : (
+                <AlertTriangle size={16} className="flex-shrink-0 mt-0.5 text-rose-600" />
+              )}
+              <div>
+                <div className="font-bold">
+                  {testEmailResult.success ? 'Email Delivered Successfully!' : 'Email Delivery Status'}
+                </div>
+                <div className="mt-0.5">{testEmailResult.message}</div>
+                {testEmailResult.error && (
+                  <div className="mt-1 font-mono text-[11px] bg-rose-100/70 p-1.5 rounded text-rose-900">
+                    {testEmailResult.error}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+              <span className="text-slate-400 font-bold block text-[10px] uppercase">Sender Account</span>
+              <span className="font-mono text-slate-800 font-semibold">tools.assurance@gmail.com</span>
+            </div>
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+              <span className="text-slate-400 font-bold block text-[10px] uppercase">SMTP Relay</span>
+              <span className="font-mono text-slate-800 font-semibold">smtp.gmail.com : 465 (SSL)</span>
+            </div>
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
+              <span className="text-slate-400 font-bold block text-[10px] uppercase">Email Triggers</span>
+              <span className="text-slate-700 font-medium">New Team Members, Client Tickets &amp; Replies</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4: AUDIT LOGS                                                         */}
+      {/* ========================================================================= */}
+      {activeTab === 'audit' && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+            <div>
+              <h3 className="font-bold text-slate-900 text-sm">Recent Notification Deliveries</h3>
+              <p className="text-xs text-slate-500">
+                Audit log of WhatsApp, Slack webhooks, and automated client emails.
+              </p>
+            </div>
+            <button
+              onClick={loadData}
+              title="Refresh"
+              className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg border cursor-pointer"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {deliveries.length === 0 ? (
+            <div className="p-10 text-center text-xs text-slate-400">
+              No notification deliveries recorded yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                    <th className="py-2.5 px-4">Event</th>
+                    <th className="py-2.5 px-4">Channel</th>
+                    <th className="py-2.5 px-4">Recipient</th>
+                    <th className="py-2.5 px-4">Ticket</th>
+                    <th className="py-2.5 px-4">Status</th>
+                    <th className="py-2.5 px-4">Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {deliveries.map((del) => (
+                    <tr key={del.id} className="hover:bg-slate-50/70">
+                      <td className="py-2.5 px-4 font-mono font-medium text-slate-800">
+                        {del.event}
+                      </td>
+                      <td className="py-2.5 px-4 capitalize font-semibold text-slate-700">
+                        {del.channel}
+                      </td>
+                      <td className="py-2.5 px-4 font-medium text-slate-900">{del.recipient}</td>
+                      <td className="py-2.5 px-4 font-mono text-blue-600 font-bold">
+                        {del.ticket_number || '—'}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            del.status === 'delivered'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : del.status === 'mocked'
+                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                              : 'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}
+                        >
+                          {del.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-400">
+                        {new Date(del.created_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* WHATSAPP PAIRING MODAL (QR CODE / 8-DIGIT PHONE CODE)                    */}
+      {/* ========================================================================= */}
+      {showPairModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="p-4 bg-emerald-600 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Smartphone size={20} />
+                <h3 className="font-bold text-sm">Link WhatsApp Business Device</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPairModal(false);
+                  checkWaStatus();
+                }}
+                className="text-white/80 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Tabs */}
+            <div className="flex border-b border-slate-200 text-xs font-bold">
+              <button
+                onClick={() => {
+                  setPairMode('qr');
+                  handleFetchQr();
+                }}
+                className={`flex-1 py-3 text-center transition-colors cursor-pointer ${
+                  pairMode === 'qr'
+                    ? 'text-emerald-700 border-b-2 border-emerald-600 bg-emerald-50/40'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                1. Scan QR Code
+              </button>
+              <button
+                onClick={() => setPairMode('code')}
+                className={`flex-1 py-3 text-center transition-colors cursor-pointer ${
+                  pairMode === 'code'
+                    ? 'text-emerald-700 border-b-2 border-emerald-600 bg-emerald-50/40'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                2. Pair with Phone Code
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              {pairError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium">
+                  {pairError}
+                </div>
+              )}
+
+              {pairMode === 'qr' ? (
+                <div className="text-center space-y-3">
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Open <strong>WhatsApp Business</strong> on your phone &gt; tap <strong>Settings</strong> &gt; <strong>Linked Devices</strong> &gt; <strong>Link a Device</strong> and scan this code:
+                  </p>
+
+                  <div className="flex items-center justify-center p-4 bg-slate-50 rounded-xl border border-slate-200 min-h-[220px]">
+                    {loadingQr ? (
+                      <div className="flex flex-col items-center gap-2 text-xs text-slate-400">
+                        <RefreshCw size={24} className="animate-spin text-emerald-600" />
+                        <span>Generating live QR code...</span>
+                      </div>
+                    ) : qrData?.qr_image || qrData?.qr_link || qrData?.qr ? (
+                      <div className="space-y-2">
+                        {qrData?.qr_image ? (
+                          <img
+                            src={qrData.qr_image.startsWith('data:') ? qrData.qr_image : `data:image/png;base64,${qrData.qr_image}`}
+                            alt="WhatsApp QR Code"
+                            className="w-56 h-56 mx-auto rounded-lg shadow-sm border border-slate-300"
+                          />
+                        ) : (
+                          <div className="font-mono text-[10px] break-all p-3 bg-white border rounded">
+                            {qrData.qr_link || qrData.qr}
+                          </div>
+                        )}
+                        <span className="text-[11px] text-slate-400 block">QR refreshes every 20 seconds</span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-500">Click below to fetch the QR code directly from your gateway.</p>
+                        <button
+                          type="button"
+                          onClick={handleFetchQr}
+                          className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                        >
+                          Load QR Code
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={handleFetchQr}
+                      disabled={loadingQr}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                    >
+                      <RefreshCw size={12} className={loadingQr ? 'animate-spin' : ''} />
+                      <span>Refresh QR</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPairModal(false);
+                        checkWaStatus();
+                      }}
+                      className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      Done Scanning
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Enter your phone number with country code (e.g. <strong className="font-mono">919876543210</strong>) to generate an 8-digit linking code.
+                  </p>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-700 block">Phone Number</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        value={pairPhone}
+                        onChange={(e) => setPairPhone(e.target.value)}
+                        placeholder="919876543210"
+                        className="flex-1 px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={requestingPairCode}
+                        onClick={handleRequestPairCode}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg cursor-pointer whitespace-nowrap"
+                      >
+                        {requestingPairCode ? 'Generating...' : 'Get Code'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {pairCode && (
+                    <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-center space-y-2">
+                      <span className="text-xs font-semibold text-emerald-800 block">
+                        Enter this 8-digit code in WhatsApp on your phone:
+                      </span>
+                      <div className="text-3xl font-black font-mono tracking-widest text-emerald-900 bg-white py-2 px-4 rounded-lg border border-emerald-300 inline-block shadow-sm">
+                        {pairCode}
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(pairCode);
+                            setCopiedCode(true);
+                            setTimeout(() => setCopiedCode(false), 3000);
+                          }}
+                          className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-900 font-bold cursor-pointer"
+                        >
+                          {copiedCode ? <Check size={13} /> : <Copy size={13} />}
+                          <span>{copiedCode ? 'Copied to clipboard!' : 'Copy Code'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPairModal(false);
+                        checkWaStatus();
+                      }}
+                      className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      Done
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-            <span className="text-slate-400 font-bold block text-[10px] uppercase">Default Admin Alert</span>
-            <span className="font-mono text-slate-800 font-semibold">{targetPhone || '+919999999999'}</span>
-          </div>
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-            <span className="text-slate-400 font-bold block text-[10px] uppercase">Dispatch Channels</span>
-            <span className="text-slate-700 font-medium">WhatsApp Cloud API &amp; Direct WhatsApp Web Links</span>
-          </div>
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/60">
-            <span className="text-slate-400 font-bold block text-[10px] uppercase">Automated Triggers</span>
-            <span className="text-slate-700 font-medium">Brand Creation, Assignment, &amp; Status Transitions</span>
-          </div>
         </div>
-      </div>
-
-      {/* Delivery Audit Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h3 className="font-bold text-slate-900 text-sm">Recent Notification Deliveries</h3>
-            <p className="text-xs text-slate-500">
-              Audit log of Slack incoming webhooks and automated client emails.
-            </p>
-          </div>
-          <button
-            onClick={loadData}
-            title="Refresh"
-            className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg border"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          </button>
-        </div>
-
-        {deliveries.length === 0 ? (
-          <div className="p-10 text-center text-xs text-slate-400">
-            No notification deliveries recorded yet.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="py-2.5 px-4">Event</th>
-                  <th className="py-2.5 px-4">Channel</th>
-                  <th className="py-2.5 px-4">Recipient</th>
-                  <th className="py-2.5 px-4">Ticket</th>
-                  <th className="py-2.5 px-4">Status</th>
-                  <th className="py-2.5 px-4">Timestamp</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {deliveries.map((del) => (
-                  <tr key={del.id} className="hover:bg-slate-50/70">
-                    <td className="py-2.5 px-4 font-mono font-medium text-slate-800">
-                      {del.event}
-                    </td>
-                    <td className="py-2.5 px-4 capitalize font-semibold text-slate-700">
-                      {del.channel}
-                    </td>
-                    <td className="py-2.5 px-4 font-medium text-slate-900">{del.recipient}</td>
-                    <td className="py-2.5 px-4 font-mono text-blue-600 font-bold">
-                      {del.ticket_number || '—'}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                          del.status === 'delivered'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : del.status === 'mocked'
-                            ? 'bg-blue-50 text-blue-700 border-blue-200'
-                            : 'bg-rose-50 text-rose-700 border-rose-200'
-                        }`}
-                      >
-                        {del.status}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-4 text-slate-400">
-                      {new Date(del.created_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };
