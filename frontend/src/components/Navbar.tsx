@@ -55,7 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleMobileMenu }) => {
         {onToggleMobileMenu && (
           <button
             onClick={onToggleMobileMenu}
-            className="md:hidden p-2 -ml-1 text-white/90 hover:text-white hover:bg-white/15 rounded-lg transition-colors cursor-pointer"
+            className="lg:hidden p-2 -ml-1 text-white/90 hover:text-white hover:bg-white/15 rounded-lg transition-colors cursor-pointer"
             aria-label="Toggle Navigation Menu"
           >
             <Menu size={20} />

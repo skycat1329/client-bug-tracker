@@ -62,11 +62,11 @@ export const ReviewLeaveModal: React.FC<ReviewLeaveModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-fadeIn">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-100 my-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-100 my-auto">
         {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-5 sm:p-6 text-white flex items-center justify-between">
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-4 sm:p-6 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-400">
+            <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-400 shrink-0">
               <ShieldCheck size={20} />
             </div>
             <div>
@@ -83,7 +83,7 @@ export const ReviewLeaveModal: React.FC<ReviewLeaveModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
           {error && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start gap-2.5">
               <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
@@ -94,7 +94,7 @@ export const ReviewLeaveModal: React.FC<ReviewLeaveModalProps> = ({
           {/* Applicant Summary Card */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-sm border border-blue-200">
+              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-sm border border-blue-200 shrink-0">
                 {leave.user_name ? leave.user_name.charAt(0).toUpperCase() : <User size={18} />}
               </div>
               <div className="min-w-0 flex-1">
@@ -103,7 +103,7 @@ export const ReviewLeaveModal: React.FC<ReviewLeaveModalProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200 text-xs">
               <div>
                 <span className="text-slate-500 font-medium block">Leave Type:</span>
                 <span className="font-bold text-slate-800 uppercase tracking-wider">{leave.leave_type} Leave</span>
@@ -112,11 +112,11 @@ export const ReviewLeaveModal: React.FC<ReviewLeaveModalProps> = ({
                 <span className="text-slate-500 font-medium block">Duration:</span>
                 <span className="font-bold text-blue-700">{leave.total_days} {leave.total_days === 1 ? 'Day' : 'Days'}</span>
               </div>
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <span className="text-slate-500 font-medium block">Dates:</span>
-                <span className="font-semibold text-slate-800 flex items-center gap-1.5 mt-0.5">
-                  <Calendar size={13} className="text-slate-400" />
-                  {formattedDates}
+                <span className="font-semibold text-slate-800 flex flex-wrap items-center gap-1.5 mt-0.5">
+                  <Calendar size={13} className="text-slate-400 shrink-0" />
+                  <span>{formattedDates}</span>
                   {leave.day_fraction !== 'full' && (
                     <span className="text-[11px] text-amber-700 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
                       {leave.day_fraction === 'first_half' ? 'First Half' : 'Second Half'}
@@ -140,7 +140,7 @@ export const ReviewLeaveModal: React.FC<ReviewLeaveModalProps> = ({
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
               HR / Admin Decision
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setAction('approve')}

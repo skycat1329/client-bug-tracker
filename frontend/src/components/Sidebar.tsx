@@ -145,13 +145,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       {/* 1. Desktop Persistent Sidebar */}
-      <aside className="hidden md:flex w-64 bg-white border-r border-slate-200 flex-col flex-shrink-0 h-[calc(100vh-3.5rem)] p-4">
+      <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col flex-shrink-0 h-[calc(100vh-3.5rem)] p-4">
         {navContent}
       </aside>
 
-      {/* 2. Mobile Responsive Slide-Over Drawer with Backdrop */}
+      {/* 2. Mobile & Tablet Responsive Slide-Over Drawer with Backdrop */}
       {isMobileOpen && (
-        <div className="fixed inset-0 z-50 md:hidden animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 lg:hidden animate-in fade-in duration-200">
           {/* Backdrop Overlay */}
           <div
             className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"

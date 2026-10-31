@@ -731,11 +731,11 @@ export const AttendancePage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div className="max-w-[1600px] mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
       {/* ==========================================================================
           HEADER SECTION: BRAND LOGO + CURRENT TIME + USER PROFILE
       ========================================================================== */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden border border-slate-700/50">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 rounded-2xl p-5 sm:p-8 text-white shadow-xl relative overflow-hidden border border-slate-700/50">
         <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
           <div>
@@ -753,12 +753,12 @@ export const AttendancePage: React.FC = () => {
           </div>
 
           {/* Real-Time Digital Clock */}
-          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 sm:p-5 border border-white/15 flex items-center gap-4 self-start lg:self-auto shadow-inner">
-            <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400 border border-blue-400/30">
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 sm:p-5 border border-white/15 flex items-center gap-4 w-full sm:w-auto shadow-inner">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400 border border-blue-400/30 shrink-0">
               <Clock size={24} className="animate-pulse" />
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Standard Indian Time (IST)</div>
+              <div className="text-[11px] uppercase tracking-wider text-slate-300 font-bold">Standard Indian Time (IST)</div>
               <div className="text-2xl sm:text-3xl font-mono font-black tracking-wider text-white">
                 {currentTime.toLocaleTimeString()}
               </div>
@@ -961,12 +961,12 @@ export const AttendancePage: React.FC = () => {
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                   Select Work Mode
                 </label>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <button
                     type="button"
                     disabled={Boolean(todayRecord)}
                     onClick={() => setWorkMode('office')}
-                    className={`p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                    className={`p-3.5 sm:p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                       workMode === 'office'
                         ? 'border-blue-600 bg-blue-50/40 text-blue-900 shadow-sm'
                         : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
@@ -976,9 +976,9 @@ export const AttendancePage: React.FC = () => {
                       <Building2 size={20} className={workMode === 'office' ? 'text-blue-600' : 'text-slate-400'} />
                       {workMode === 'office' && <Check size={16} className="text-blue-600" />}
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-2.5 sm:mt-3">
                       <div className="text-xs font-bold">In-Office</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">GPS Geofence Enforced</div>
+                      <div className="text-[10.5px] text-slate-500 mt-0.5">GPS Geofence Enforced</div>
                     </div>
                   </button>
 
@@ -986,7 +986,7 @@ export const AttendancePage: React.FC = () => {
                     type="button"
                     disabled={Boolean(todayRecord)}
                     onClick={() => setWorkMode('wfh')}
-                    className={`p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                    className={`p-3.5 sm:p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                       workMode === 'wfh'
                         ? 'border-blue-600 bg-blue-50/40 text-blue-900 shadow-sm'
                         : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
@@ -996,9 +996,9 @@ export const AttendancePage: React.FC = () => {
                       <Home size={20} className={workMode === 'wfh' ? 'text-blue-600' : 'text-slate-400'} />
                       {workMode === 'wfh' && <Check size={16} className="text-blue-600" />}
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-2.5 sm:mt-3">
                       <div className="text-xs font-bold">Work From Home</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Remote Authorization</div>
+                      <div className="text-[10.5px] text-slate-500 mt-0.5">Remote Authorization</div>
                     </div>
                   </button>
 
@@ -1006,7 +1006,7 @@ export const AttendancePage: React.FC = () => {
                     type="button"
                     disabled={Boolean(todayRecord)}
                     onClick={() => setWorkMode('on_duty')}
-                    className={`p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                    className={`p-3.5 sm:p-4 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                       workMode === 'on_duty'
                         ? 'border-blue-600 bg-blue-50/40 text-blue-900 shadow-sm'
                         : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-white'
@@ -1016,9 +1016,9 @@ export const AttendancePage: React.FC = () => {
                       <Car size={20} className={workMode === 'on_duty' ? 'text-blue-600' : 'text-slate-400'} />
                       {workMode === 'on_duty' && <Check size={16} className="text-blue-600" />}
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-2.5 sm:mt-3">
                       <div className="text-xs font-bold">On-Duty / Field</div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Client Location Visit</div>
+                      <div className="text-[10.5px] text-slate-500 mt-0.5">Client Location Visit</div>
                     </div>
                   </button>
                 </div>
@@ -1281,7 +1281,7 @@ export const AttendancePage: React.FC = () => {
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {/* View Mode Toggle: Grid vs Table */}
               <div className="inline-flex rounded-xl border border-slate-200 p-0.5 bg-slate-50">
                 <button
@@ -1329,9 +1329,9 @@ export const AttendancePage: React.FC = () => {
 
           {/* Darwinbox Stats Metric Cards */}
           {monthStats && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Punched</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Punched</div>
                 <div className="text-2xl font-black text-slate-900 mt-1">{monthStats.total_punched_days}</div>
                 <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Recorded Days</div>
               </div>
@@ -1378,8 +1378,8 @@ export const AttendancePage: React.FC = () => {
 
           {/* VISUAL 7-COLUMN CALENDAR GRID */}
           {calendarViewMode === 'grid' && (
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6">
-              <div className="flex items-center justify-between mb-4">
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 sm:p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                 <div>
                   <h3 className="text-base font-bold text-slate-900">
                     {new Date(calYear, calMonth, 1).toLocaleString('default', { month: 'long', year: 'numeric' })}
@@ -1388,21 +1388,27 @@ export const AttendancePage: React.FC = () => {
                     Color Codes: <span className="text-emerald-700 font-bold">Green = Present</span>, <span className="text-red-600 font-bold">Red = Late / Early Exit</span>, <span className="text-amber-600 font-bold">Orange = Half Day</span>, <span className="text-purple-600 font-bold">Purple = Holiday</span>
                   </p>
                 </div>
+                <div className="sm:hidden text-[11px] font-semibold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100 flex items-center gap-1 self-start">
+                  <span>← Swipe horizontally to view full week →</span>
+                </div>
               </div>
 
-              {/* Day Headers (Sun to Sat) */}
-              <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2 text-center text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
-                <div className="py-2 text-rose-500">Sun</div>
-                <div className="py-2">Mon</div>
-                <div className="py-2">Tue</div>
-                <div className="py-2">Wed</div>
-                <div className="py-2">Thu</div>
-                <div className="py-2">Fri</div>
-                <div className="py-2 text-rose-500">Sat</div>
-              </div>
+              {/* Scrollable Container for small screens */}
+              <div className="overflow-x-auto pb-3 -mx-4 px-4 sm:mx-0 sm:px-0">
+                <div className="min-w-[700px]">
+                  {/* Day Headers (Sun to Sat) */}
+                  <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2 text-center text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                    <div className="py-2 text-rose-500">Sun</div>
+                    <div className="py-2">Mon</div>
+                    <div className="py-2">Tue</div>
+                    <div className="py-2">Wed</div>
+                    <div className="py-2">Thu</div>
+                    <div className="py-2">Fri</div>
+                    <div className="py-2 text-rose-500">Sat</div>
+                  </div>
 
-              {/* Day Boxes Grid */}
-              <div className="grid grid-cols-7 gap-1 sm:gap-2">
+                  {/* Day Boxes Grid */}
+                  <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
                 {/* Empty padding days for previous month */}
                 {Array.from({ length: firstDayOfWeek }).map((_, idx) => (
                   <div key={`pad-${idx}`} className="min-h-[90px] sm:min-h-[115px] p-2 rounded-xl bg-slate-50/50 border border-transparent opacity-30" />
@@ -1535,9 +1541,11 @@ export const AttendancePage: React.FC = () => {
                     </div>
                   );
                 })}
+                </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
           {/* LIST / TABLE VIEW */}
           {calendarViewMode === 'table' && (
@@ -1676,15 +1684,15 @@ export const AttendancePage: React.FC = () => {
       {activeTab === 'admin-roster' && canManageAttendance && (
         <div className="space-y-6">
           {/* Top Filter Bar */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/90 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <input
                 type="date"
                 value={adminDate}
                 onChange={(e) => setAdminDate(e.target.value)}
-                className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-none w-full sm:w-auto"
               />
-              <div className="relative">
+              <div className="relative flex-1">
                 <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
@@ -1694,12 +1702,12 @@ export const AttendancePage: React.FC = () => {
                     setAdminSearch(e.target.value);
                     loadAdminRoster(adminDate, e.target.value);
                   }}
-                  className="pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none w-56 sm:w-64"
+                  className="pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none w-full sm:w-64"
                 />
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => {
                   setAssignForm({
@@ -1731,9 +1739,9 @@ export const AttendancePage: React.FC = () => {
 
           {/* Metric Summary Cards */}
           {adminSummary && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Staff</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Staff</div>
                 <div className="text-2xl font-black text-slate-900 mt-1">{adminSummary.total_staff}</div>
                 <div className="text-[10px] text-slate-500 font-semibold mt-0.5">Assigned Agency Users</div>
               </div>
@@ -2326,9 +2334,9 @@ export const AttendancePage: React.FC = () => {
           MODAL: MANUAL PUNCH ASSIGNMENT (Admin & Attendance Managers)
       ========================================================================== */}
       {showAssignModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] flex flex-col p-5 sm:p-6 shadow-2xl border border-slate-200 my-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 shrink-0">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Clock className="text-blue-600" size={18} />
                 <span>Assign / Adjust Punch Times</span>
@@ -2353,7 +2361,7 @@ export const AttendancePage: React.FC = () => {
               </div>
             )}
 
-            <form onSubmit={handleAssignPunchSubmit} className="space-y-3 text-xs">
+            <form onSubmit={handleAssignPunchSubmit} className="space-y-3 text-xs overflow-y-auto flex-1 pr-1">
               <div>
                 <label className="block font-bold text-slate-700 uppercase mb-1">Target Employee *</label>
                 {staffList.length > 0 ? (
@@ -2442,18 +2450,18 @@ export const AttendancePage: React.FC = () => {
                 />
               </div>
 
-              <div className="pt-3 flex justify-end gap-2">
+              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2 shrink-0 mt-2">
                 <button
                   type="button"
                   onClick={() => setShowAssignModal(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50"
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={assigningPunch}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md shadow-blue-500/20"
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md shadow-blue-500/20 transition-all"
                 >
                   {assigningPunch ? 'Assigning...' : 'Save & Sync'}
                 </button>
@@ -2467,9 +2475,9 @@ export const AttendancePage: React.FC = () => {
           MODAL: ATTENDANCE REGULARIZATION (Employee Self-Service)
       ========================================================================== */}
       {showRegModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] flex flex-col p-5 sm:p-6 shadow-2xl border border-slate-200 my-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 shrink-0">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Clock className="text-blue-600" size={18} />
                 <span>Attendance Regularization Request</span>
@@ -2491,7 +2499,7 @@ export const AttendancePage: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <form onSubmit={handleSubmitRegularization} className="space-y-4 text-xs">
+              <form onSubmit={handleSubmitRegularization} className="space-y-4 text-xs overflow-y-auto flex-1 pr-1">
                 <div>
                   <label className="block font-bold text-slate-700 uppercase mb-1">Date to Regularize *</label>
                   <input
@@ -2554,18 +2562,18 @@ export const AttendancePage: React.FC = () => {
                   />
                 </div>
 
-                <div className="pt-2 flex justify-end gap-2">
+                <div className="pt-3 border-t border-slate-100 flex justify-end gap-2 shrink-0 mt-3">
                   <button
                     type="button"
                     onClick={() => setShowRegModal(false)}
-                    className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50"
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={submittingReg}
-                    className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md shadow-blue-500/20"
+                    className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md shadow-blue-500/20 transition-all"
                   >
                     {submittingReg ? 'Submitting...' : 'Send for Approval'}
                   </button>
@@ -2580,9 +2588,9 @@ export const AttendancePage: React.FC = () => {
           MODAL: DAY AUDIT & DETAILS DRAWER
       ========================================================================== */}
       {(selectedDayRecord || selectedDayHoliday || selectedDayDate) && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] flex flex-col p-5 sm:p-6 shadow-2xl border border-slate-200 my-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 shrink-0">
               <div>
                 <h3 className="text-base font-bold text-slate-900">
                   Attendance Details for {selectedDayDate || selectedDayRecord?.attendance_date}
@@ -2601,17 +2609,18 @@ export const AttendancePage: React.FC = () => {
               </button>
             </div>
 
-            {selectedDayHoliday && (
-              <div className="mb-4 p-4 rounded-xl bg-purple-50 border border-purple-200 text-purple-900">
-                <div className="font-extrabold text-sm flex items-center gap-1.5">
-                  <Sparkles size={16} className="text-purple-600" />
-                  <span>Company Holiday: {selectedDayHoliday.name}</span>
+            <div className="overflow-y-auto flex-1 pr-1 space-y-4">
+              {selectedDayHoliday && (
+                <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 text-purple-900">
+                  <div className="font-extrabold text-sm flex items-center gap-1.5">
+                    <Sparkles size={16} className="text-purple-600" />
+                    <span>Company Holiday: {selectedDayHoliday.name}</span>
+                  </div>
+                  {selectedDayHoliday.description && (
+                    <div className="text-xs text-purple-700 mt-1">{selectedDayHoliday.description}</div>
+                  )}
                 </div>
-                {selectedDayHoliday.description && (
-                  <div className="text-xs text-purple-700 mt-1">{selectedDayHoliday.description}</div>
-                )}
-              </div>
-            )}
+              )}
 
             {selectedDayRecord ? (
               <div className="space-y-4 text-xs">
@@ -2684,8 +2693,9 @@ export const AttendancePage: React.FC = () => {
                 No attendance recorded for this date.
               </div>
             ) : null}
+          </div>
 
-            <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
+            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
               {canManageAttendance && (
                 <button
                   onClick={() => {

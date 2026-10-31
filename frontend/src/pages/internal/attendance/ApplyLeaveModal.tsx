@@ -154,11 +154,11 @@ export const ApplyLeaveModal: React.FC<ApplyLeaveModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-fadeIn">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-100 my-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-100 my-auto">
         {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 to-blue-950 p-5 sm:p-6 text-white flex items-center justify-between">
+        <div className="bg-gradient-to-r from-slate-900 to-blue-950 p-4 sm:p-6 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/20 border border-blue-400/30 flex items-center justify-center text-blue-400">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/20 border border-blue-400/30 flex items-center justify-center text-blue-400 shrink-0">
               <Calendar size={20} />
             </div>
             <div>
@@ -175,7 +175,7 @@ export const ApplyLeaveModal: React.FC<ApplyLeaveModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
           {error && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start gap-2.5 animate-fadeIn">
               <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
@@ -201,7 +201,7 @@ export const ApplyLeaveModal: React.FC<ApplyLeaveModalProps> = ({
                       isSelected ? item.activeColor : item.color
                     }`}
                   >
-                    <Icon size={15} className={isSelected ? 'text-white' : ''} />
+                    <Icon size={15} className={`shrink-0 ${isSelected ? 'text-white' : ''}`} />
                     <span className="truncate">{item.name}</span>
                   </button>
                 );
@@ -243,7 +243,7 @@ export const ApplyLeaveModal: React.FC<ApplyLeaveModalProps> = ({
           {startDate === endDate && (
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">Duration Type</label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {[
                   { id: 'full', label: 'Full Day (1.0)' },
                   { id: 'first_half', label: 'First Half (0.5)' },
@@ -253,7 +253,7 @@ export const ApplyLeaveModal: React.FC<ApplyLeaveModalProps> = ({
                     key={f.id}
                     type="button"
                     onClick={() => setDayFraction(f.id as any)}
-                    className={`py-2 px-1 text-center rounded-xl text-xs font-semibold border transition-all ${
+                    className={`py-2 px-2 text-center rounded-xl text-xs font-semibold border transition-all ${
                       dayFraction === f.id
                         ? 'border-blue-600 bg-blue-50 text-blue-700 font-bold'
                         : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
