@@ -352,6 +352,33 @@ CREATE TABLE IF NOT EXISTS `pay_slips` (
     FOREIGN KEY (`created_by`) REFERENCES `users`(`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 17. Brand Work Sheets (Collaborative Brand Task Sheets)
+CREATE TABLE IF NOT EXISTS `brand_sheet_items` (
+    `id` VARCHAR(64) PRIMARY KEY,
+    `organization_id` VARCHAR(64) NOT NULL,
+    `item_code` VARCHAR(32) NOT NULL,
+    `title` VARCHAR(255) NOT NULL,
+    `description` TEXT NULL,
+    `category` VARCHAR(64) DEFAULT 'Feature Request',
+    `priority` ENUM('P1', 'P2', 'P3', 'P4') DEFAULT 'P2',
+    `status` ENUM('PENDING', 'IN_PROGRESS', 'IN_REVIEW', 'COMPLETED', 'BLOCKED', 'CANCELLED') DEFAULT 'PENDING',
+    `target_url` VARCHAR(500) NULL,
+    `due_date` DATE NULL,
+    `estimated_hours` DECIMAL(5,2) NULL,
+    `created_by_user_id` VARCHAR(64) NOT NULL,
+    `created_by_name` VARCHAR(255) NOT NULL,
+    `assigned_to_user_id` VARCHAR(64) NULL,
+    `assigned_to_name` VARCHAR(255) NULL,
+    `team_remarks` TEXT NULL,
+    `completed_at` DATETIME NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_bsi_org` (`organization_id`),
+    INDEX `idx_bsi_status` (`status`),
+    INDEX `idx_bsi_assigned` (`assigned_to_user_id`),
+    FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ==============================================================================
@@ -360,7 +387,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 -- Initial Ticket, Task & Document Counters
 INSERT INTO `ticket_counters` (`prefix`, `current_val`) 
-VALUES ('WEB', 1000), ('TSK', 1000), ('OFF', 1000), ('PAY', 1000)
+VALUES ('WEB', 1000), ('TSK', 1000), ('OFF', 1000), ('PAY', 1000), ('WS', 1000)
 ON DUPLICATE KEY UPDATE `prefix` = `prefix`;
 
 -- Initial System Roles

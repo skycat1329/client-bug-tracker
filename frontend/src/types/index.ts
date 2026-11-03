@@ -289,3 +289,42 @@ export interface PaySlip {
   updated_at?: string;
 }
 
+export type BrandSheetStatus = 'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'COMPLETED' | 'BLOCKED' | 'CANCELLED';
+
+export type BrandSheetCategory =
+  | 'Feature Request'
+  | 'Bug Fix'
+  | 'UI / Design'
+  | 'Content Update'
+  | 'Speed / SEO'
+  | 'Maintenance'
+  | 'Integration'
+  | 'Other';
+
+export interface BrandSheetItem {
+  id: string;
+  organization_id: string;
+  organization_name?: string;
+  organization_slug?: string;
+  google_sheet_url?: string | null;
+  org_website_url?: string | null;
+  item_code: string;
+  title: string;
+  description?: string | null;
+  category: string;
+  priority: TicketPriority;
+  status: BrandSheetStatus;
+  target_url?: string | null;
+  due_date?: string | null;
+  estimated_hours?: number | null;
+  created_by_user_id: string;
+  created_by_name: string;
+  assigned_to_user_id?: string | null;
+  assigned_to_name?: string | null;
+  team_remarks?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+

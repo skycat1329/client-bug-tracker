@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Ticket, UserCheck, Menu, PlusCircle, Clock } from 'lucide-react';
+import { LayoutDashboard, Ticket, UserCheck, Menu, PlusCircle, Clock, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from './context/AuthContext.js';
 import { Navbar } from './components/Navbar.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -26,6 +26,7 @@ import { QueuesPage } from './pages/internal/QueuesPage.js';
 import { TasksPage } from './pages/internal/TasksPage.js';
 import { PayrollDocumentsPage } from './pages/internal/PayrollDocumentsPage.js';
 import { AttendancePage } from './pages/internal/AttendancePage.js';
+import { BrandWorkSheetsPage } from './pages/common/BrandWorkSheetsPage.js';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
@@ -57,13 +58,14 @@ export const App: React.FC = () => {
       ) {
         window.history.replaceState(null, '', '/');
       }
-      if (!['tickets', 'new-ticket', 'ticket-detail'].includes(currentView)) {
+      if (!['tickets', 'new-ticket', 'ticket-detail', 'brand-sheets'].includes(currentView)) {
         setCurrentView('tickets');
       }
     } else if (
       user &&
       ![
         'overview',
+        'brand-sheets',
         'attendance',
         'tickets',
         'my-tickets',
@@ -155,7 +157,9 @@ export const App: React.FC = () => {
           {/* Customer Portal Views */}
           {isClient && (
             <>
-              {currentView === 'new-ticket' ? (
+              {currentView === 'brand-sheets' ? (
+                <BrandWorkSheetsPage />
+              ) : currentView === 'new-ticket' ? (
                 <NewTicketPage
                   onTicketCreated={(id) => handleSelectTicket(id)}
                   onCancel={() => setCurrentView('tickets')}
@@ -183,6 +187,7 @@ export const App: React.FC = () => {
                   onNavigate={setCurrentView}
                 />
               )}
+              {currentView === 'brand-sheets' && <BrandWorkSheetsPage />}
               {currentView === 'tickets' && (
                 <InternalTicketListPage
                   initialFilter="all"
@@ -234,6 +239,19 @@ export const App: React.FC = () => {
           >
             <Ticket size={18} />
             <span className="text-[10px]">My Tickets</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setSelectedTicketId(null);
+              setCurrentView('brand-sheets');
+            }}
+            className={`flex flex-col items-center gap-0.5 text-xs font-semibold ${
+              currentView === 'brand-sheets' ? 'text-indigo-600 font-bold' : 'text-slate-500'
+            }`}
+          >
+            <FileSpreadsheet size={18} />
+            <span className="text-[10px]">Work Sheet</span>
           </button>
 
           <button

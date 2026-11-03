@@ -7234,6 +7234,70 @@ function ensure_attendance_schema() {
     } catch (Exception $e) {}
 }
 
+function ensure_brand_sheets_schema(): void {
+    static $ensured = false;
+    if ($ensured) return;
+
+    try {
+        db_execute("CREATE TABLE IF NOT EXISTS `brand_sheet_items` (
+            `id` VARCHAR(64) PRIMARY KEY,
+            `organization_id` VARCHAR(64) NOT NULL,
+            `item_code` VARCHAR(32) NOT NULL,
+            `title` VARCHAR(255) NOT NULL,
+            `description` TEXT NULL,
+            `category` VARCHAR(64) DEFAULT 'Feature Request',
+            `priority` ENUM('P1', 'P2', 'P3', 'P4') DEFAULT 'P2',
+            `status` ENUM('PENDING', 'IN_PROGRESS', 'IN_REVIEW', 'COMPLETED', 'BLOCKED', 'CANCELLED') DEFAULT 'PENDING',
+            `target_url` VARCHAR(500) NULL,
+            `due_date` DATE NULL,
+            `estimated_hours` DECIMAL(5,2) NULL,
+            `created_by_user_id` VARCHAR(64) NOT NULL,
+            `created_by_name` VARCHAR(255) NOT NULL,
+            `assigned_to_user_id` VARCHAR(64) NULL,
+            `assigned_to_name` VARCHAR(255) NULL,
+            `team_remarks` TEXT NULL,
+            `completed_at` DATETIME NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_bsi_org` (`organization_id`),
+            INDEX `idx_bsi_status` (`status`),
+            INDEX `idx_bsi_assigned` (`assigned_to_user_id`),
+            FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        db_execute("INSERT IGNORE INTO `ticket_counters` (`prefix`, `current_val`) VALUES ('WS', 1000)");
+        $ensured = true;
+    } catch (Exception $e) {
+        // Fallback for foreign key variations
+        try {
+            db_execute("CREATE TABLE IF NOT EXISTS `brand_sheet_items` (
+                `id` VARCHAR(64) PRIMARY KEY,
+                `organization_id` VARCHAR(64) NOT NULL,
+                `item_code` VARCHAR(32) NOT NULL,
+                `title` VARCHAR(255) NOT NULL,
+                `description` TEXT NULL,
+                `category` VARCHAR(64) DEFAULT 'Feature Request',
+                `priority` ENUM('P1', 'P2', 'P3', 'P4') DEFAULT 'P2',
+                `status` ENUM('PENDING', 'IN_PROGRESS', 'IN_REVIEW', 'COMPLETED', 'BLOCKED', 'CANCELLED') DEFAULT 'PENDING',
+                `target_url` VARCHAR(500) NULL,
+                `due_date` DATE NULL,
+                `estimated_hours` DECIMAL(5,2) NULL,
+                `created_by_user_id` VARCHAR(64) NOT NULL,
+                `created_by_name` VARCHAR(255) NOT NULL,
+                `assigned_to_user_id` VARCHAR(64) NULL,
+                `assigned_to_name` VARCHAR(255) NULL,
+                `team_remarks` TEXT NULL,
+                `completed_at` DATETIME NULL,
+                `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX `idx_bsi_org` (`organization_id`),
+                INDEX `idx_bsi_status` (`status`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            $ensured = true;
+        } catch (Exception $e2) {}
+    }
+}
+
 function sync_attendance_to_google_sheet(array $attendance, string $event, string $actorName = 'System'): bool {
     $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['google_sheets_config']);
     $config = $setting ? json_decode($setting['value'], true) : [];
@@ -8672,6 +8736,393 @@ if ($method === 'DELETE' && preg_match('#^/api/admin/attendance/holidays/(\d+)$#
     $id = (int)$matches[1];
     db_execute("DELETE FROM company_holidays WHERE id = ?", [$id]);
     json_response(['success' => true, 'message' => 'Holiday deleted successfully']);
+}
+
+// ==============================================================================
+// Brand Work Sheets (Collaborative Task & Scope Backlog per Brand)
+// ==============================================================================
+
+// GET /api/brand-sheets/brands - Get active brands with work counts for switcher
+if ($method === 'GET' && $path === '/api/brand-sheets/brands') {
+    $user = require_auth();
+    ensure_brand_sheets_schema();
+
+    if ($user['role'] === 'client') {
+        if (empty($user['organization_id'])) {
+            json_response(['success' => true, 'brands' => []]);
+        }
+        $brands = db_query(
+            "SELECT o.id, o.name, o.slug, o.website_url, o.google_sheet_url,
+                    COUNT(b.id) AS item_count,
+                    SUM(CASE WHEN b.status NOT IN ('COMPLETED', 'CANCELLED') THEN 1 ELSE 0 END) AS active_count
+             FROM organizations o
+             LEFT JOIN brand_sheet_items b ON b.organization_id = o.id
+             WHERE o.id = ?
+             GROUP BY o.id",
+            [$user['organization_id']]
+        );
+    } else {
+        $brands = db_query(
+            "SELECT o.id, o.name, o.slug, o.website_url, o.google_sheet_url,
+                    COUNT(b.id) AS item_count,
+                    SUM(CASE WHEN b.status NOT IN ('COMPLETED', 'CANCELLED') THEN 1 ELSE 0 END) AS active_count
+             FROM organizations o
+             LEFT JOIN brand_sheet_items b ON b.organization_id = o.id
+             WHERE o.status = 'active'
+             GROUP BY o.id
+             ORDER BY o.name ASC"
+        );
+    }
+
+    json_response(['success' => true, 'brands' => $brands]);
+}
+
+// GET /api/brand-sheets - List work items
+if ($method === 'GET' && $path === '/api/brand-sheets') {
+    $user = require_auth();
+    ensure_brand_sheets_schema();
+
+    $whereClauses = [];
+    $params = [];
+
+    // Client is strictly restricted to their own organization
+    if ($user['role'] === 'client') {
+        if (empty($user['organization_id'])) {
+            json_error('Your account is not linked to an organization/brand', 403);
+        }
+        $whereClauses[] = "b.organization_id = ?";
+        $params[] = $user['organization_id'];
+    } else {
+        // Staff can optionally filter by brand
+        $targetOrg = $_GET['organization_id'] ?? null;
+        if (!empty($targetOrg) && $targetOrg !== 'ALL') {
+            $whereClauses[] = "b.organization_id = ?";
+            $params[] = $targetOrg;
+        }
+    }
+
+    // Optional status filter
+    $statusFilter = $_GET['status'] ?? null;
+    if (!empty($statusFilter) && $statusFilter !== 'ALL') {
+        if ($statusFilter === 'ACTIVE') {
+            $whereClauses[] = "b.status NOT IN ('COMPLETED', 'CANCELLED')";
+        } else {
+            $whereClauses[] = "b.status = ?";
+            $params[] = $statusFilter;
+        }
+    }
+
+    // Optional priority filter
+    $priorityFilter = $_GET['priority'] ?? null;
+    if (!empty($priorityFilter) && $priorityFilter !== 'ALL') {
+        $whereClauses[] = "b.priority = ?";
+        $params[] = $priorityFilter;
+    }
+
+    // Optional category filter
+    $categoryFilter = $_GET['category'] ?? null;
+    if (!empty($categoryFilter) && $categoryFilter !== 'ALL') {
+        $whereClauses[] = "b.category = ?";
+        $params[] = $categoryFilter;
+    }
+
+    // Search query
+    $search = trim($_GET['search'] ?? '');
+    if (!empty($search)) {
+        $whereClauses[] = "(b.title LIKE ? OR b.description LIKE ? OR b.item_code LIKE ? OR b.team_remarks LIKE ?)";
+        $searchPattern = "%{$search}%";
+        $params[] = $searchPattern;
+        $params[] = $searchPattern;
+        $params[] = $searchPattern;
+        $params[] = $searchPattern;
+    }
+
+    $whereSql = !empty($whereClauses) ? "WHERE " . implode(" AND ", $whereClauses) : "";
+
+    $sql = "SELECT b.*, o.name AS organization_name, o.slug AS organization_slug, o.google_sheet_url, o.website_url AS org_website_url
+            FROM brand_sheet_items b
+            JOIN organizations o ON b.organization_id = o.id
+            {$whereSql}
+            ORDER BY 
+                CASE b.status 
+                    WHEN 'IN_PROGRESS' THEN 1 
+                    WHEN 'IN_REVIEW' THEN 2 
+                    WHEN 'PENDING' THEN 3 
+                    WHEN 'BLOCKED' THEN 4 
+                    WHEN 'COMPLETED' THEN 5 
+                    ELSE 6 
+                END, 
+                b.created_at DESC";
+
+    $items = db_query($sql, $params);
+
+    // Compute KPI Summary (scoped to the brand if specified)
+    $summaryWhere = [];
+    $summaryParams = [];
+    if ($user['role'] === 'client') {
+        $summaryWhere[] = "organization_id = ?";
+        $summaryParams[] = $user['organization_id'];
+    } elseif (!empty($_GET['organization_id']) && $_GET['organization_id'] !== 'ALL') {
+        $summaryWhere[] = "organization_id = ?";
+        $summaryParams[] = $_GET['organization_id'];
+    }
+    $summaryWhereSql = !empty($summaryWhere) ? "WHERE " . implode(" AND ", $summaryWhere) : "";
+
+    $summaryRows = db_query("SELECT status, COUNT(*) as cnt FROM brand_sheet_items {$summaryWhereSql} GROUP BY status", $summaryParams);
+    $summary = [
+        'total' => 0,
+        'pending' => 0,
+        'in_progress' => 0,
+        'in_review' => 0,
+        'completed' => 0,
+        'blocked' => 0,
+    ];
+    foreach ($summaryRows as $sr) {
+        $c = (int)$sr['cnt'];
+        $summary['total'] += $c;
+        $st = strtolower($sr['status']);
+        if (isset($summary[$st])) {
+            $summary[$st] = $c;
+        }
+    }
+
+    // Get current org details if filtering by a single brand
+    $currentOrg = null;
+    $singleOrgId = ($user['role'] === 'client') ? $user['organization_id'] : ($_GET['organization_id'] ?? null);
+    if (!empty($singleOrgId) && $singleOrgId !== 'ALL') {
+        $currentOrg = db_query_one("SELECT id, name, slug, website_url, google_sheet_url FROM organizations WHERE id = ?", [$singleOrgId]);
+    }
+
+    json_response([
+        'success' => true,
+        'count' => count($items),
+        'items' => $items,
+        'summary' => $summary,
+        'current_organization' => $currentOrg
+    ]);
+}
+
+// POST /api/brand-sheets - Create new work item
+if ($method === 'POST' && $path === '/api/brand-sheets') {
+    $user = require_auth();
+    ensure_brand_sheets_schema();
+    $input = get_json_input();
+
+    // Determine Organization
+    if ($user['role'] === 'client') {
+        $orgId = $user['organization_id'];
+        if (empty($orgId)) {
+            json_error('User does not belong to any organization', 403);
+        }
+    } else {
+        $orgId = trim($input['organization_id'] ?? '');
+        if (empty($orgId)) {
+            json_error('Organization is required', 400);
+        }
+    }
+
+    $org = db_query_one("SELECT id, name, slug FROM organizations WHERE id = ?", [$orgId]);
+    if (!$org) {
+        json_error('Organization not found', 404);
+    }
+
+    $title = trim($input['title'] ?? '');
+    if (empty($title)) {
+        json_error('Work title is required', 400);
+    }
+
+    $description = trim($input['description'] ?? '');
+    $category = trim($input['category'] ?? 'Feature Request');
+    $priority = in_array($input['priority'] ?? '', ['P1', 'P2', 'P3', 'P4'], true) ? $input['priority'] : 'P2';
+    $targetUrl = trim($input['target_url'] ?? '');
+    $dueDate = !empty($input['due_date']) ? trim($input['due_date']) : null;
+    $estimatedHours = isset($input['estimated_hours']) && $input['estimated_hours'] !== '' ? (float)$input['estimated_hours'] : null;
+
+    // Optional assignment for staff
+    $assignedToId = null;
+    $assignedToName = null;
+    if ($user['role'] !== 'client' && !empty($input['assigned_to_user_id'])) {
+        $targetDev = db_query_one("SELECT id, name FROM users WHERE id = ?", [trim($input['assigned_to_user_id'])]);
+        if ($targetDev) {
+            $assignedToId = $targetDev['id'];
+            $assignedToName = $targetDev['name'];
+        }
+    }
+
+    $teamRemarks = ($user['role'] !== 'client') ? trim($input['team_remarks'] ?? '') : null;
+    $status = ($user['role'] !== 'client' && !empty($input['status'])) ? trim($input['status']) : 'PENDING';
+
+    // Sequential code generation
+    db_execute("UPDATE ticket_counters SET current_val = current_val + 1 WHERE prefix = 'WS'");
+    $cnt = db_query_one("SELECT current_val FROM ticket_counters WHERE prefix = 'WS'");
+    $num = $cnt ? $cnt['current_val'] : rand(1001, 9999);
+    $slugClean = strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $org['slug'] ?: $org['name']), 0, 4));
+    $itemCode = "WS-{$slugClean}-{$num}";
+    $id = 'bsi-' . time() . '-' . bin2hex(random_bytes(3));
+
+    db_execute(
+        "INSERT INTO brand_sheet_items 
+         (id, organization_id, item_code, title, description, category, priority, status, target_url, due_date, estimated_hours, created_by_user_id, created_by_name, assigned_to_user_id, assigned_to_name, team_remarks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            $id,
+            $orgId,
+            $itemCode,
+            $title,
+            $description ?: null,
+            $category,
+            $priority,
+            $status,
+            $targetUrl ?: null,
+            $dueDate,
+            $estimatedHours,
+            $user['id'],
+            $user['name'],
+            $assignedToId,
+            $assignedToName,
+            $teamRemarks
+        ]
+    );
+
+    $created = db_query_one("SELECT b.*, o.name AS organization_name FROM brand_sheet_items b JOIN organizations o ON b.organization_id = o.id WHERE b.id = ?", [$id]);
+
+    json_response([
+        'success' => true,
+        'message' => "Work item {$itemCode} added to {$org['name']} sheet successfully",
+        'data' => $created
+    ], 201);
+}
+
+// PUT /api/brand-sheets/{id} - Edit work item
+if ($method === 'PUT' && preg_match('#^/api/brand-sheets/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    ensure_brand_sheets_schema();
+    $itemId = $m[1];
+    $input = get_json_input();
+
+    $item = db_query_one("SELECT * FROM brand_sheet_items WHERE id = ?", [$itemId]);
+    if (!$item) {
+        json_error('Work item not found', 404);
+    }
+
+    if ($user['role'] === 'client') {
+        if ($item['organization_id'] !== $user['organization_id']) {
+            json_error('Forbidden: You can only edit your own brand sheet items', 403);
+        }
+        // Client can edit title, description, category, priority, target_url, due_date
+        $title = trim($input['title'] ?? $item['title']);
+        $description = isset($input['description']) ? trim($input['description']) : $item['description'];
+        $category = trim($input['category'] ?? $item['category']);
+        $priority = in_array($input['priority'] ?? '', ['P1', 'P2', 'P3', 'P4'], true) ? $input['priority'] : $item['priority'];
+        $targetUrl = isset($input['target_url']) ? trim($input['target_url']) : $item['target_url'];
+        $dueDate = isset($input['due_date']) && !empty($input['due_date']) ? trim($input['due_date']) : $item['due_date'];
+
+        db_execute(
+            "UPDATE brand_sheet_items 
+             SET title = ?, description = ?, category = ?, priority = ?, target_url = ?, due_date = ?, updated_at = NOW() 
+             WHERE id = ?",
+            [$title, $description ?: null, $category, $priority, $targetUrl ?: null, $dueDate, $itemId]
+        );
+    } else {
+        // Staff can edit everything
+        $title = trim($input['title'] ?? $item['title']);
+        $description = isset($input['description']) ? trim($input['description']) : $item['description'];
+        $category = trim($input['category'] ?? $item['category']);
+        $priority = in_array($input['priority'] ?? '', ['P1', 'P2', 'P3', 'P4'], true) ? $input['priority'] : $item['priority'];
+        $status = in_array($input['status'] ?? '', ['PENDING', 'IN_PROGRESS', 'IN_REVIEW', 'COMPLETED', 'BLOCKED', 'CANCELLED'], true) ? $input['status'] : $item['status'];
+        $targetUrl = isset($input['target_url']) ? trim($input['target_url']) : $item['target_url'];
+        $dueDate = isset($input['due_date']) && !empty($input['due_date']) ? trim($input['due_date']) : $item['due_date'];
+        $estimatedHours = isset($input['estimated_hours']) && $input['estimated_hours'] !== '' ? (float)$input['estimated_hours'] : $item['estimated_hours'];
+        $teamRemarks = isset($input['team_remarks']) ? trim($input['team_remarks']) : $item['team_remarks'];
+
+        $assignedToId = $item['assigned_to_user_id'];
+        $assignedToName = $item['assigned_to_name'];
+        if (array_key_exists('assigned_to_user_id', $input)) {
+            $tId = trim($input['assigned_to_user_id'] ?? '');
+            if (empty($tId)) {
+                $assignedToId = null;
+                $assignedToName = null;
+            } else {
+                $targetDev = db_query_one("SELECT id, name FROM users WHERE id = ?", [$tId]);
+                if ($targetDev) {
+                    $assignedToId = $targetDev['id'];
+                    $assignedToName = $targetDev['name'];
+                }
+            }
+        }
+
+        $completedAt = ($status === 'COMPLETED' && $item['status'] !== 'COMPLETED') ? date('Y-m-d H:i:s') : (($status !== 'COMPLETED') ? null : $item['completed_at']);
+
+        db_execute(
+            "UPDATE brand_sheet_items 
+             SET title = ?, description = ?, category = ?, priority = ?, status = ?, target_url = ?, due_date = ?, 
+                 estimated_hours = ?, assigned_to_user_id = ?, assigned_to_name = ?, team_remarks = ?, completed_at = ?, updated_at = NOW() 
+             WHERE id = ?",
+            [$title, $description ?: null, $category, $priority, $status, $targetUrl ?: null, $dueDate, $estimatedHours, $assignedToId, $assignedToName, $teamRemarks, $completedAt, $itemId]
+        );
+    }
+
+    $updated = db_query_one("SELECT b.*, o.name AS organization_name FROM brand_sheet_items b JOIN organizations o ON b.organization_id = o.id WHERE b.id = ?", [$itemId]);
+
+    json_response([
+        'success' => true,
+        'message' => "Work item {$updated['item_code']} updated successfully",
+        'data' => $updated
+    ]);
+}
+
+// POST /api/brand-sheets/{id}/status - Quick status change
+if ($method === 'POST' && preg_match('#^/api/brand-sheets/([^/]+)/status$#', $path, $m)) {
+    $user = require_auth();
+    ensure_brand_sheets_schema();
+    $itemId = $m[1];
+    $input = get_json_input();
+
+    $item = db_query_one("SELECT * FROM brand_sheet_items WHERE id = ?", [$itemId]);
+    if (!$item) {
+        json_error('Work item not found', 404);
+    }
+
+    if ($user['role'] === 'client' && $item['organization_id'] !== $user['organization_id']) {
+        json_error('Forbidden', 403);
+    }
+
+    $newStatus = trim($input['status'] ?? '');
+    if (!in_array($newStatus, ['PENDING', 'IN_PROGRESS', 'IN_REVIEW', 'COMPLETED', 'BLOCKED', 'CANCELLED'], true)) {
+        json_error('Invalid status', 400);
+    }
+
+    $completedAt = ($newStatus === 'COMPLETED') ? date('Y-m-d H:i:s') : null;
+    db_execute("UPDATE brand_sheet_items SET status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?", [$newStatus, $completedAt, $itemId]);
+
+    $updated = db_query_one("SELECT b.*, o.name AS organization_name FROM brand_sheet_items b JOIN organizations o ON b.organization_id = o.id WHERE b.id = ?", [$itemId]);
+
+    json_response([
+        'success' => true,
+        'message' => "Status updated to {$newStatus}",
+        'data' => $updated
+    ]);
+}
+
+// DELETE /api/brand-sheets/{id} - Delete work item
+if ($method === 'DELETE' && preg_match('#^/api/brand-sheets/([^/]+)$#', $path, $m)) {
+    $user = require_auth();
+    ensure_brand_sheets_schema();
+    $itemId = $m[1];
+
+    $item = db_query_one("SELECT * FROM brand_sheet_items WHERE id = ?", [$itemId]);
+    if (!$item) {
+        json_error('Work item not found', 404);
+    }
+
+    if ($user['role'] === 'client') {
+        if ($item['organization_id'] !== $user['organization_id'] || $item['created_by_user_id'] !== $user['id']) {
+            json_error('Forbidden: You can only delete items you created', 403);
+        }
+    }
+
+    db_execute("DELETE FROM brand_sheet_items WHERE id = ?", [$itemId]);
+    json_response(['success' => true, 'message' => "Work item {$item['item_code']} deleted successfully"]);
 }
 
 // Default 404 for unknown API routes

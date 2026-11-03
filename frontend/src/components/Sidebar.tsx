@@ -49,12 +49,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const canManagePayroll = isManagerOrAdmin || !(!user.can_manage_payroll);
 
   const clientNav: NavItem[] = [
+    { id: 'brand-sheets', label: 'Brand Work Sheet', icon: FileSpreadsheet },
     { id: 'tickets', label: 'My Brand Tickets', icon: Ticket },
     { id: 'new-ticket', label: 'Report New Bug', icon: PlusCircle, isPrimary: true },
   ];
 
   const internalNav: NavItem[] = [
     { id: 'overview', label: 'Agency Overview', icon: LayoutDashboard },
+    { id: 'brand-sheets', label: 'Brand Work Sheets', icon: FileSpreadsheet },
     { id: 'attendance', label: 'Attendance & Leaves', icon: Clock },
     { id: 'tickets', label: 'All Tickets', icon: Ticket },
     ...(isDev || isManagerOrAdmin ? [{ id: 'my-tickets', label: 'My Assigned Tickets', icon: UserCheck }] : []),
