@@ -266,6 +266,59 @@ function cron_system_cleanup(): array {
 }
 
 // ------------------------------------------------------------------------------
+// Task 6: WhatsApp Gateway 24/7 Keep-Alive Ping (Prevents Render Free Sleep)
+// ------------------------------------------------------------------------------
+function cron_whatsapp_keepalive(): array {
+    $setting = db_query_one('SELECT value FROM integration_settings WHERE `key` = ?', ['whatsapp_config']);
+    $config = $setting ? json_decode($setting['value'], true) : [];
+
+    $fallbackUrl = defined('WHATSAPP_GATEWAY_URL') ? WHATSAPP_GATEWAY_URL : '';
+    $gatewayUrl = !empty($config['gateway_url']) ? trim($config['gateway_url']) : $fallbackUrl;
+    if (empty($gatewayUrl)) {
+        $gatewayUrl = 'https://assurance-whatsapp.onrender.com';
+    }
+
+    $pingUrl = rtrim($gatewayUrl, '/') . '/app/devices';
+
+    $ch = curl_init($pingUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 8);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+    $headers = [];
+    if (!empty($config['basic_auth_user'])) {
+        $headers[] = 'Authorization: Basic ' . base64_encode("{$config['basic_auth_user']}:" . ($config['basic_auth_password'] ?? ''));
+    } elseif (!empty($config['api_key'])) {
+        $headers[] = 'Authorization: Bearer ' . $config['api_key'];
+        $headers[] = 'X-API-KEY: ' . $config['api_key'];
+    }
+    if (!empty($headers)) {
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    }
+
+    $start = microtime(true);
+    $res = curl_exec($ch);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    $latencyMs = round((microtime(true) - $start) * 1000, 2);
+    curl_close($ch);
+
+    $isAwake = ($httpCode > 0 && empty($err));
+
+    return [
+        'name' => 'whatsapp_keepalive',
+        'status' => $isAwake ? 'success' : 'failed',
+        'target_url' => $pingUrl,
+        'http_code' => $httpCode,
+        'latency_ms' => $latencyMs,
+        'gateway_state' => $isAwake ? 'AWAKE_AND_ACTIVE' : 'UNREACHABLE',
+        'error' => $err ?: null
+    ];
+}
+
+// ------------------------------------------------------------------------------
 // Execute Requested Task(s)
 // ------------------------------------------------------------------------------
 try {
@@ -290,8 +343,14 @@ try {
             $results['actions'][] = run_safe_cron_action('system_cleanup', 'cron_system_cleanup');
             break;
 
+        case 'whatsapp_keepalive':
+        case 'whatsapp_ping':
+            $results['actions'][] = run_safe_cron_action('whatsapp_keepalive', 'cron_whatsapp_keepalive');
+            break;
+
         case 'all':
         default:
+            $results['actions'][] = run_safe_cron_action('whatsapp_keepalive', 'cron_whatsapp_keepalive');
             $results['actions'][] = run_safe_cron_action('attendance_auto_checkout', 'cron_auto_checkout');
             $results['actions'][] = run_safe_cron_action('attendance_sheets_sync', 'cron_sync_attendance_sheets');
             $results['actions'][] = run_safe_cron_action('overdue_tasks_check', 'cron_check_overdue_tasks');
