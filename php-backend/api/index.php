@@ -9125,5 +9125,11 @@ if ($method === 'DELETE' && preg_match('#^/api/brand-sheets/([^/]+)$#', $path, $
     json_response(['success' => true, 'message' => "Work item {$item['item_code']} deleted successfully"]);
 }
 
+// GET /api/cron or POST /api/cron - Run automated cron tasks
+if ($path === '/api/cron' || $path === '/api/cron.php') {
+    require __DIR__ . '/cron.php';
+    exit;
+}
+
 // Default 404 for unknown API routes
 json_error("Route not found: {$method} {$path}", 404);

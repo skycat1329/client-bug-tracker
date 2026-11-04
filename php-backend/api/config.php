@@ -14,6 +14,9 @@ define('DB_PORT', 3306);
 // JWT Secret Key
 define('JWT_SECRET', 'hostinger_production_secret_key_antigravity_998877');
 
+// Secret token for automated Cron Jobs execution (CLI or HTTP Webhook)
+define('CRON_SECRET', 'assurance_cron_secure_token_2026');
+
 // ==============================================================================
 // Email / SMTP Sender Configuration
 // ==============================================================================
