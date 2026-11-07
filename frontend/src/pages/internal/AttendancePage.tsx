@@ -220,7 +220,7 @@ export const AttendancePage: React.FC = () => {
     longitude: 72.89673053,
     radius_meters: 100,
     shift_start: '10:00:00',
-    shift_end: '19:00:00',
+    shift_end: '18:30:00',
     grace_period_minutes: 15,
   });
 
@@ -611,15 +611,17 @@ export const AttendancePage: React.FC = () => {
     }
   };
 
-  // Execute Punch Out
-  const handlePunchOut = async () => {
+  // Execute Punch Out (supports allow_update to re-record check out time)
+  const handlePunchOut = async (options?: { allow_update?: boolean } | any) => {
     setPunching(true);
     setPunchError(null);
     setPunchSuccess(null);
 
     try {
+      const isAllowUpdate = Boolean(options && typeof options === 'object' && options.allow_update === true);
       const payload: any = {
         notes: punchNotes,
+        allow_update: isAllowUpdate,
       };
 
       if (gpsLocation) {
@@ -734,6 +736,7 @@ export const AttendancePage: React.FC = () => {
       if (res.success) {
         setOffice(res.data);
         setOfficeSaveMsg('Office geofence and shift schedules saved successfully!');
+        loadInitialData();
         setTimeout(() => setOfficeSaveMsg(null), 3500);
       }
     } catch (err: any) {
@@ -755,6 +758,7 @@ export const AttendancePage: React.FC = () => {
         setTimeout(() => {
           setShowAssignModal(false);
           setAssignSuccess(false);
+          loadInitialData();
           if (activeTab === 'admin-roster') loadAdminRoster(adminDate, adminSearch);
           if (activeTab === 'calendar') loadMonthHistory(selectedMonth);
         }, 1200);
@@ -1194,7 +1198,7 @@ export const AttendancePage: React.FC = () => {
                   </button>
                 ) : !todayRecord.check_out_time ? (
                   <button
-                    onClick={handlePunchOut}
+                    onClick={() => handlePunchOut()}
                     disabled={punching}
                     className="w-full sm:w-auto px-8 py-3.5 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-500/25 active:scale-95 transition-all flex items-center justify-center gap-2"
                   >
@@ -1202,11 +1206,52 @@ export const AttendancePage: React.FC = () => {
                     <span>{punching ? 'Recording Punch Out...' : 'Punch Out (End Daily Shift)'}</span>
                   </button>
                 ) : (
-                  <div className="p-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-2 w-full">
-                    <CheckCircle2 size={16} className="text-emerald-600" />
-                    <span>
-                      Daily Shift Completed. Punched in at {formatPunchTime(todayRecord.check_in_local || todayRecord.check_in_time)} and punched out at {formatPunchTime(todayRecord.check_out_local || todayRecord.check_out_time)}.
-                    </span>
+                  <div className="p-4 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                      <span>
+                        Daily Shift Completed. Punched in at {formatPunchTime(todayRecord.check_in_local || todayRecord.check_in_time)} and punched out at {formatPunchTime(todayRecord.check_out_local || todayRecord.check_out_time)}.
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => handlePunchOut({ allow_update: true })}
+                        disabled={punching}
+                        className="px-3 py-1.5 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 font-bold text-xs transition-colors flex items-center gap-1.5"
+                        title="Update punch out time to current time"
+                      >
+                        <Clock size={13} />
+                        <span>Update Punch Out (Now)</span>
+                      </button>
+
+                      {canManageAttendance && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res: any = await api.post('/admin/attendance/assign-punch', {
+                                user_id: todayRecord.user_id,
+                                attendance_date: todayRecord.attendance_date,
+                                check_in_time: extractTimeOnly(todayRecord.check_in_time, office.shift_start),
+                                check_out_time: '',
+                                work_mode: todayRecord.work_mode,
+                                notes: 'Shift Reopened',
+                              });
+                              if (res.success) {
+                                loadInitialData();
+                              }
+                            } catch (e: any) {
+                              alert(e.message || 'Failed to reopen shift');
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs transition-colors flex items-center gap-1"
+                          title="Clear check out and re-open active shift"
+                        >
+                          <Edit3 size={13} />
+                          <span>Re-open Shift</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -2795,14 +2840,25 @@ export const AttendancePage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 uppercase mb-1">Check-Out Time</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-slate-700 uppercase">Check-Out Time</label>
+                    <button
+                      type="button"
+                      onClick={() => setAssignForm({ ...assignForm, check_out_time: '' })}
+                      className="text-[11px] text-blue-600 hover:text-blue-800 font-bold hover:underline"
+                    >
+                      Clear (Keep Shift Active)
+                    </button>
+                  </div>
                   <input
                     type="time"
                     step="1"
                     value={assignForm.check_out_time}
                     onChange={(e) => setAssignForm({ ...assignForm, check_out_time: e.target.value })}
+                    placeholder="Leave blank to keep active"
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Leave empty so employee can punch out normally</span>
                 </div>
               </div>
 

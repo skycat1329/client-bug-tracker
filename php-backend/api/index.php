@@ -7608,14 +7608,14 @@ if ($method === 'POST' && ($path === '/api/attendance/check-out' || $path === '/
     if (!$record) {
         json_error('You have not punched in today', 400);
     }
-    if (!empty($record['check_out_time'])) {
+    $input = get_json_input();
+    $allowUpdate = !empty($input['allow_update']);
+    if (!empty($record['check_out_time']) && !$allowUpdate) {
         $formattedOut = date('h:i:s A', strtotime($record['check_out_time']));
         json_error("You have already punched out for today at {$formattedOut}", 409, [
             'existing_check_out_local' => $formattedOut
         ]);
     }
-
-    $input = get_json_input();
     $notes = trim($input['notes'] ?? '');
     $lat = isset($input['latitude']) && is_numeric($input['latitude']) ? (float)$input['latitude'] : null;
     $lng = isset($input['longitude']) && is_numeric($input['longitude']) ? (float)$input['longitude'] : null;
@@ -7868,6 +7868,11 @@ if ($method === 'POST' && $path === '/api/attendance/regularize') {
 
     if (strtotime($attDate . ' ' . $outTime) <= strtotime($attDate . ' ' . $inTime)) {
         json_error('Requested Check-Out time must be after Check-In time', 400);
+    }
+
+    // Do not allow regularizing a future check-out time on today
+    if ($attDate === $today && strtotime($outTime) > time()) {
+        json_error('Cannot regularize a future check-out time for today. Please punch out when your shift ends.', 400);
     }
 
     // Check duplicate pending request for the same date
@@ -8180,6 +8185,14 @@ if ($method === 'POST' && $path === '/api/admin/attendance/geofence') {
             [$name, $lat, $lng, $radius, $shiftStart, $shiftEnd, $grace, $halfDay, $fullDay, $punchOutReq]
         );
     }
+
+    // Update shift schedule on today's active punches
+    db_execute(
+        "UPDATE attendance 
+         SET shift_start = ?, shift_end = ?, updated_at = NOW() 
+         WHERE attendance_date = ? AND (check_out_time IS NULL OR check_out_time > NOW())",
+        [$shiftStart, $shiftEnd, date('Y-m-d')]
+    );
 
     $updated = db_query_one("SELECT * FROM office_locations WHERE is_active = 1 ORDER BY id DESC LIMIT 1");
     json_response([
