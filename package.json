@@ -18,5 +18,8 @@
   "devDependencies": {
     "basic-ftp": "^6.2.3",
     "mysql2": "^3.24.6"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
   }
 }

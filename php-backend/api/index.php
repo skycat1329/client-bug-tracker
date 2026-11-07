@@ -7785,6 +7785,56 @@ if ($method === 'GET' && ($path === '/api/attendance/history' || $path === '/api
     ]);
 }
 
+// GET /api/attendance/regularize or GET /api/attendance/my-regularizations
+if ($method === 'GET' && ($path === '/api/attendance/regularize' || $path === '/api/attendance/my-regularizations')) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Attendance regularization is only accessible to internal agency team members', 403);
+    }
+    ensure_attendance_schema();
+
+    $requests = db_query("SELECT 
+        r.*, 
+        rev.name as reviewer_name
+    FROM attendance_regularizations r
+    LEFT JOIN users rev ON rev.id = r.reviewer_id
+    WHERE r.user_id = ?
+    ORDER BY r.created_at DESC", [$user['id']]);
+
+    foreach ($requests as &$req) {
+        $req['id'] = (int)$req['id'];
+    }
+
+    json_response([
+        'success' => true,
+        'data' => $requests
+    ]);
+}
+
+// POST /api/attendance/regularize/{id}/cancel
+if ($method === 'POST' && preg_match('#^/api/attendance/regularize/([^/]+)/cancel$#', $path, $m)) {
+    $user = require_auth();
+    if ($user['role'] === 'client') {
+        json_error('Forbidden', 403);
+    }
+    ensure_attendance_schema();
+
+    $regId = (int)$m[1];
+    $req = db_query_one("SELECT * FROM attendance_regularizations WHERE id = ?", [$regId]);
+    if (!$req) {
+        json_error("Regularization request not found", 404);
+    }
+    if ($req['user_id'] !== $user['id'] && !in_array($user['role'], ['super_admin', 'support_manager'], true)) {
+        json_error("You can only cancel your own regularization request", 403);
+    }
+    if ($req['status'] !== 'PENDING') {
+        json_error("Only pending regularization requests can be cancelled", 400);
+    }
+
+    db_execute("DELETE FROM attendance_regularizations WHERE id = ?", [$regId]);
+    json_response(['success' => true, 'message' => "Regularization request cancelled successfully"]);
+}
+
 // POST /api/attendance/regularize
 if ($method === 'POST' && $path === '/api/attendance/regularize') {
     $user = require_auth();
@@ -7805,8 +7855,28 @@ if ($method === 'POST' && $path === '/api/attendance/regularize') {
     if (empty($attDate) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $attDate)) {
         json_error('Valid attendance date (YYYY-MM-DD) is required', 400);
     }
+    $today = date('Y-m-d');
+    if ($attDate > $today) {
+        json_error('Cannot regularize attendance for future dates', 400);
+    }
     if (empty($reason)) {
         json_error('Please specify a valid reason for regularization', 400);
+    }
+
+    if (strlen($inTime) === 5) $inTime .= ':00';
+    if (strlen($outTime) === 5) $outTime .= ':00';
+
+    if (strtotime($attDate . ' ' . $outTime) <= strtotime($attDate . ' ' . $inTime)) {
+        json_error('Requested Check-Out time must be after Check-In time', 400);
+    }
+
+    // Check duplicate pending request for the same date
+    $existingPending = db_query_one(
+        "SELECT id FROM attendance_regularizations WHERE user_id = ? AND attendance_date = ? AND status = 'PENDING'",
+        [$user['id'], $attDate]
+    );
+    if ($existingPending) {
+        json_error('You already have a pending regularization request for this date. Please wait for HR/Admin review.', 400);
     }
 
     db_execute(
@@ -7937,21 +8007,43 @@ if ($method === 'GET' && $path === '/api/admin/attendance/regularizations') {
     $user = require_attendance_access();
     ensure_attendance_schema();
 
+    $statusFilter = strtoupper(trim($_GET['status'] ?? 'ALL'));
+    $whereClause = "";
+    $params = [];
+    if (in_array($statusFilter, ['PENDING', 'APPROVED', 'REJECTED'], true)) {
+        $whereClause = " WHERE r.status = ? ";
+        $params[] = $statusFilter;
+    }
+
     $requests = db_query("SELECT 
         r.*, u.name as user_name, u.email as user_email, u.role as user_role, u.avatar_url,
         rev.name as reviewer_name
     FROM attendance_regularizations r
     JOIN users u ON u.id = r.user_id
     LEFT JOIN users rev ON rev.id = r.reviewer_id
+    {$whereClause}
     ORDER BY (r.status = 'PENDING') DESC, r.created_at DESC
-    LIMIT 100");
+    LIMIT 200", $params);
 
     foreach ($requests as &$req) {
         $req['id'] = (int)$req['id'];
     }
 
+    // Summary counts for tabs/badges
+    $counts = db_query("SELECT status, COUNT(*) as cnt FROM attendance_regularizations GROUP BY status");
+    $summary = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0];
+    foreach ($counts as $c) {
+        $st = strtolower($c['status']);
+        $cnt = (int)$c['cnt'];
+        $summary['total'] += $cnt;
+        if (isset($summary[$st])) {
+            $summary[$st] = $cnt;
+        }
+    }
+
     json_response([
         'success' => true,
+        'summary' => $summary,
         'data' => $requests
     ]);
 }
@@ -7982,23 +8074,28 @@ if ($method === 'POST' && preg_match('#^/api/admin/attendance/regularization/([^
     );
 
     if ($action === 'approve') {
-        $inTime = $req['attendance_date'] . ' ' . $req['requested_check_in'];
-        $outTime = $req['attendance_date'] . ' ' . $req['requested_check_out'];
+        $inTimeStr = $req['requested_check_in'];
+        if (strlen($inTimeStr) === 5) $inTimeStr .= ':00';
+        $outTimeStr = $req['requested_check_out'];
+        if (strlen($outTimeStr) === 5) $outTimeStr .= ':00';
+
+        $inTime = $req['attendance_date'] . ' ' . $inTimeStr;
+        $outTime = $req['attendance_date'] . ' ' . $outTimeStr;
         $durationMinutes = max(1, (int)round((strtotime($outTime) - strtotime($inTime)) / 60));
 
         $existing = db_query_one("SELECT id FROM attendance WHERE user_id = ? AND attendance_date = ?", [$req['user_id'], $req['attendance_date']]);
         if ($existing) {
             db_execute(
                 "UPDATE attendance 
-                 SET check_in_time = ?, check_out_time = ?, work_mode = ?, total_work_minutes = ?, final_status = 'REGULARIZED', is_regularized = 1, notes = ?
+                 SET check_in_time = ?, check_out_time = ?, work_mode = ?, check_in_status = 'present', is_early_exit = 0, total_work_minutes = ?, final_status = 'REGULARIZED', is_regularized = 1, notes = ?
                  WHERE id = ?",
                 [$inTime, $outTime, $req['work_mode'], $durationMinutes, "Regularized: " . $req['reason'], $existing['id']]
             );
             $record = db_query_one("SELECT * FROM attendance WHERE id = ?", [$existing['id']]);
         } else {
             db_execute(
-                "INSERT INTO attendance (user_id, attendance_date, work_mode, check_in_time, check_out_time, total_work_minutes, final_status, is_regularized, notes)
-                 VALUES (?, ?, ?, ?, ?, ?, 'REGULARIZED', 1, ?)",
+                "INSERT INTO attendance (user_id, attendance_date, work_mode, shift_start, shift_end, check_in_time, check_out_time, check_in_status, is_early_exit, total_work_minutes, final_status, is_regularized, notes)
+                 VALUES (?, ?, ?, '10:00:00', '19:00:00', ?, ?, 'present', 0, ?, 'REGULARIZED', 1, ?)",
                 [$req['user_id'], $req['attendance_date'], $req['work_mode'], $inTime, $outTime, $durationMinutes, "Regularized: " . $req['reason']]
             );
             $record = db_query_one("SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?", [$req['user_id'], $req['attendance_date']]);

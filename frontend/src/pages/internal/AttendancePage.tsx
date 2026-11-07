@@ -54,6 +54,25 @@ interface OfficeGeofence {
   punch_out_geofence_required?: number;
 }
 
+interface RegularizationRequest {
+  id: number;
+  user_id: string;
+  user_name?: string;
+  user_email?: string;
+  attendance_date: string;
+  requested_check_in: string;
+  requested_check_out: string;
+  work_mode: 'office' | 'wfh' | 'on_duty';
+  reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  reviewer_id?: string;
+  reviewer_name?: string;
+  reviewer_notes?: string;
+  reviewed_at?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
 interface AttendanceRecord {
   id: number;
   user_id: string;
@@ -173,19 +192,26 @@ export const AttendancePage: React.FC = () => {
     'punch' | 'leaves' | 'calendar' | 'admin-leaves' | 'admin-roster' | 'admin-regularize' | 'admin-holidays' | 'admin-permissions' | 'admin-settings'
   >('punch');
   const [pendingLeavesCount, setPendingLeavesCount] = useState(0);
+  const [pendingRegsCount, setPendingRegsCount] = useState(0);
 
-  const fetchPendingLeavesCount = async () => {
+  const fetchPendingCounts = async () => {
     if (!canManageAttendance) return;
     try {
-      const res: any = await api.get('/admin/leaves?status=PENDING');
-      if (res.success && res.summary) {
-        setPendingLeavesCount(res.summary.pending || 0);
+      const [leavesRes, regsRes]: any = await Promise.all([
+        api.get('/admin/leaves?status=PENDING').catch(() => null),
+        api.get('/admin/attendance/regularizations?status=PENDING').catch(() => null),
+      ]);
+      if (leavesRes?.success && leavesRes.summary) {
+        setPendingLeavesCount(leavesRes.summary.pending || 0);
+      }
+      if (regsRes?.success && regsRes.summary) {
+        setPendingRegsCount(regsRes.summary.pending || 0);
       }
     } catch (e) {}
   };
 
   useEffect(() => {
-    fetchPendingLeavesCount();
+    fetchPendingCounts();
   }, [canManageAttendance]);
 
   const [office, setOffice] = useState<OfficeGeofence>({
@@ -234,7 +260,7 @@ export const AttendancePage: React.FC = () => {
   const [selectedDayHoliday, setSelectedDayHoliday] = useState<CompanyHoliday | null>(null);
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
 
-  // Regularization Modal State
+  // Regularization Modal & Employee History State
   const [showRegModal, setShowRegModal] = useState(false);
   const [regForm, setRegForm] = useState({
     attendance_date: new Date().toISOString().split('T')[0],
@@ -245,6 +271,12 @@ export const AttendancePage: React.FC = () => {
   });
   const [submittingReg, setSubmittingReg] = useState(false);
   const [regSuccess, setRegSuccess] = useState(false);
+  const [regError, setRegError] = useState<string | null>(null);
+
+  // My Regularizations State (Employee)
+  const [myRegs, setMyRegs] = useState<RegularizationRequest[]>([]);
+  const [loadingMyRegs, setLoadingMyRegs] = useState(false);
+  const [cancellingRegId, setCancellingRegId] = useState<number | null>(null);
 
   // Manual Punch Assignment Modal State
   const [showAssignModal, setShowAssignModal] = useState(false);
@@ -270,9 +302,11 @@ export const AttendancePage: React.FC = () => {
 
   // Admin Regularizations Queue State
   const [adminRegs, setAdminRegs] = useState<any[]>([]);
+  const [adminRegFilter, setAdminRegFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [adminRegSummary, setAdminRegSummary] = useState<{ total: number; pending: number; approved: number; rejected: number } | null>(null);
   const [loadingRegs, setLoadingRegs] = useState(false);
   const [reviewingRegId, setReviewingRegId] = useState<number | null>(null);
-  const [reviewerNotes, setReviewerNotes] = useState('');
+  const [reviewNotesMap, setReviewNotesMap] = useState<Record<number, string>>({});
 
   // Admin Office Geofence Form State
   const [officeForm, setOfficeForm] = useState<OfficeGeofence>(office);
@@ -384,6 +418,10 @@ export const AttendancePage: React.FC = () => {
           setElapsedSeconds(res.elapsed_seconds || 0);
         }
       }
+      loadMyRegularizations();
+      if (canManageAttendance) {
+        fetchPendingCounts();
+      }
     } catch (err: any) {
       console.error('Failed to load attendance status:', err);
     } finally {
@@ -455,13 +493,54 @@ export const AttendancePage: React.FC = () => {
     }
   };
 
-  // Load Admin Regularizations
-  const loadAdminRegularizations = async () => {
+  // Load My Regularizations (Employee Portal)
+  const loadMyRegularizations = async () => {
+    try {
+      setLoadingMyRegs(true);
+      const res: any = await api.get('/attendance/regularize');
+      if (res.success) {
+        setMyRegs(res.data || []);
+      }
+    } catch (err: any) {
+      console.error('Failed to load my regularizations:', err);
+    } finally {
+      setLoadingMyRegs(false);
+    }
+  };
+
+  // Cancel My Pending Regularization (Employee)
+  const handleCancelReg = async (id: number) => {
+    if (!window.confirm('Are you sure you want to cancel this regularization request?')) return;
+    try {
+      setCancellingRegId(id);
+      const res: any = await api.post(`/attendance/regularize/${id}/cancel`);
+      if (res.success) {
+        await loadMyRegularizations();
+        if (canManageAttendance) {
+          fetchPendingCounts();
+          if (activeTab === 'admin-regularize') {
+            loadAdminRegularizations(adminRegFilter);
+          }
+        }
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to cancel regularization request');
+    } finally {
+      setCancellingRegId(null);
+    }
+  };
+
+  // Load Admin Regularizations with Status Filter & Summary
+  const loadAdminRegularizations = async (filter: 'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED' = adminRegFilter) => {
     try {
       setLoadingRegs(true);
-      const res: any = await api.get('/admin/attendance/regularizations');
+      const res: any = await api.get(`/admin/attendance/regularizations?status=${filter}`);
       if (res.success) {
         setAdminRegs(res.data || []);
+        if (res.summary) {
+          setAdminRegSummary(res.summary);
+          setPendingRegsCount(res.summary.pending || 0);
+        }
       }
     } catch (err: any) {
       console.error('Failed to load regularizations:', err);
@@ -478,16 +557,19 @@ export const AttendancePage: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'calendar') {
       loadMonthHistory(selectedMonth);
+      loadMyRegularizations();
+    } else if (activeTab === 'punch') {
+      loadMyRegularizations();
     } else if (activeTab === 'admin-roster' && canManageAttendance) {
       loadAdminRoster(adminDate, adminSearch);
     } else if (activeTab === 'admin-regularize' && canManageAttendance) {
-      loadAdminRegularizations();
+      loadAdminRegularizations(adminRegFilter);
     } else if (activeTab === 'admin-holidays') {
       loadHolidays();
     } else if (activeTab === 'admin-permissions' && isSuperAdmin) {
       loadStaffList();
     }
-  }, [activeTab, selectedMonth, adminDate]);
+  }, [activeTab, selectedMonth, adminDate, adminRegFilter]);
 
   // Execute Punch In
   const handlePunchIn = async () => {
@@ -563,14 +645,38 @@ export const AttendancePage: React.FC = () => {
   // Submit Regularization Request
   const handleSubmitRegularization = async (e: React.FormEvent) => {
     e.preventDefault();
+    setRegError(null);
+
+    // Frontend validations
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (regForm.attendance_date > todayStr) {
+      setRegError('Regularization cannot be submitted for future dates.');
+      return;
+    }
+
+    if (regForm.requested_check_out <= regForm.requested_check_in) {
+      setRegError('Check-out time must be later than check-in time.');
+      return;
+    }
+
+    if (!regForm.reason || regForm.reason.trim().length < 5) {
+      setRegError('Please provide a meaningful reason (at least 5 characters).');
+      return;
+    }
+
     setSubmittingReg(true);
     try {
       const res: any = await api.post('/attendance/regularize', regForm);
       if (res.success) {
         setRegSuccess(true);
+        loadMyRegularizations();
+        if (canManageAttendance) {
+          fetchPendingCounts();
+        }
         setTimeout(() => {
           setShowRegModal(false);
           setRegSuccess(false);
+          setRegError(null);
           setRegForm({
             attendance_date: new Date().toISOString().split('T')[0],
             requested_check_in: '10:00:00',
@@ -584,7 +690,7 @@ export const AttendancePage: React.FC = () => {
         }, 1500);
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to submit regularization');
+      setRegError(err.message || 'Failed to submit regularization');
     } finally {
       setSubmittingReg(false);
     }
@@ -592,18 +698,29 @@ export const AttendancePage: React.FC = () => {
 
   // Review Regularization (Approve / Reject)
   const handleReviewReg = async (id: number, action: 'approve' | 'reject') => {
+    const notes = reviewNotesMap[id] || '';
     try {
+      setReviewingRegId(id);
       const res: any = await api.post(`/admin/attendance/regularization/${id}/review`, {
         action,
-        notes: reviewerNotes,
+        notes,
       });
       if (res.success) {
-        setReviewingRegId(null);
-        setReviewerNotes('');
-        loadAdminRegularizations();
+        setReviewNotesMap((prev) => {
+          const updated = { ...prev };
+          delete updated[id];
+          return updated;
+        });
+        await loadAdminRegularizations(adminRegFilter);
+        fetchPendingCounts();
+        if (activeTab === 'calendar') {
+          loadMonthHistory(selectedMonth);
+        }
       }
     } catch (err: any) {
       alert(err.message || 'Review failed');
+    } finally {
+      setReviewingRegId(null);
     }
   };
 
@@ -846,8 +963,13 @@ export const AttendancePage: React.FC = () => {
                     : 'text-slate-300 hover:text-white hover:bg-white/10'
                 }`}
               >
-                <ShieldCheck size={16} />
+                <Clock size={16} />
                 <span>Regularizations</span>
+                {pendingRegsCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-900 animate-pulse">
+                    {pendingRegsCount}
+                  </span>
+                )}
               </button>
 
               <button
@@ -1228,6 +1350,38 @@ export const AttendancePage: React.FC = () => {
               <div className="mt-4 pt-3 border-t border-blue-700/60 flex items-center justify-between text-[11px] text-blue-200">
                 <span>iOS: Safari Share &gt; Add to Home Screen</span>
                 <span>Android: Chrome Menu &gt; Install</span>
+              </div>
+            </div>
+
+            {/* Quick Action: Attendance Regularization Shortcut */}
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50/50 rounded-2xl border border-blue-100 p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-blue-600 text-white shrink-0 shadow-md shadow-blue-500/20">
+                  <Clock size={20} />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-sm font-bold text-slate-900">Missed a Punch?</h4>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Forgot to punch in or out, or faced device GPS issues? Request attendance regularization for past dates.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setRegError(null);
+                      setRegForm({
+                        attendance_date: new Date().toISOString().split('T')[0],
+                        requested_check_in: '10:00:00',
+                        requested_check_out: '19:00:00',
+                        work_mode: 'office',
+                        reason: '',
+                      });
+                      setShowRegModal(true);
+                    }}
+                    className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all"
+                  >
+                    <Plus size={14} />
+                    <span>Request Regularization</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1670,6 +1824,141 @@ export const AttendancePage: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* Section: My Attendance Regularization Requests */}
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <Clock size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <span>My Regularization Requests</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-700">
+                      {myRegs.length}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500">Track missed punch corrections and approvals submitted to HR</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => loadMyRegularizations()}
+                  disabled={loadingMyRegs}
+                  className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors"
+                  title="Refresh my requests"
+                >
+                  <RefreshCw size={14} className={loadingMyRegs ? 'animate-spin' : ''} />
+                </button>
+                <button
+                  onClick={() => {
+                    setRegError(null);
+                    setRegForm({
+                      attendance_date: new Date().toISOString().split('T')[0],
+                      requested_check_in: '10:00:00',
+                      requested_check_out: '19:00:00',
+                      work_mode: 'office',
+                      reason: '',
+                    });
+                    setShowRegModal(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all"
+                >
+                  <Plus size={14} />
+                  <span>New Request</span>
+                </button>
+              </div>
+            </div>
+
+            {loadingMyRegs ? (
+              <div className="py-8 text-center text-xs text-slate-400">Loading your regularization history...</div>
+            ) : myRegs.length === 0 ? (
+              <div className="py-8 text-center">
+                <Clock size={32} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-xs font-bold text-slate-700">No Regularization Requests Yet</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  If you missed a punch or encountered device issues, click "New Request" above.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 mt-2">
+                {myRegs.map((reg) => (
+                  <div key={reg.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-slate-900 text-xs sm:text-sm">
+                          {new Date(reg.attendance_date + 'T00:00:00').toLocaleDateString('en-IN', {
+                            weekday: 'short',
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                            reg.status === 'PENDING'
+                              ? 'bg-amber-100 text-amber-800'
+                              : reg.status === 'APPROVED'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}
+                        >
+                          {reg.status}
+                        </span>
+                        <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                          {reg.work_mode}
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-600 flex flex-wrap items-center gap-x-4 gap-y-1">
+                        <span>
+                          <strong className="text-slate-700">Requested Shift:</strong> {reg.requested_check_in} — {reg.requested_check_out}
+                        </span>
+                        <span className="text-slate-400">•</span>
+                        <span>
+                          <strong className="text-slate-700">Submitted:</strong> {new Date(reg.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                        <span className="font-bold text-slate-700">Reason: </span>
+                        <span>{reg.reason}</span>
+                      </div>
+
+                      {reg.reviewer_notes && (
+                        <div className={`text-xs p-2.5 rounded-lg border ${
+                          reg.status === 'APPROVED' ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900' : 'bg-red-50/60 border-red-200 text-red-900'
+                        }`}>
+                          <span className="font-bold">Reviewer Remark: </span>
+                          <span>{reg.reviewer_notes}</span>
+                          {reg.reviewed_at && (
+                            <span className="text-[10px] opacity-75 ml-2 font-mono">
+                              ({new Date(reg.reviewed_at).toLocaleDateString()})
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {reg.status === 'PENDING' && (
+                      <div className="shrink-0 flex items-center gap-2">
+                        <button
+                          onClick={() => handleCancelReg(reg.id)}
+                          disabled={cancellingRegId === reg.id}
+                          className="px-3 py-1.5 rounded-xl border border-red-200 text-red-700 hover:bg-red-50 text-xs font-bold transition-colors flex items-center gap-1"
+                        >
+                          <Trash2 size={13} />
+                          <span>{cancellingRegId === reg.id ? 'Cancelling...' : 'Cancel Request'}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1902,30 +2191,77 @@ export const AttendancePage: React.FC = () => {
       {activeTab === 'admin-regularize' && canManageAttendance && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6">
-            <h3 className="text-base font-bold text-slate-900 mb-1">Attendance Regularization Requests</h3>
-            <p className="text-xs text-slate-500 mb-6">
-              Review and approve employee missed punch regularization requests. Approving auto-updates their attendance record.
-            </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 mb-1 flex items-center gap-2">
+                  <Clock size={20} className="text-emerald-600" />
+                  <span>Attendance Regularization Queue</span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Review and verify employee missed punch corrections. Approving auto-updates their attendance record.
+                </p>
+              </div>
 
-            {adminRegs.length === 0 ? (
+              {/* Status Filter Badges */}
+              <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
+                {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((status) => {
+                  const count =
+                    status === 'ALL'
+                      ? adminRegSummary?.total ?? adminRegs.length
+                      : status === 'PENDING'
+                      ? adminRegSummary?.pending ?? 0
+                      : status === 'APPROVED'
+                      ? adminRegSummary?.approved ?? 0
+                      : adminRegSummary?.rejected ?? 0;
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => setAdminRegFilter(status)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                        adminRegFilter === status
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <span>{status}</span>
+                      <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                        status === 'PENDING' && count > 0
+                          ? 'bg-amber-200 text-amber-900'
+                          : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {loadingRegs ? (
+              <div className="py-12 text-center text-xs text-slate-400">Loading regularization requests...</div>
+            ) : adminRegs.length === 0 ? (
               <div className="p-12 text-center text-slate-400">
                 <CheckCircle2 size={36} className="mx-auto mb-2 text-emerald-500 opacity-60" />
-                <p className="text-sm font-semibold text-slate-700">No pending regularization requests</p>
-                <p className="text-xs mt-1 text-slate-400">Employee submissions will appear here for review.</p>
+                <p className="text-sm font-semibold text-slate-700">No {adminRegFilter.toLowerCase()} requests</p>
+                <p className="text-xs mt-1 text-slate-400">
+                  {adminRegFilter === 'PENDING' ? 'All pending regularization requests have been reviewed!' : 'No records found matching this filter.'}
+                </p>
               </div>
             ) : (
               <div className="space-y-4">
                 {adminRegs.map((reg) => (
                   <div
                     key={reg.id}
-                    className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col gap-4"
                   >
-                    <div>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm">{reg.user_name}</span>
+                        <span className="font-bold text-slate-900 text-sm">{reg.user_name || 'Staff Member'}</span>
                         <span className="text-xs text-slate-400">({reg.user_email})</span>
+                      </div>
+                      <div className="flex items-center gap-2">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
                             reg.status === 'PENDING'
                               ? 'bg-amber-100 text-amber-800'
                               : reg.status === 'APPROVED'
@@ -1935,47 +2271,91 @@ export const AttendancePage: React.FC = () => {
                         >
                           {reg.status}
                         </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2 text-xs text-slate-600">
-                        <div>
-                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Date</span>
-                          <span className="font-semibold text-slate-800">{reg.attendance_date}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Requested Times</span>
-                          <span className="font-semibold text-slate-800">{reg.requested_check_in} - {reg.requested_check_out}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Work Mode</span>
-                          <span className="font-semibold text-slate-800 uppercase">{reg.work_mode}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 block font-bold uppercase">Submitted</span>
-                          <span className="font-semibold text-slate-800">{new Date(reg.created_at).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-
-                      <div className="mt-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                        <span className="font-bold text-slate-700">Reason: </span>
-                        <span className="text-slate-600">{reg.reason}</span>
+                        <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                          {reg.work_mode}
+                        </span>
                       </div>
                     </div>
 
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs text-slate-600">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-bold uppercase">Date to Regularize</span>
+                        <span className="font-semibold text-slate-900">
+                          {new Date(reg.attendance_date + 'T00:00:00').toLocaleDateString('en-IN', {
+                            weekday: 'short',
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-bold uppercase">Requested Times</span>
+                        <span className="font-semibold text-slate-900 font-mono">{reg.requested_check_in} — {reg.requested_check_out}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-bold uppercase">Work Mode</span>
+                        <span className="font-semibold text-slate-900 uppercase">{reg.work_mode}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-bold uppercase">Submitted At</span>
+                        <span className="font-semibold text-slate-900">{new Date(reg.created_at).toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <div className="text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
+                      <span className="font-bold text-slate-700 block mb-1">Employee Reason:</span>
+                      <p className="text-slate-600 whitespace-pre-wrap">{reg.reason}</p>
+                    </div>
+
+                    {reg.reviewer_notes && reg.status !== 'PENDING' && (
+                      <div className={`text-xs p-3 rounded-xl border ${
+                        reg.status === 'APPROVED' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-red-50 border-red-200 text-red-900'
+                      }`}>
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="font-bold">Reviewer Remark:</span>
+                          {reg.reviewed_at && (
+                            <span className="text-[10px] opacity-75 font-mono">
+                              {reg.reviewer_name ? `By ${reg.reviewer_name} on ` : ''}{new Date(reg.reviewed_at).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                        <p>{reg.reviewer_notes}</p>
+                      </div>
+                    )}
+
                     {reg.status === 'PENDING' && (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={() => handleReviewReg(reg.id, 'approve')}
-                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-500/20"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => handleReviewReg(reg.id, 'reject')}
-                          className="px-4 py-2 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 font-bold text-xs"
-                        >
-                          Reject
-                        </button>
+                      <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex-1">
+                          <input
+                            type="text"
+                            placeholder="Optional review remark (e.g. Approved as per client email)..."
+                            value={reviewNotesMap[reg.id] || ''}
+                            onChange={(e) =>
+                              setReviewNotesMap((prev) => ({ ...prev, [reg.id]: e.target.value }))
+                            }
+                            className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleReviewReg(reg.id, 'approve')}
+                            disabled={reviewingRegId === reg.id}
+                            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all flex items-center gap-1.5"
+                          >
+                            <Check size={14} />
+                            <span>{reviewingRegId === reg.id ? 'Processing...' : 'Approve'}</span>
+                          </button>
+                          <button
+                            onClick={() => handleReviewReg(reg.id, 'reject')}
+                            disabled={reviewingRegId === reg.id}
+                            className="px-4 py-2 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 font-bold text-xs transition-colors flex items-center gap-1.5"
+                          >
+                            <X size={14} />
+                            <span>Reject</span>
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -2495,20 +2875,32 @@ export const AttendancePage: React.FC = () => {
                 <CheckCircle2 size={40} className="text-emerald-500 mx-auto mb-2" />
                 <h4 className="text-sm font-bold text-slate-800">Regularization Request Submitted!</h4>
                 <p className="text-xs text-slate-500 mt-1">
-                  Sent to HR/Admin for approval. You will be notified once reviewed.
+                  Sent to HR/Admin for approval. Your attendance record will automatically update upon approval.
                 </p>
               </div>
             ) : (
               <form onSubmit={handleSubmitRegularization} className="space-y-4 text-xs overflow-y-auto flex-1 pr-1">
+                {regError && (
+                  <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                    <span>{regError}</span>
+                  </div>
+                )}
+
                 <div>
                   <label className="block font-bold text-slate-700 uppercase mb-1">Date to Regularize *</label>
                   <input
                     type="date"
                     required
+                    max={new Date().toISOString().split('T')[0]}
                     value={regForm.attendance_date}
-                    onChange={(e) => setRegForm({ ...regForm, attendance_date: e.target.value })}
+                    onChange={(e) => {
+                      setRegError(null);
+                      setRegForm({ ...regForm, attendance_date: e.target.value });
+                    }}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Only past or today's dates can be regularized</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -2695,29 +3087,53 @@ export const AttendancePage: React.FC = () => {
             ) : null}
           </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
-              {canManageAttendance && (
+            <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
-                    setAssignForm({
-                      user_id: selectedDayRecord?.user_id || user?.id || '',
-                      attendance_date: selectedDayDate || selectedDayRecord?.attendance_date || new Date().toISOString().split('T')[0],
-                      check_in_time: extractTimeOnly(selectedDayRecord?.check_in_time, '10:00:00'),
-                      check_out_time: extractTimeOnly(selectedDayRecord?.check_out_time, '19:00:00'),
-                      work_mode: selectedDayRecord?.work_mode || 'office',
-                      notes: selectedDayRecord?.notes || 'HR Assigned Punch',
+                    const targetDate = selectedDayDate || selectedDayRecord?.attendance_date || new Date().toISOString().split('T')[0];
+                    setRegError(null);
+                    setRegForm({
+                      attendance_date: targetDate,
+                      requested_check_in: extractTimeOnly(selectedDayRecord?.check_in_time, '10:00:00'),
+                      requested_check_out: extractTimeOnly(selectedDayRecord?.check_out_time, '19:00:00'),
+                      work_mode: (selectedDayRecord?.work_mode as any) || 'office',
+                      reason: '',
                     });
                     setSelectedDayRecord(null);
                     setSelectedDayHoliday(null);
                     setSelectedDayDate(null);
-                    setShowAssignModal(true);
+                    setShowRegModal(true);
                   }}
-                  className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs hover:bg-blue-100 flex items-center gap-1"
+                  className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold text-xs hover:bg-emerald-100 flex items-center gap-1 transition-colors"
                 >
-                  <Edit3 size={13} />
-                  <span>Assign / Edit Punch</span>
+                  <Clock size={13} />
+                  <span>Regularize this Date</span>
                 </button>
-              )}
+
+                {canManageAttendance && (
+                  <button
+                    onClick={() => {
+                      setAssignForm({
+                        user_id: selectedDayRecord?.user_id || user?.id || '',
+                        attendance_date: selectedDayDate || selectedDayRecord?.attendance_date || new Date().toISOString().split('T')[0],
+                        check_in_time: extractTimeOnly(selectedDayRecord?.check_in_time, '10:00:00'),
+                        check_out_time: extractTimeOnly(selectedDayRecord?.check_out_time, '19:00:00'),
+                        work_mode: selectedDayRecord?.work_mode || 'office',
+                        notes: selectedDayRecord?.notes || 'HR Assigned Punch',
+                      });
+                      setSelectedDayRecord(null);
+                      setSelectedDayHoliday(null);
+                      setSelectedDayDate(null);
+                      setShowAssignModal(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs hover:bg-blue-100 flex items-center gap-1"
+                  >
+                    <Edit3 size={13} />
+                    <span>Assign / Edit Punch</span>
+                  </button>
+                )}
+              </div>
 
               <button
                 onClick={() => {
