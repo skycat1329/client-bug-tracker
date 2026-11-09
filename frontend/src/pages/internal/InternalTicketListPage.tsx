@@ -337,7 +337,7 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search tickets by WEB-#, title, keywords..."
+            placeholder="Search tickets by WEB-#, SKU, title, keywords..."
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:bg-white focus:outline-none transition-all"
           />
         </div>
@@ -438,8 +438,18 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
 
                     {/* Title & Category */}
                     <div>
-                      <div className="font-semibold text-slate-900 text-sm leading-snug">
-                        {t.title}
+                      <div className="font-semibold text-slate-900 text-sm leading-snug flex items-center flex-wrap gap-1.5">
+                        {(t.ticket_type === 'listing' || t.sku || t.category === 'Product Listing / Catalog') && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            📦 Listing
+                          </span>
+                        )}
+                        {t.sku && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                            SKU: {t.sku}
+                          </span>
+                        )}
+                        <span>{t.title}</span>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5">
                         {t.category} &bull; {t.environment}
@@ -554,8 +564,18 @@ export const InternalTicketListPage: React.FC<InternalTicketListPageProps> = ({
 
                         {/* Title & Description */}
                         <td className="py-3 px-4 max-w-xs">
-                          <div className="font-semibold text-slate-900 group-hover:text-blue-600 truncate text-xs">
-                            {t.title}
+                          <div className="font-semibold text-slate-900 group-hover:text-blue-600 truncate text-xs flex items-center flex-wrap gap-1">
+                            {(t.ticket_type === 'listing' || t.sku || t.category === 'Product Listing / Catalog') && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                📦 Listing
+                              </span>
+                            )}
+                            {t.sku && (
+                              <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                                {t.sku}
+                              </span>
+                            )}
+                            <span className="truncate">{t.title}</span>
                           </div>
                           <div className="text-[11px] text-slate-400 truncate mt-0.5">
                             {t.category} &bull; {t.environment}

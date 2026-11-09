@@ -97,6 +97,15 @@ export interface Ticket {
   closed_at: string | null;
   created_at: string;
   updated_at: string;
+  // Product Listing Fields
+  ticket_type?: 'bug' | 'listing';
+  listing_action?: 'new_listing' | 'edit_existing' | string;
+  sku?: string | null;
+  product_title?: string | null;
+  product_price?: string | null;
+  compare_at_price?: string | null;
+  product_images?: string | null;
+  listing_details?: any;
 }
 
 export interface TicketComment {

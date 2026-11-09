@@ -22,6 +22,14 @@ const createTicketSchema = z.object({
   browser: z.string().optional().nullable(),
   device: z.string().optional().nullable(),
   environment: z.string().optional().nullable().default('production'),
+  ticket_type: z.string().optional().nullable(),
+  listing_action: z.string().optional().nullable(),
+  sku: z.string().optional().nullable(),
+  product_title: z.string().optional().nullable(),
+  product_price: z.string().optional().nullable(),
+  compare_at_price: z.string().optional().nullable(),
+  product_images: z.string().optional().nullable(),
+  listing_details: z.any().optional().nullable(),
 });
 
 const updateStatusSchema = z.object({

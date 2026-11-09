@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.js';
 import { Ticket, TicketComment, TicketAttachment, TicketActivity } from '../../types/index.js';
 import { StatusBadge } from '../../components/StatusBadge.js';
 import { PriorityBadge } from '../../components/PriorityBadge.js';
+import { ProductListingDetailsCard } from '../../components/ProductListingDetailsCard.js';
 import {
   ArrowLeft,
   Send,
@@ -214,6 +215,11 @@ export const CustomerTicketDetailPage: React.FC<CustomerTicketDetailPageProps> =
               {ticket.assignee_name ? `👤 ${ticket.assignee_name}` : 'Agency Triage Team'}
             </div>
           </div>
+        </div>
+
+        {/* Product Listing Specifications Card */}
+        <div className="mt-6">
+          <ProductListingDetailsCard ticket={ticket} />
         </div>
 
         {/* Detailed Description */}

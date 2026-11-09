@@ -36,7 +36,9 @@ export const CustomerTicketsPage: React.FC<CustomerTicketsPageProps> = ({
   const filteredTickets = tickets.filter((t) => {
     const matchesSearch =
       t.ticket_number.toLowerCase().includes(search.toLowerCase()) ||
-      t.title.toLowerCase().includes(search.toLowerCase());
+      t.title.toLowerCase().includes(search.toLowerCase()) ||
+      (t.sku && t.sku.toLowerCase().includes(search.toLowerCase())) ||
+      (t.product_title && t.product_title.toLowerCase().includes(search.toLowerCase()));
 
     if (!matchesSearch) return false;
 
@@ -184,7 +186,17 @@ export const CustomerTicketsPage: React.FC<CustomerTicketsPageProps> = ({
                   </div>
 
                   <div className="font-semibold text-slate-900 text-sm leading-snug">
-                    {t.title}
+                    {(t.ticket_type === 'listing' || t.sku || t.category === 'Product Listing / Catalog') && (
+                      <span className="inline-flex items-center gap-1 mr-2 px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        📦 Listing
+                      </span>
+                    )}
+                    {t.sku && (
+                      <span className="inline-flex items-center mr-2 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                        SKU: {t.sku}
+                      </span>
+                    )}
+                    <span>{t.title}</span>
                   </div>
 
                   <div className="flex items-center justify-between text-xs text-slate-500 pt-0.5">
@@ -239,8 +251,18 @@ export const CustomerTicketsPage: React.FC<CustomerTicketsPageProps> = ({
                         {t.ticket_number}
                       </td>
                       <td className="py-3.5 px-4 max-w-md">
-                        <div className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">
-                          {t.title}
+                        <div className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors flex items-center flex-wrap gap-1.5">
+                          {(t.ticket_type === 'listing' || t.sku || t.category === 'Product Listing / Catalog') && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              📦 Listing
+                            </span>
+                          )}
+                          {t.sku && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                              SKU: {t.sku}
+                            </span>
+                          )}
+                          <span>{t.title}</span>
                         </div>
                         <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2">
                           <span>{t.website_name || 'Website'}</span>

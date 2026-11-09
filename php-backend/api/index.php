@@ -3634,9 +3634,49 @@ if ($method === 'GET' && preg_match('#^/api/audit/tickets/([^/]+)/export/csv$#',
     exit;
 }
 
+
+function ensure_tickets_schema(): void {
+    static $ensured = false;
+    if ($ensured) return;
+    $ensured = true;
+
+    try {
+        $cols = db_query("SHOW COLUMNS FROM `tickets`");
+        $colNames = array_map(function($c) { return $c['Field']; }, $cols);
+
+        if (!in_array('ticket_type', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `ticket_type` VARCHAR(50) NOT NULL DEFAULT 'bug'");
+        }
+        if (!in_array('listing_action', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `listing_action` VARCHAR(50) NULL");
+        }
+        if (!in_array('sku', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `sku` VARCHAR(255) NULL");
+        }
+        if (!in_array('product_title', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `product_title` VARCHAR(255) NULL");
+        }
+        if (!in_array('product_price', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `product_price` VARCHAR(50) NULL");
+        }
+        if (!in_array('compare_at_price', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `compare_at_price` VARCHAR(50) NULL");
+        }
+        if (!in_array('product_images', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `product_images` TEXT NULL");
+        }
+        if (!in_array('listing_details', $colNames)) {
+            db_execute("ALTER TABLE `tickets` ADD COLUMN `listing_details` LONGTEXT NULL");
+        }
+    } catch (Exception $e) {
+        error_log("ensure_tickets_schema error: " . $e->getMessage());
+    }
+}
+
 // GET /api/tickets (List tickets)
 if ($method === 'GET' && $path === '/api/tickets') {
     $user = require_auth();
+    ensure_tickets_schema();
     $sql = "SELECT t.*, o.name as organization_name, w.name as website_name, w.url as website_url,
                    req.name as requester_name, req.email as requester_email,
                    dev.name as assignee_name, dev.email as assignee_email,
@@ -3695,7 +3735,9 @@ if ($method === 'GET' && $path === '/api/tickets') {
     }
     if (!empty($_GET['search'])) {
         $search = '%' . $_GET['search'] . '%';
-        $sql .= " AND (t.ticket_number LIKE ? OR t.title LIKE ? OR t.description LIKE ?)";
+        $sql .= " AND (t.ticket_number LIKE ? OR t.title LIKE ? OR t.description LIKE ? OR t.sku LIKE ? OR t.product_title LIKE ?)";
+        $params[] = $search;
+        $params[] = $search;
         $params[] = $search;
         $params[] = $search;
         $params[] = $search;
@@ -3721,6 +3763,7 @@ if ($method === 'GET' && $path === '/api/tickets') {
 // POST /api/tickets (Create ticket)
 if ($method === 'POST' && $path === '/api/tickets') {
     $user = require_auth();
+    ensure_tickets_schema();
     $input = get_json_input();
 
     $title = trim($input['title'] ?? '');
@@ -3732,6 +3775,20 @@ if ($method === 'POST' && $path === '/api/tickets') {
     $browser = $input['browser'] ?? null;
     $device = $input['device'] ?? null;
     $environment = $input['environment'] ?? 'production';
+
+    // Product Listing Attributes
+    $ticketType = in_array(strtolower($input['ticket_type'] ?? ''), ['listing', 'catalog'], true) ? 'listing' : 'bug';
+    $listingAction = trim($input['listing_action'] ?? '');
+    $sku = trim($input['sku'] ?? '');
+    $productTitle = trim($input['product_title'] ?? '');
+    $productPrice = trim($input['product_price'] ?? '');
+    $compareAtPrice = trim($input['compare_at_price'] ?? '');
+    $productImages = trim($input['product_images'] ?? '');
+    $listingDetails = !empty($input['listing_details']) ? (is_string($input['listing_details']) ? $input['listing_details'] : json_encode($input['listing_details'])) : null;
+
+    if ($sku || stripos($category, 'listing') !== false || stripos($category, 'catalog') !== false) {
+        $ticketType = 'listing';
+    }
 
     if (empty($title) || empty($description) || empty($website_id)) {
         json_error('Title, description, and website are required', 400);
@@ -3776,12 +3833,14 @@ if ($method === 'POST' && $path === '/api/tickets') {
         'INSERT INTO tickets (
             id, ticket_number, organization_id, website_id, requester_id,
             title, description, steps_to_reproduce, browser, device, environment,
-            category, priority, status, queue_id, target_resolution_time
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'NEW\', ?, ?)',
+            category, priority, status, queue_id, target_resolution_time,
+            ticket_type, listing_action, sku, product_title, product_price, compare_at_price, product_images, listing_details
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'NEW\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
             $ticketId, $ticketNumber, $organization_id, $website_id, $user['id'],
             $title, $description, $steps, $browser, $device, $environment,
-            $category, $priority, $queue_id, $targetResolution
+            $category, $priority, $queue_id, $targetResolution,
+            $ticketType, $listingAction ?: null, $sku ?: null, $productTitle ?: null, $productPrice ?: null, $compareAtPrice ?: null, $productImages ?: null, $listingDetails
         ]
     );
 
@@ -3794,17 +3853,26 @@ if ($method === 'POST' && $path === '/api/tickets') {
     // Slack Notification
     $brand = db_query_one('SELECT * FROM organizations WHERE id = ?', [$organization_id]);
     $brandName = $brand ? $brand['name'] : 'Client Brand';
+    $slackTitle = ($ticketType === 'listing') ? "📦 *New Product Listing Request: {$ticketNumber}*" : "🚨 *New Bug Ticket Raised: {$ticketNumber}*";
+    $slackFields = [
+        ['title' => 'Title', 'value' => $title, 'short' => false],
+        ['title' => 'Brand', 'value' => $brandName, 'short' => true],
+        ['title' => 'Priority', 'value' => $priority, 'short' => true],
+        ['title' => 'Category', 'value' => $category, 'short' => true],
+        ['title' => 'Website', 'value' => $website['name'], 'short' => true]
+    ];
+    if ($ticketType === 'listing' && $sku) {
+        $slackFields[] = ['title' => 'SKU', 'value' => $sku, 'short' => true];
+        $slackFields[] = ['title' => 'Listing Action', 'value' => ($listingAction === 'new_listing' ? '🆕 New Listing' : '✏️ Edit Existing'), 'short' => true];
+        if ($productPrice) {
+            $slackFields[] = ['title' => 'Selling Price', 'value' => $productPrice . ($compareAtPrice ? " (MRP: {$compareAtPrice})" : ''), 'short' => true];
+        }
+    }
     send_slack_notification(
         SLACK_CHANNEL_BUG_REPORTS,
-        "🚨 *New Bug Ticket Raised: {$ticketNumber}*",
-        [
-            ['title' => 'Title', 'value' => $title, 'short' => false],
-            ['title' => 'Brand', 'value' => $brandName, 'short' => true],
-            ['title' => 'Priority', 'value' => $priority, 'short' => true],
-            ['title' => 'Category', 'value' => $category, 'short' => true],
-            ['title' => 'Website', 'value' => $website['name'], 'short' => true]
-        ],
-        ($priority === 'P1') ? '#E01E5A' : '#ECB22E'
+        $slackTitle,
+        $slackFields,
+        ($ticketType === 'listing') ? '#4F46E5' : (($priority === 'P1') ? '#E01E5A' : '#ECB22E')
     );
 
     // Google Sheets Real-Time Sync (per-brand tab or dedicated sheet)

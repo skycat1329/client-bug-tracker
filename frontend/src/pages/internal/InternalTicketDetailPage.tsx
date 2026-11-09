@@ -11,6 +11,7 @@ import {
 } from '../../types/index.js';
 import { StatusBadge } from '../../components/StatusBadge.js';
 import { PriorityBadge } from '../../components/PriorityBadge.js';
+import { ProductListingDetailsCard } from '../../components/ProductListingDetailsCard.js';
 import { getTicketSla } from '../../utils/sla.js';
 import {
   ArrowLeft,
@@ -674,9 +675,11 @@ export const InternalTicketDetailPage: React.FC<InternalTicketDetailPageProps> =
           {/* TAB CONTENT: DETAILS */}
           {activeTab === 'details' && (
             <div className="bg-white rounded-b-lg border border-slate-200 shadow-sm p-6 space-y-6 text-xs">
+              <ProductListingDetailsCard ticket={ticket} />
+
               <div>
                 <h3 className="font-bold text-slate-700 uppercase tracking-wider text-[11px] mb-2">
-                  Bug Description
+                  Ticket Description / Notes
                 </h3>
                 <div className="bg-slate-50 border border-slate-200 rounded p-4 text-slate-900 whitespace-pre-wrap leading-relaxed font-sans">
                   {ticket.description}
