@@ -35,6 +35,15 @@ Options -Indexes
     Header always set Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:;"
 </IfModule>
 
+# Prevent browser & proxy caching of index.html and sw.js so updates take effect immediately
+<FilesMatch "^(index\.html|sw\.js)$">
+    <IfModule mod_headers.c>
+        Header set Cache-Control "no-cache, no-store, must-revalidate, max-age=0"
+        Header set Pragma "no-cache"
+        Header set Expires "0"
+    </IfModule>
+</FilesMatch>
+
 # Block direct access to sensitive files and dotfiles
 <FilesMatch "(^\.|\.(env|sql|git|bak|config|log|md|sh|yml|yaml|json|lock))$">
     <IfModule mod_authz_core.c>
