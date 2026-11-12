@@ -373,11 +373,11 @@ function get_auth_user(): ?array {
         $user['must_reset_password'] = !empty($user['must_reset_password']) && ((int)$user['must_reset_password'] === 1);
         $user['can_manage_payroll'] = !empty($user['can_manage_payroll']) && ((int)$user['can_manage_payroll'] === 1);
         $user['can_manage_attendance'] = !empty($user['can_manage_attendance']) && ((int)$user['can_manage_attendance'] === 1);
-        if (empty($user['organization_id'])) {
+        if (empty($user['organization_id']) && ($user['role'] ?? '') === 'client') {
             $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$user['id']]);
             if ($mem && !empty($mem['organization_id'])) {
                 $user['organization_id'] = $mem['organization_id'];
-            } elseif ($user['role'] === 'client') {
+            } else {
                 $orgByContact = db_query_one('SELECT id FROM organizations WHERE contact_email = ? LIMIT 1', [$user['email']]);
                 if ($orgByContact) {
                     $user['organization_id'] = $orgByContact['id'];
@@ -2873,7 +2873,8 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
     $email = strtolower(trim($input['email'] ?? ''));
     $phone = isset($input['phone']) ? trim($input['phone']) : null;
     $role = $input['role'] ?? null;
-    $customRole = $input['custom_role'] ?? null;
+    $hasCustomRole = array_key_exists('custom_role', $input);
+    $customRole = $hasCustomRole ? $input['custom_role'] : null;
     $newPassword = $input['password'] ?? null;
     $mustReset = isset($input['must_reset_password']) ? (int)$input['must_reset_password'] : null;
 
@@ -2885,7 +2886,7 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
     if (!$targetUser) json_error('User not found', 404);
 
     if ($email !== strtolower($targetUser['email'])) {
-        $existing = db_query_one('SELECT id FROM users WHERE email = ? AND id != ?', [$email, $targetUserId]);
+        $existing = db_query_one('SELECT id FROM users WHERE LOWER(TRIM(email)) = ? AND id != ?', [$email, $targetUserId]);
         if ($existing) json_error('Another user already has this email address', 400);
     }
 
@@ -2894,33 +2895,42 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
     }
 
     $finalRole = $role ?: $targetUser['role'];
-    $finalCustomRole = $customRole !== null ? $customRole : $targetUser['custom_role'];
+    $finalCustomRole = $hasCustomRole
+        ? (($customRole !== null && trim((string)$customRole) !== '') ? trim((string)$customRole) : null)
+        : $targetUser['custom_role'];
     $finalPhone = $phone !== null ? ($phone ?: null) : ($targetUser['phone'] ?? null);
+    $isClient = ($finalRole === 'client');
+    $finalOrgId = $isClient
+        ? (array_key_exists('organization_id', $input) ? ($input['organization_id'] ?: null) : ($targetUser['organization_id'] ?? null))
+        : null;
 
+    $emailSent = false;
+    $waSent = false;
     if (!empty($newPassword)) {
         if (strlen($newPassword) < 6) {
             json_error('Password must be at least 6 characters long', 400);
         }
         $hash = password_hash($newPassword, PASSWORD_BCRYPT);
         db_execute(
-            'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ?, updated_at = NOW() WHERE id = ?',
-            [$name, $email, $finalPhone, $finalRole, $finalCustomRole, $hash, $mustReset !== null ? $mustReset : 1, $targetUserId]
+            'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?, organization_id = ?, password_hash = ?, must_reset_password = ?, updated_at = NOW() WHERE id = ?',
+            [$name, $email, $finalPhone, $finalRole, $finalCustomRole, $finalOrgId, $hash, $mustReset !== null ? $mustReset : 1, $targetUserId]
         );
-        $isClient = ($finalRole === 'client');
         $brandName = '';
-        if ($isClient && !empty($targetUser['organization_id'])) {
-            $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$targetUser['organization_id']]);
+        if ($isClient && !empty($finalOrgId)) {
+            $org = db_query_one('SELECT name FROM organizations WHERE id = ?', [$finalOrgId]);
             if ($org) $brandName = $org['name'];
         }
+        $roleDisplay = $finalCustomRole ?: ucwords(str_replace('_', ' ', $finalRole));
         if (!empty($input['send_email'])) {
-            send_credentials_email($email, $name, $newPassword, $finalCustomRole ?: $finalRole, $brandName, $isClient);
+            $emailSent = send_credentials_email($email, $name, $newPassword, $roleDisplay, $brandName, $isClient);
         }
         if (!empty($finalPhone)) {
-            send_credentials_whatsapp($finalPhone, $name, $email, $newPassword, $finalCustomRole ?: $finalRole, $brandName, $isClient);
+            $waRes = send_credentials_whatsapp($finalPhone, $name, $email, $newPassword, $roleDisplay, $brandName, $isClient);
+            $waSent = !empty($waRes['delivered']);
         }
     } else {
-        $updateSql = 'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?';
-        $params = [$name, $email, $finalPhone, $finalRole, $finalCustomRole];
+        $updateSql = 'UPDATE users SET name = ?, email = ?, phone = ?, role = ?, custom_role = ?, organization_id = ?';
+        $params = [$name, $email, $finalPhone, $finalRole, $finalCustomRole, $finalOrgId];
         if ($mustReset !== null) {
             $updateSql .= ', must_reset_password = ?';
             $params[] = $mustReset;
@@ -2930,11 +2940,21 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/auth/users/(
         db_execute($updateSql, $params);
     }
 
+    if (!$isClient) {
+        db_execute('DELETE FROM organization_members WHERE user_id = ?', [$targetUserId]);
+    }
+
     $updated = db_query_one('SELECT id, email, phone, name, role, custom_role, organization_id, must_reset_password, can_manage_payroll, created_at, updated_at FROM users WHERE id = ?', [$targetUserId]);
     if ($updated) {
         $updated['can_manage_payroll'] = !empty($updated['can_manage_payroll']) && ((int)$updated['can_manage_payroll'] === 1);
     }
-    json_response(['success' => true, 'user' => $updated, 'message' => 'Team member updated successfully']);
+    json_response([
+        'success' => true,
+        'email_sent' => $emailSent,
+        'whatsapp_sent' => $waSent,
+        'user' => $updated,
+        'message' => 'Team member updated successfully'
+    ]);
 }
 
 // PATCH /api/auth/staff/{id}/payroll-access (Admin grants or revokes payroll access)
@@ -3057,6 +3077,49 @@ if ($method === 'POST' && $path === '/api/auth/settings/visibility') {
     json_response(['success' => true, 'message' => 'Visibility policy updated successfully']);
 }
 
+function assert_brand_client_email_available(string $email, ?string $targetOrgId = null): ?array {
+    $normalized = strtolower(trim($email));
+    if (empty($normalized)) {
+        return null;
+    }
+
+    $existing = db_query_one(
+        'SELECT id, email, name, role, organization_id FROM users WHERE LOWER(TRIM(email)) = ? LIMIT 1',
+        [$normalized]
+    );
+
+    if (!$existing) {
+        return null;
+    }
+
+    if (($existing['role'] ?? '') !== 'client') {
+        json_error(
+            "The email '{$normalized}' belongs to internal team member '{$existing['name']}' and cannot be used as a client brand login. Please use a separate client email address (for Gmail testing, use an alias like name+test@gmail.com).",
+            400
+        );
+    }
+
+    $existingOrgId = $existing['organization_id'] ?? null;
+    if (empty($existingOrgId)) {
+        $mem = db_query_one('SELECT organization_id FROM organization_members WHERE user_id = ? LIMIT 1', [$existing['id']]);
+        if ($mem && !empty($mem['organization_id'])) {
+            $existingOrgId = $mem['organization_id'];
+        }
+    }
+
+    if (!empty($existingOrgId) && $existingOrgId !== $targetOrgId) {
+        $otherOrg = db_query_one('SELECT id, name FROM organizations WHERE id = ? LIMIT 1', [$existingOrgId]);
+        if ($otherOrg) {
+            json_error(
+                "The email '{$normalized}' is already assigned to brand '{$otherOrg['name']}'. Please use a unique client email address.",
+                400
+            );
+        }
+    }
+
+    return $existing;
+}
+
 // POST /api/auth/create-client (Create client user credentials for a brand)
 if ($method === 'POST' && $path === '/api/auth/create-client') {
     $user = require_auth();
@@ -3073,8 +3136,11 @@ if ($method === 'POST' && $path === '/api/auth/create-client') {
         json_error('Organization, name, email, and password are all required', 400);
     }
 
-    $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$email]);
+    $existing = db_query_one('SELECT id, name, role FROM users WHERE LOWER(TRIM(email)) = ?', [$email]);
     if ($existing) {
+        if (($existing['role'] ?? '') !== 'client') {
+            json_error("The email '{$email}' belongs to internal team member '{$existing['name']}' and cannot be used for a client brand login.", 400);
+        }
         json_error('A user with this email address already exists', 400);
     }
 
@@ -3163,7 +3229,18 @@ if ($method === 'POST' && $path === '/api/organizations') {
 
     if (empty($name)) json_error('Brand / Organization name is required', 400);
 
-    $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+    $slug = trim(strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name)), '-');
+    if (empty($slug)) {
+        $slug = 'brand-' . time();
+    }
+
+    $dupSlug = db_query_one('SELECT id, name FROM organizations WHERE slug = ? LIMIT 1', [$slug]);
+    if ($dupSlug) {
+        json_error("A brand with a conflicting name ('{$dupSlug['name']}') already exists. Please use a distinct brand name.", 400);
+    }
+
+    $existingClient = !empty($contactEmail) ? assert_brand_client_email_available($contactEmail, null) : null;
+
     $orgId = 'org-' . time() . '-' . bin2hex(random_bytes(4));
 
     db_execute(
@@ -3184,14 +3261,13 @@ if ($method === 'POST' && $path === '/api/organizations') {
     $emailSent = false;
     $finalPassword = $initialPassword ?: ('AM-' . strtoupper(bin2hex(random_bytes(3))) . '#' . rand(10, 99));
 
-    // Automatically provision or update Brand Client user if contact email is provided
+    // Automatically provision or re-link an orphaned Brand Client user if contact email is provided
     if (!empty($contactEmail)) {
-        $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$contactEmail]);
         $hash = password_hash($finalPassword, PASSWORD_BCRYPT);
-        if ($existing) {
-            $clientId = $existing['id'];
+        if ($existingClient && ($existingClient['role'] ?? '') === 'client') {
+            $clientId = $existingClient['id'];
             db_execute(
-                'UPDATE users SET password_hash = ?, name = ?, phone = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?',
+                'UPDATE users SET password_hash = ?, name = ?, phone = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ? AND role = \'client\'',
                 [$hash, $contactName ?: $name, $phone ?: null, $orgId, $clientId]
             );
         } else {
@@ -3246,6 +3322,8 @@ if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/send-credenti
         json_error('Official brand contact email is required to send credentials. Please enter a valid email address.', 400);
     }
 
+    $existing = assert_brand_client_email_available($targetEmail, $orgId);
+
     // Update organization contact details if changed
     if ($targetEmail !== $org['contact_email'] || (!empty($contactName) && $contactName !== $org['contact_name'])) {
         db_execute('UPDATE organizations SET contact_email = ?, contact_name = ?, updated_at = NOW() WHERE id = ?', [$targetEmail, $contactName, $orgId]);
@@ -3254,11 +3332,10 @@ if ($method === 'POST' && preg_match('#^/api/organizations/([^/]+)/send-credenti
     $tempPassword = !empty($customPassword) ? $customPassword : ('AM-' . strtoupper(bin2hex(random_bytes(3))) . '#' . rand(10, 99));
     $hash = password_hash($tempPassword, PASSWORD_BCRYPT);
 
-    $existing = db_query_one('SELECT id FROM users WHERE email = ?', [$targetEmail]);
-    if ($existing) {
+    if ($existing && ($existing['role'] ?? '') === 'client') {
         $clientId = $existing['id'];
         db_execute(
-            'UPDATE users SET password_hash = ?, name = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ?',
+            'UPDATE users SET password_hash = ?, name = ?, role = \'client\', organization_id = ?, must_reset_password = 1, updated_at = NOW() WHERE id = ? AND role = \'client\'',
             [$hash, $contactName ?: $org['name'], $orgId, $clientId]
         );
     } else {
@@ -3330,7 +3407,20 @@ if (($method === 'PUT' || $method === 'POST') && preg_match('#^/api/organization
         $org = db_query_one('SELECT * FROM organizations WHERE id = ?', [$orgId]);
         if (!$org) json_error('Organization not found', 404);
 
-        $slug = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name));
+        $slug = trim(strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $name)), '-');
+        if (empty($slug)) {
+            $slug = $org['slug'];
+        }
+
+        $dupSlug = db_query_one('SELECT id, name FROM organizations WHERE slug = ? AND id != ? LIMIT 1', [$slug, $orgId]);
+        if ($dupSlug) {
+            json_error("Another brand ('{$dupSlug['name']}') already uses a conflicting name/slug.", 400);
+        }
+
+        if (!empty($contactEmail)) {
+            assert_brand_client_email_available($contactEmail, $orgId);
+        }
+
         $finalPhone = $phone !== null ? ($phone ?: null) : ($org['phone'] ?? null);
 
         db_execute(

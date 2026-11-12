@@ -67,9 +67,14 @@ export async function initDatabase(): Promise<void> {
     )
   `);
 
-  // Ensure custom_role column exists on users
+  // Ensure custom_role and must_reset_password columns exist on users
   try {
     await db.execute('ALTER TABLE users ADD COLUMN custom_role TEXT');
+  } catch (e) {
+    // Ignore if already exists
+  }
+  try {
+    await db.execute('ALTER TABLE users ADD COLUMN must_reset_password INTEGER NOT NULL DEFAULT 0');
   } catch (e) {
     // Ignore if already exists
   }

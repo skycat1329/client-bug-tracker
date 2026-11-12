@@ -233,19 +233,25 @@ authRouter.put('/users/:id', authenticate, async (req, res, next) => {
 
     const finalRole = role || target.role;
     const finalCustomRole = custom_role !== undefined ? custom_role : target.custom_role;
+    const isClient = finalRole === 'client';
+    const finalOrgId = isClient ? target.organization_id : null;
 
     if (password) {
       if (password.length < 6) throw new AppError('Password must be at least 6 characters long', 400);
       const hash = await bcrypt.hash(password, 10);
       await execute(
-        'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?, password_hash = ?, must_reset_password = ? WHERE id = ?',
-        [name, email.toLowerCase(), finalRole, finalCustomRole, hash, must_reset_password !== undefined ? (must_reset_password ? 1 : 0) : 1, targetId]
+        'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?, organization_id = ?, password_hash = ?, must_reset_password = ? WHERE id = ?',
+        [name, email.toLowerCase(), finalRole, finalCustomRole, finalOrgId, hash, must_reset_password !== undefined ? (must_reset_password ? 1 : 0) : 1, targetId]
       );
     } else {
       await execute(
-        'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ? WHERE id = ?',
-        [name, email.toLowerCase(), finalRole, finalCustomRole, targetId]
+        'UPDATE users SET name = ?, email = ?, role = ?, custom_role = ?, organization_id = ? WHERE id = ?',
+        [name, email.toLowerCase(), finalRole, finalCustomRole, finalOrgId, targetId]
       );
+    }
+
+    if (!isClient) {
+      await execute('DELETE FROM organization_members WHERE user_id = ?', [targetId]);
     }
 
     const updated = await queryOne('SELECT id, email, name, role, custom_role, organization_id, must_reset_password FROM users WHERE id = ?', [targetId]);
@@ -347,8 +353,17 @@ authRouter.post('/create-client', authenticate, async (req, res, next) => {
 
     const data = clientSchema.parse(req.body);
 
-    const existingUser = await queryOne('SELECT id FROM users WHERE email = ?', [data.email.toLowerCase()]);
+    const existingUser = await queryOne<{ id: string; name: string; role: string }>(
+      'SELECT id, name, role FROM users WHERE LOWER(TRIM(email)) = ?',
+      [data.email.toLowerCase()]
+    );
     if (existingUser) {
+      if (existingUser.role !== 'client') {
+        throw new AppError(
+          `The email '${data.email.toLowerCase()}' belongs to internal team member '${existingUser.name}' and cannot be used for a client brand login.`,
+          400
+        );
+      }
       throw new AppError('A user with this email address already exists.', 400);
     }
 

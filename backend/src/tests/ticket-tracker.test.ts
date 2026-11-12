@@ -315,4 +315,69 @@ describe('Client Bug Tracker - Comprehensive Test Suite & Acceptance Criteria', 
     expect(staffCsv.headers['content-type']).toContain('text/csv');
     expect(staffCsv.text).toContain('Ticket ID,Title,Organization');
   });
+
+  // Regression lock: Protect internal staff accounts from brand client email collisions & clean org membership on role restoration
+  it('Rejects internal staff email in brand/client endpoints and clears organization linkage when restoring staff role', async () => {
+    // 1. Updating brand contact_email with a staff/developer email is rejected (400)
+    const updateBrandRes = await request(app)
+      .put('/api/organizations/org-acme-1111')
+      .set('Authorization', `Bearer ${managerToken}`)
+      .send({
+        name: 'Acme Brands Inc.',
+        contact_email: 'dev@agency.com',
+      });
+    expect(updateBrandRes.status).toBe(400);
+    expect(updateBrandRes.body.error).toContain('internal team member');
+
+    // 2. Creating client credentials with an internal staff email is rejected (400)
+    const createClientStaffRes = await request(app)
+      .post('/api/auth/create-client')
+      .set('Authorization', `Bearer ${managerToken}`)
+      .send({
+        organization_id: 'org-acme-1111',
+        name: 'Hijack Attempt',
+        email: 'dev@agency.com',
+        password: 'password123',
+      });
+    expect(createClientStaffRes.status).toBe(400);
+    expect(createClientStaffRes.body.error).toContain('internal team member');
+
+    // 3. Create a synthetic client user, then restore/promote to developer -> organization_id & membership cleared
+    const testEmail = `restore-test-${Date.now()}@example.com`;
+    const newClientRes = await request(app)
+      .post('/api/auth/create-client')
+      .set('Authorization', `Bearer ${managerToken}`)
+      .send({
+        organization_id: 'org-acme-1111',
+        name: 'Temp Client User',
+        email: testEmail,
+        password: 'password123',
+      });
+    expect(newClientRes.status).toBe(201);
+    const targetUserId = newClientRes.body.user.id;
+
+    const restoreRes = await request(app)
+      .put(`/api/auth/users/${targetUserId}`)
+      .set('Authorization', `Bearer ${managerToken}`)
+      .send({
+        name: 'Restored Developer',
+        email: testEmail,
+        role: 'developer',
+      });
+    expect(restoreRes.status).toBe(200);
+    expect(restoreRes.body.user.role).toBe('developer');
+    expect(restoreRes.body.user.organization_id).toBeNull();
+
+    const staffListRes = await request(app)
+      .get('/api/auth/staff')
+      .set('Authorization', `Bearer ${managerToken}`);
+    expect(staffListRes.status).toBe(200);
+    expect(staffListRes.body.staff.some((s: any) => s.id === targetUserId)).toBe(true);
+
+    const orgUsersRes = await request(app)
+      .get('/api/auth/organization/org-acme-1111/users')
+      .set('Authorization', `Bearer ${managerToken}`);
+    expect(orgUsersRes.status).toBe(200);
+    expect(orgUsersRes.body.users.some((u: any) => u.id === targetUserId)).toBe(false);
+  });
 });

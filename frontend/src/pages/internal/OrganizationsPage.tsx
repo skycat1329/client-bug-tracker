@@ -243,6 +243,7 @@ export const OrganizationsPage: React.FC = () => {
   };
 
   const handleOpenSendCredentials = (org: Organization) => {
+    setError(null);
     setSelectedCredsOrg(org);
     setCredsEmail(org.contact_email || '');
     setCredsName(org.contact_name || org.name);
@@ -398,7 +399,10 @@ export const OrganizationsPage: React.FC = () => {
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => setShowAddOrg(true)}
+            onClick={() => {
+              setError(null);
+              setShowAddOrg(true);
+            }}
             className="inline-flex items-center gap-2 px-4 py-2 bg-[#0176D3] hover:bg-[#014486] text-white text-sm font-semibold rounded-lg shadow-sm transition-colors"
           >
             <Plus size={16} />
@@ -488,6 +492,7 @@ export const OrganizationsPage: React.FC = () => {
                     {/* Edit Brand */}
                     <button
                       onClick={() => {
+                        setError(null);
                         setEditingOrg(org);
                         setEditForm({
                           name: org.name,
@@ -555,6 +560,7 @@ export const OrganizationsPage: React.FC = () => {
                     {/* Add Client Credentials */}
                     <button
                       onClick={() => {
+                        setError(null);
                         setClientCredsOrgId(org.id);
                         setShowAddClientCreds(true);
                         setGeneratedCreds(null);
@@ -656,6 +662,7 @@ export const OrganizationsPage: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
+                                  setError(null);
                                   setSelectedCredsOrg(org);
                                   setCredsEmail(user.email);
                                   setCredsName(user.name);
@@ -696,6 +703,13 @@ export const OrganizationsPage: React.FC = () => {
             <p className="text-xs text-slate-500 mb-4">
               Onboard a client organization, configure initial credentials, and automatically email access details.
             </p>
+
+            {error && (
+              <div className="mb-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                <AlertCircle size={15} className="text-rose-600 flex-shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
 
             <form onSubmit={handleCreateOrg} className="space-y-3.5 text-xs">
               <div>
@@ -801,13 +815,16 @@ export const OrganizationsPage: React.FC = () => {
               </div>
 
               <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-900 text-[11.5px] leading-relaxed">
-                <strong>🔒 Automated Client Setup:</strong> When you provide an email and initial password, Assurance Media will automatically provision the brand account, set a mandatory first-login password reset, and email credentials directly from <code>tools.assurance@gmail.com</code>.
+                <strong>🔒 Automated Client Setup:</strong> When you provide a client email and initial password, Assurance Media will automatically provision the brand account, set a mandatory first-login password reset, and email credentials directly from <code>tools.assurance@gmail.com</code>. Internal employee emails cannot be used (use a separate email or Gmail alias like <code>name+test@gmail.com</code> when testing).
               </div>
 
               <div className="pt-3 flex justify-end gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setShowAddOrg(false)}
+                  onClick={() => {
+                    setError(null);
+                    setShowAddOrg(false);
+                  }}
                   className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
@@ -833,6 +850,13 @@ export const OrganizationsPage: React.FC = () => {
             <p className="text-xs text-slate-500 mb-4">
               Update organization info, primary contact, website, and Google Sheet integration.
             </p>
+
+            {error && (
+              <div className="mb-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                <AlertCircle size={15} className="text-rose-600 flex-shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
 
             <form onSubmit={handleUpdateOrg} className="space-y-3.5 text-xs">
               <div>
@@ -931,6 +955,7 @@ export const OrganizationsPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
+                    setError(null);
                     setShowEditOrg(false);
                     setEditingOrg(null);
                   }}
@@ -1075,6 +1100,13 @@ export const OrganizationsPage: React.FC = () => {
               </div>
             ) : (
               <form onSubmit={handleCreateClientCredentials} className="space-y-4 text-sm">
+                {error && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                    <AlertCircle size={15} className="text-rose-600 flex-shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Client Contact Full Name *
@@ -1120,7 +1152,10 @@ export const OrganizationsPage: React.FC = () => {
                 <div className="pt-4 flex justify-end gap-3">
                   <button
                     type="button"
-                    onClick={() => setShowAddClientCreds(false)}
+                    onClick={() => {
+                      setError(null);
+                      setShowAddClientCreds(false);
+                    }}
                     className="px-4 py-2 border rounded-lg text-slate-700 font-medium hover:bg-slate-50"
                   >
                     Cancel
@@ -1155,7 +1190,10 @@ export const OrganizationsPage: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setShowSendCredsModal(false)}
+                onClick={() => {
+                  setError(null);
+                  setShowSendCredsModal(false);
+                }}
                 className="text-slate-400 hover:text-slate-600 text-sm font-bold"
               >
                 ✕
@@ -1165,6 +1203,13 @@ export const OrganizationsPage: React.FC = () => {
             <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-blue-900 text-xs mb-4 leading-relaxed">
               <strong>🔒 Official Dispatch:</strong> Credentials will be emailed directly to the official brand email address from <code>tools.assurance@gmail.com</code>. The brand user will be forced to set their permanent password upon logging in.
             </div>
+
+            {error && (
+              <div className="mb-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                <AlertCircle size={15} className="text-rose-600 flex-shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
 
             <form onSubmit={handleSendCredentials} className="space-y-4 text-sm">
               <div>
@@ -1179,6 +1224,9 @@ export const OrganizationsPage: React.FC = () => {
                   placeholder="contact@brand.com"
                   className="w-full px-3 py-2 border rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0066CC]"
                 />
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Must not be an internal employee/admin email (for Gmail testing use <code>name+test@gmail.com</code>).
+                </span>
               </div>
 
               <div>
@@ -1224,7 +1272,10 @@ export const OrganizationsPage: React.FC = () => {
               <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowSendCredsModal(false)}
+                  onClick={() => {
+                    setError(null);
+                    setShowSendCredsModal(false);
+                  }}
                   className="px-4 py-2 border rounded-lg text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel

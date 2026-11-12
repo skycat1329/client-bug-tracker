@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { config } from '../../config/index.js';
 import { authenticate, requireRoles } from '../../middleware/auth.js';
 import { SlackNotificationService } from '../../notifications/slack.service.js';
+import { EmailNotificationService } from '../../notifications/email.service.js';
 import { query, queryOne, execute } from '../../db/database.js';
 
 export const integrationsRouter = Router();

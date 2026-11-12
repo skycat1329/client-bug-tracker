@@ -86,6 +86,20 @@ organizationsRouter.put(
       const org = await queryOne('SELECT id FROM organizations WHERE id = ?', [orgId]);
       if (!org) throw new AppError('Organization not found', 404);
 
+      if (contact_email && String(contact_email).trim()) {
+        const normalizedEmail = String(contact_email).trim().toLowerCase();
+        const existingUser = await queryOne<{ id: string; name: string; role: string }>(
+          'SELECT id, name, role FROM users WHERE LOWER(TRIM(email)) = ?',
+          [normalizedEmail]
+        );
+        if (existingUser && existingUser.role !== 'client') {
+          throw new AppError(
+            `The email '${normalizedEmail}' belongs to internal team member '${existingUser.name}' and cannot be used as a client brand login.`,
+            400
+          );
+        }
+      }
+
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       await execute(
         'UPDATE organizations SET name = ?, slug = ?, contact_name = ?, contact_email = ?, website_url = ?, google_sheet_url = ?, status = ? WHERE id = ?',
